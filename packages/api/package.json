@@ -16,6 +16,7 @@
     "@DashboardV2/env": "workspace:*",
     "@trpc/client": "catalog:",
     "@trpc/server": "catalog:",
+    "@vercel/blob": "^2.6.1",
     "dotenv": "catalog:",
     "drizzle-orm": "^0.45.2",
     "zod": "catalog:"

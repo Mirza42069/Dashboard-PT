@@ -6,6 +6,7 @@ import { count, desc, eq, ilike, or } from "drizzle-orm";
 import z from "zod";
 
 import { adminProcedure, router } from "../index";
+import { recordActivity } from "../lib/activity";
 
 /**
  * Ambiguous glyphs (0/O, 1/l/I) are excluded — these passwords get read aloud
@@ -48,6 +49,15 @@ async function assertNotLastAdmin(userId: string, action: string) {
       message: `Cannot ${action} the last remaining admin`,
     });
   }
+}
+
+/** "Name · email" for the audit trail, resolved while the row still exists. */
+async function userLabel(userId: string): Promise<string> {
+  const [row] = await db
+    .select({ name: user.name, email: user.email })
+    .from(user)
+    .where(eq(user.id, userId));
+  return row ? `${row.name} · ${row.email}` : userId;
 }
 
 function assertNotSelf(actorId: string, targetId: string, action: string) {
@@ -124,6 +134,14 @@ export const adminRouter = router({
         },
       });
 
+      await recordActivity(ctx, {
+        action: "created",
+        entityType: "user",
+        entityId: created.user.id,
+        entityLabel: `${input.name} · ${email}`,
+        detail: input.role,
+      });
+
       return { user: created.user, temporaryPassword };
     }),
 
@@ -155,6 +173,14 @@ export const adminRouter = router({
         body: { userId: input.userId, role: input.role },
       });
 
+      await recordActivity(ctx, {
+        action: "role_changed",
+        entityType: "user",
+        entityId: input.userId,
+        entityLabel: await userLabel(input.userId),
+        detail: input.role,
+      });
+
       return { success: true };
     }),
 
@@ -176,6 +202,14 @@ export const adminRouter = router({
         });
       }
 
+      await recordActivity(ctx, {
+        action: input.banned ? "paused" : "resumed",
+        entityType: "user",
+        entityId: input.userId,
+        entityLabel: await userLabel(input.userId),
+        detail: input.banned ? input.reason : undefined,
+      });
+
       return { success: true };
     }),
 
@@ -183,9 +217,19 @@ export const adminRouter = router({
     assertNotSelf(ctx.session.user.id, input.userId, "delete");
     await assertNotLastAdmin(input.userId, "delete");
 
+    // Read the label before removal — afterwards there is nothing to name.
+    const label = await userLabel(input.userId);
+
     await auth.api.removeUser({
       headers: ctx.headers,
       body: { userId: input.userId },
+    });
+
+    await recordActivity(ctx, {
+      action: "deleted",
+      entityType: "user",
+      entityId: input.userId,
+      entityLabel: label,
     });
 
     return { success: true };

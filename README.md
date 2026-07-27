@@ -1,6 +1,10 @@
-# DashboardV2
+# V2 — Construction Management
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines Next.js, Hono, TRPC, and more.
+Internal dashboard for construction operations: projects & schedule, budget vs actual, materials
+stock and equipment tracking. Accounts are admin-managed; there is no public sign-up.
+
+Scaffolded with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack) (Next.js, Hono, tRPC, Drizzle, Better Auth). The `@DashboardV2/*` workspace scope is a historical
+internal name and is not user-visible.
 
 ## Features
 
@@ -188,6 +192,7 @@ DashboardV2/
 - `bun run check-types`: Check TypeScript types across all apps
 - `bun run db:push`: Push schema changes to database
 - `bun run db:seed-admin`: Create/promote the first admin account from the `ADMIN_*` env vars
+- `bun run db:seed-demo`: Load demo construction data (idempotent; rows carry a `DEMO-` prefix)
 - `bun run db:generate`: Generate database client/types
 - `bun run db:migrate`: Run database migrations
 - `bun run db:studio`: Open database studio UI

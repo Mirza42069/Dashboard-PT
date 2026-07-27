@@ -1,7 +1,6 @@
 "use client";
 
 import { Button } from "@DashboardV2/ui/components/button";
-import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
@@ -9,30 +8,33 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import z from "zod";
 
+import { PasswordInput } from "@/components/password-input";
+import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
-const schema = z
-  .object({
-    currentPassword: z.string().min(1, "Current password is required"),
-    newPassword: z.string().min(12, "Password must be at least 12 characters"),
-    confirmPassword: z.string().min(1, "Confirm your new password"),
-  })
-  .refine((value) => value.newPassword === value.confirmPassword, {
-    message: "Passwords do not match",
-    path: ["confirmPassword"],
-  })
-  .refine((value) => value.newPassword !== value.currentPassword, {
-    message: "Choose a password different from your current one",
-    path: ["newPassword"],
-  });
-
 export default function ChangePasswordForm() {
+  const t = useT();
   const router = useRouter();
+
+  const schema = z
+    .object({
+      currentPassword: z.string().min(1, t.password.currentRequired),
+      newPassword: z.string().min(12, t.password.minLength),
+      confirmPassword: z.string().min(1, t.password.confirmRequired),
+    })
+    .refine((value) => value.newPassword === value.confirmPassword, {
+      message: t.password.mismatch,
+      path: ["confirmPassword"],
+    })
+    .refine((value) => value.newPassword !== value.currentPassword, {
+      message: t.password.mustDiffer,
+      path: ["newPassword"],
+    });
 
   const changePassword = useMutation(
     trpc.account.changePassword.mutationOptions({
       onSuccess: () => {
-        toast.success("Password updated");
+        toast.success(t.password.updated);
         router.push("/dashboard");
         router.refresh();
       },
@@ -60,9 +62,9 @@ export default function ChangePasswordForm() {
   });
 
   const fields = [
-    { name: "currentPassword", label: "Current password", autoComplete: "current-password" },
-    { name: "newPassword", label: "New password", autoComplete: "new-password" },
-    { name: "confirmPassword", label: "Confirm new password", autoComplete: "new-password" },
+    { name: "currentPassword", label: t.password.current, autoComplete: "current-password" },
+    { name: "newPassword", label: t.password.new, autoComplete: "new-password" },
+    { name: "confirmPassword", label: t.password.confirm, autoComplete: "new-password" },
   ] as const;
 
   return (
@@ -79,10 +81,9 @@ export default function ChangePasswordForm() {
           {(field) => (
             <div className="space-y-2">
               <Label htmlFor={field.name}>{label}</Label>
-              <Input
+              <PasswordInput
                 id={field.name}
                 name={field.name}
-                type="password"
                 autoComplete={autoComplete}
                 value={field.state.value}
                 onBlur={field.handleBlur}
@@ -103,7 +104,7 @@ export default function ChangePasswordForm() {
       >
         {({ canSubmit, isSubmitting }) => (
           <Button type="submit" size="lg" className="w-full" disabled={!canSubmit || isSubmitting}>
-            {isSubmitting ? "Updating…" : "Update password"}
+            {isSubmitting ? t.password.updating : t.password.update}
           </Button>
         )}
       </form.Subscribe>

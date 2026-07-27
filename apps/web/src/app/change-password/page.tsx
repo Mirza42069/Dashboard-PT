@@ -7,16 +7,20 @@ import {
 } from "@DashboardV2/ui/components/card";
 import type { Metadata } from "next";
 
+import { BRAND_NAME } from "@/components/brand";
 import ChangePasswordForm from "@/components/change-password-form";
+import { getDictionary, getLocale, interpolate } from "@/i18n";
 import { requireSession } from "@/lib/session";
 
-export const metadata: Metadata = {
-  title: "Change password · DashboardV2",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const dict = getDictionary(await getLocale());
+  return { title: `${dict.password.changeTitle} · ${BRAND_NAME}` };
+}
 
 export default async function ChangePasswordPage() {
   // skipPasswordChangeRedirect, or this page would redirect to itself forever.
   const session = await requireSession({ skipPasswordChangeRedirect: true });
+  const dict = getDictionary(await getLocale());
   const forced = session.user.mustChangePassword;
 
   return (
@@ -24,11 +28,13 @@ export default async function ChangePasswordPage() {
       <div className="w-full max-w-sm space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>{forced ? "Set your password" : "Change password"}</CardTitle>
+            <CardTitle>
+              {forced ? dict.password.setTitle : dict.password.changeTitle}
+            </CardTitle>
             <CardDescription>
               {forced
-                ? "You're signed in with a temporary password issued by an administrator. Choose your own to continue."
-                : `Signed in as ${session.user.email}.`}
+                ? dict.password.forcedDescription
+                : interpolate(dict.password.signedInAs, { email: session.user.email })}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -36,9 +42,7 @@ export default async function ChangePasswordPage() {
           </CardContent>
         </Card>
 
-        <p className="text-center text-xs text-muted-foreground">
-          Signing in elsewhere will be revoked once your password changes.
-        </p>
+        <p className="text-center text-xs text-muted-foreground">{dict.password.revokeNote}</p>
       </div>
     </div>
   );

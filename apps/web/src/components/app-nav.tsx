@@ -1,19 +1,23 @@
 "use client";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
-import { LayoutDashboard, Users } from "lucide-react";
+import { Boxes, HardHat, LayoutDashboard, Truck, Users } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import type { Dictionary } from "@/i18n";
+import { useT } from "@/i18n/provider";
+
 type NavItem = {
   href: Route;
-  label: string;
+  labelKey: keyof Dictionary["nav"];
   icon: typeof LayoutDashboard;
 };
 
 type NavSection = {
-  heading: string;
+  headingKey: keyof Dictionary["nav"];
   adminOnly: boolean;
   items: NavItem[];
 };
@@ -22,54 +26,87 @@ type NavSection = {
  * `adminOnly` hides a section from the sidebar; it is not the access control.
  * The pages themselves call requireAdmin() and the procedures use
  * adminProcedure — hiding here is only so people don't see dead links.
+ *
+ * Settings deliberately lives in the account menu, not here: it configures the
+ * person, not the business.
  */
 const SECTIONS: NavSection[] = [
   {
-    heading: "Overview",
+    headingKey: "overview",
     adminOnly: false,
-    items: [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard }],
+    items: [{ href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard }],
   },
   {
-    heading: "Administration",
+    headingKey: "operations",
+    adminOnly: false,
+    items: [
+      { href: "/projects", labelKey: "projects", icon: HardHat },
+      { href: "/materials", labelKey: "materials", icon: Boxes },
+      { href: "/equipment", labelKey: "equipment", icon: Truck },
+    ],
+  },
+  {
+    headingKey: "administration",
     adminOnly: true,
-    items: [{ href: "/admin/users", label: "Users", icon: Users }],
+    items: [{ href: "/admin/users", labelKey: "users", icon: Users }],
   },
 ];
 
 export default function AppNav({
   isAdmin,
+  collapsed = false,
   onNavigate,
 }: {
   isAdmin: boolean;
+  collapsed?: boolean;
   onNavigate?: () => void;
 }) {
+  const t = useT();
   const pathname = usePathname();
 
   return (
-    <nav className="flex flex-col gap-5">
+    <nav className={cn("flex flex-col", collapsed ? "gap-1" : "gap-5")}>
       {SECTIONS.filter((section) => !section.adminOnly || isAdmin).map((section) => (
-        <div key={section.heading} className="space-y-1">
-          <p className="px-2 text-[0.625rem] font-medium tracking-widest text-muted-foreground uppercase">
-            {section.heading}
-          </p>
-          {section.items.map(({ href, label, icon: Icon }) => {
+        <div key={section.headingKey} className="space-y-1">
+          {/* Collapsed: a hairline separates groups, since headings won't fit. */}
+          {collapsed ? (
+            <div className="mx-2 my-1 border-t first:hidden" />
+          ) : (
+            <p className="px-2 text-[0.625rem] font-medium tracking-widest text-muted-foreground uppercase">
+              {t.nav[section.headingKey]}
+            </p>
+          )}
+
+          {section.items.map(({ href, labelKey, icon: Icon }) => {
             const isActive = pathname === href || pathname.startsWith(`${href}/`);
-            return (
+            const label = t.nav[labelKey];
+
+            const link = (
               <Link
-                key={href}
                 href={href}
                 onClick={onNavigate}
                 aria-current={isActive ? "page" : undefined}
+                aria-label={collapsed ? label : undefined}
                 className={cn(
-                  "flex items-center gap-2 px-2 py-1.5 text-xs transition-colors",
+                  "flex items-center rounded-md text-xs transition-colors",
+                  collapsed ? "size-10 justify-center" : "gap-2 px-2 py-1.5",
                   isActive
                     ? "bg-muted font-medium text-foreground"
                     : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 )}
               >
-                <Icon className="size-4" />
-                {label}
+                <Icon className="size-4 shrink-0" />
+                {!collapsed && label}
               </Link>
+            );
+
+            return collapsed ? (
+              <Tooltip key={href}>
+                <TooltipTrigger render={link} />
+                <TooltipContent side="right">{label}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <div key={href}>{link}</div>
             );
           })}
         </div>

@@ -4,7 +4,6 @@ import { Button } from "@DashboardV2/ui/components/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -26,25 +25,27 @@ import { useState } from "react";
 import { toast } from "sonner";
 import z from "zod";
 
+import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
 import type { TempPasswordResult } from "./temp-password-dialog";
-
-const schema = z.object({
-  name: z.string().trim().min(1, "Name is required").max(120),
-  email: z.email("Invalid email address"),
-  role: z.enum(["admin", "user"]),
-});
 
 export default function CreateUserDialog({
   onCreated,
 }: {
   onCreated: (result: TempPasswordResult) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const queryClient = useQueryClient();
 
   const createUser = useMutation(trpc.admin.createUser.mutationOptions());
+
+  const schema = z.object({
+    name: z.string().trim().min(1, t.users.nameRequired).max(120),
+    email: z.email(t.auth.invalidEmail),
+    role: z.enum(["admin", "user"]),
+  });
 
   const form = useForm({
     defaultValues: {
@@ -60,7 +61,7 @@ export default function CreateUserDialog({
         formApi.reset();
         onCreated({ email: value.email, password: data.temporaryPassword, isNewAccount: true });
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Could not create the user");
+        toast.error(error instanceof Error ? error.message : t.users.createFailed);
       }
     },
     validators: {
@@ -78,7 +79,7 @@ export default function CreateUserDialog({
     >
       <DialogTrigger render={<Button size="sm" />}>
         <UserPlus />
-        New user
+        {t.users.newUser}
       </DialogTrigger>
       <DialogContent>
         <form
@@ -90,16 +91,13 @@ export default function CreateUserDialog({
           className="space-y-4"
         >
           <DialogHeader>
-            <DialogTitle>Create user</DialogTitle>
-            <DialogDescription>
-              A temporary password is generated and shown once after you save.
-            </DialogDescription>
+            <DialogTitle>{t.users.createTitle}</DialogTitle>
           </DialogHeader>
 
           <form.Field name="name">
             {(field) => (
               <div className="space-y-2">
-                <Label htmlFor={field.name}>Full name</Label>
+                <Label htmlFor={field.name}>{t.users.fullName}</Label>
                 <Input
                   id={field.name}
                   name={field.name}
@@ -119,7 +117,7 @@ export default function CreateUserDialog({
           <form.Field name="email">
             {(field) => (
               <div className="space-y-2">
-                <Label htmlFor={field.name}>Work email</Label>
+                <Label htmlFor={field.name}>{t.users.workEmail}</Label>
                 <Input
                   id={field.name}
                   name={field.name}
@@ -140,29 +138,27 @@ export default function CreateUserDialog({
           <form.Field name="role">
             {(field) => (
               <div className="space-y-2">
-                <Label htmlFor={field.name}>Role</Label>
+                <Label htmlFor={field.name}>{t.users.role}</Label>
                 <Select
                   value={field.state.value}
-                  onValueChange={(value) => field.handleChange(value as "admin" | "user")}
+                  onValueChange={(value) => field.handleChange((value ?? "user") as "admin" | "user")}
                 >
                   <SelectTrigger id={field.name} className="w-full">
-                    <SelectValue className="capitalize" />
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="user">User</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
+                    <SelectItem value="user">{t.users.roleUser}</SelectItem>
+                    <SelectItem value="admin">{t.users.roleAdmin}</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
-                  Admins can create, disable and delete accounts.
-                </p>
+                <p className="text-xs text-muted-foreground">{t.users.roleHint}</p>
               </div>
             )}
           </form.Field>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-              Cancel
+              {t.common.cancel}
             </Button>
             <form.Subscribe
               selector={(state) => ({
@@ -172,7 +168,7 @@ export default function CreateUserDialog({
             >
               {({ canSubmit, isSubmitting }) => (
                 <Button type="submit" disabled={!canSubmit || isSubmitting}>
-                  {isSubmitting ? "Creating…" : "Create user"}
+                  {isSubmitting ? t.users.creating : t.users.createUser}
                 </Button>
               )}
             </form.Subscribe>

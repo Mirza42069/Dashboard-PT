@@ -16,6 +16,7 @@
     "@DashboardV2/env": "workspace:*",
     "@hono/trpc-server": "^0.4.2",
     "@trpc/server": "catalog:",
+    "@vercel/blob": "^2.6.1",
     "better-auth": "catalog:",
     "dotenv": "catalog:",
     "hono": "catalog:",

@@ -31,10 +31,21 @@ import {
   TableRow,
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, MoreHorizontal, ShieldMinus, ShieldPlus, Trash2, UserX } from "lucide-react";
+import {
+  KeyRound,
+  MoreHorizontal,
+  PauseCircle,
+  PlayCircle,
+  ShieldMinus,
+  ShieldPlus,
+  Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { interpolate } from "@/i18n";
+import { useT } from "@/i18n/provider";
+import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import CreateUserDialog from "./create-user-dialog";
@@ -44,15 +55,9 @@ const PAGE_SIZE = 25;
 
 type PendingDelete = { id: string; name: string; email: string };
 
-function formatDate(value: string | Date) {
-  return new Date(value).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 export default function UsersTable({ currentUserId }: { currentUserId: string }) {
+  const t = useT();
+  const { formatDateTime } = useFormat();
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");
@@ -84,7 +89,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
       await refresh();
       toast.success(successMessage);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Something went wrong");
+      toast.error(error instanceof Error ? error.message : t.common.somethingWentWrong);
     }
   }
 
@@ -101,9 +106,9 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
             setSearch(e.target.value);
             setPage(0);
           }}
-          placeholder="Search by name or email"
+          placeholder={t.users.searchPlaceholder}
           className="w-full sm:max-w-xs"
-          aria-label="Search users"
+          aria-label={t.common.search}
         />
         <CreateUserDialog onCreated={setTempPassword} />
       </div>
@@ -113,12 +118,12 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-4">Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="pr-4 text-right">Actions</TableHead>
+                <TableHead className="pl-4">{t.users.name}</TableHead>
+                <TableHead>{t.users.email}</TableHead>
+                <TableHead>{t.users.role}</TableHead>
+                <TableHead>{t.users.statusColumn}</TableHead>
+                <TableHead>{t.users.created}</TableHead>
+                <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -134,7 +139,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
               {!usersQuery.isPending && users.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
-                    {search ? `No users match "${search}"` : "No users yet"}
+                    {search ? interpolate(t.users.noMatch, { search }) : t.users.empty}
                   </TableCell>
                 </TableRow>
               )}
@@ -147,31 +152,36 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                   <TableRow key={user.id}>
                     <TableCell className="pl-4 font-medium">
                       {user.name}
-                      {isSelf && <span className="ml-1.5 text-muted-foreground">(you)</span>}
+                      {isSelf && (
+                        <span className="ml-1.5 text-muted-foreground">{t.common.you}</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{user.email}</TableCell>
                     <TableCell>
-                      <Badge variant={isAdmin ? "default" : "outline"} className="capitalize">
-                        {user.role}
+                      <Badge variant={isAdmin ? "default" : "outline"}>
+                        {isAdmin ? t.users.roleAdmin : t.users.roleUser}
                       </Badge>
                     </TableCell>
                     <TableCell>
                       {user.banned ? (
-                        <Badge variant="destructive">Disabled</Badge>
+                        <Badge variant="destructive">
+                          <PauseCircle />
+                          {t.users.paused}
+                        </Badge>
                       ) : user.mustChangePassword ? (
-                        <Badge variant="secondary">Pending first sign-in</Badge>
+                        <Badge variant="secondary">{t.users.pendingFirstSignIn}</Badge>
                       ) : (
-                        <Badge variant="ghost">Active</Badge>
+                        <Badge variant="ghost">{t.users.active}</Badge>
                       )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {formatDate(user.createdAt)}
+                      {formatDateTime(user.createdAt)}
                     </TableCell>
                     <TableCell className="pr-4 text-right">
                       <DropdownMenu>
                         <DropdownMenuTrigger
                           render={<Button variant="ghost" size="icon-sm" />}
-                          aria-label={`Actions for ${user.name}`}
+                          aria-label={interpolate(t.users.actionsFor, { name: user.name })}
                         >
                           <MoreHorizontal />
                         </DropdownMenuTrigger>
@@ -185,11 +195,11 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                                   password: data.temporaryPassword,
                                   isNewAccount: false,
                                 });
-                              }, "Password reset")
+                              }, t.users.passwordResetToast)
                             }
                           >
                             <KeyRound />
-                            Reset password
+                            {t.users.resetPassword}
                           </DropdownMenuItem>
 
                           <DropdownMenuItem
@@ -200,28 +210,37 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                                     userId: user.id,
                                     role: isAdmin ? "user" : "admin",
                                   }),
-                                isAdmin ? "Demoted to user" : "Promoted to admin",
+                                isAdmin ? t.users.demotedToast : t.users.promotedToast,
                               )
                             }
                           >
                             {isAdmin ? <ShieldMinus /> : <ShieldPlus />}
-                            {isAdmin ? "Demote to user" : "Promote to admin"}
+                            {isAdmin ? t.users.demote : t.users.promote}
                           </DropdownMenuItem>
 
                           <DropdownMenuSeparator />
 
+                          {/* "Pause" is the ban mechanism under a subscription-
+                              lifecycle name: sign-in is refused with the
+                              contact-your-admin message until resumed. */}
                           <DropdownMenuItem
                             disabled={isSelf}
                             onClick={() =>
                               run(
                                 () =>
-                                  setBanned.mutateAsync({ userId: user.id, banned: !user.banned }),
-                                user.banned ? "Account re-enabled" : "Account disabled",
+                                  setBanned.mutateAsync({
+                                    userId: user.id,
+                                    banned: !user.banned,
+                                    reason: user.banned ? undefined : "subscription",
+                                  }),
+                                user.banned
+                                  ? t.users.accountResumedToast
+                                  : t.users.accountPausedToast,
                               )
                             }
                           >
-                            <UserX />
-                            {user.banned ? "Re-enable account" : "Disable account"}
+                            {user.banned ? <PlayCircle /> : <PauseCircle />}
+                            {user.banned ? t.users.resume : t.users.pause}
                           </DropdownMenuItem>
 
                           <DropdownMenuItem
@@ -236,7 +255,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                             }
                           >
                             <Trash2 />
-                            Delete account
+                            {t.users.deleteAccount}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -252,8 +271,12 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
           {total === 0
-            ? "No users"
-            : `Showing ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + users.length} of ${total}`}
+            ? t.users.noUsers
+            : interpolate(t.users.showing, {
+                from: page * PAGE_SIZE + 1,
+                to: page * PAGE_SIZE + users.length,
+                total,
+              })}
         </p>
         <div className="flex gap-2">
           <Button
@@ -262,7 +285,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
             disabled={page === 0}
             onClick={() => setPage((value) => Math.max(0, value - 1))}
           >
-            Previous
+            {t.common.previous}
           </Button>
           <Button
             variant="outline"
@@ -270,7 +293,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
             disabled={!hasNextPage}
             onClick={() => setPage((value) => value + 1)}
           >
-            Next
+            {t.common.next}
           </Button>
         </div>
       </div>
@@ -285,24 +308,28 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {pendingDelete?.name}?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {interpolate(t.users.deleteTitle, { name: pendingDelete?.name ?? "" })}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently removes {pendingDelete?.email} along with their sessions. It cannot be
-              undone — disable the account instead if you may need it back.
+              {interpolate(t.users.deleteDescription, { email: pendingDelete?.email ?? "" })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
                 const target = pendingDelete;
                 setPendingDelete(null);
                 if (!target) return;
-                void run(() => deleteUser.mutateAsync({ userId: target.id }), "Account deleted");
+                void run(
+                  () => deleteUser.mutateAsync({ userId: target.id }),
+                  t.users.deletedToast,
+                );
               }}
             >
-              Delete account
+              {t.users.deleteConfirm}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

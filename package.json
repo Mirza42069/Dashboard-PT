@@ -28,7 +28,9 @@
   },
   "type": "module",
   "scripts": {
+    "predev": "bun scripts/free-ports.ts",
     "dev": "bun run --filter '*' dev",
+    "dev:stop": "bun scripts/free-ports.ts",
     "build": "bun run --filter '*' build",
     "check-types": "bun run --filter '*' check-types",
     "dev:web": "bun run --filter web dev",
@@ -38,10 +40,11 @@
     "db:generate": "bun run --filter @DashboardV2/db db:generate",
     "db:migrate": "bun run --filter @DashboardV2/db db:migrate",
     "db:seed-admin": "bun --env-file=apps/server/.env scripts/seed-admin.ts",
+    "db:seed-demo": "bun --env-file=apps/server/.env scripts/seed-demo.ts",
     "deploy:setup": "vercel link",
     "dev:vercel": "vercel dev -L",
-    "env:preview": "tsx scripts/sync-vercel-env.ts preview",
-    "env:production": "tsx scripts/sync-vercel-env.ts production",
+    "env:preview": "bun scripts/sync-vercel-env.ts preview",
+    "env:production": "bun scripts/sync-vercel-env.ts production",
     "deploy": "vercel deploy",
     "deploy:prod": "vercel deploy --prod",
     "deploy:check": "vercel deploy --dry"

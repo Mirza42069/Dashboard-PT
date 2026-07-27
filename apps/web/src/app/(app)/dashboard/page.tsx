@@ -1,72 +1,25 @@
-import { Card, CardContent, CardDescription, CardHeader } from "@DashboardV2/ui/components/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@DashboardV2/ui/components/empty";
-import { BarChart3 } from "lucide-react";
 import type { Metadata } from "next";
 
+import { BRAND_NAME } from "@/components/brand";
+import { getDictionary, getLocale } from "@/i18n";
 import { requireSession } from "@/lib/session";
 
-export const metadata: Metadata = {
-  title: "Dashboard · DashboardV2",
-};
+import DashboardOverview from "./dashboard-overview";
 
-/** Placeholders until the company's real metrics land in a later phase. */
-const STATS = [
-  { label: "Revenue (MTD)", value: "—", hint: "Not connected yet" },
-  { label: "Active projects", value: "—", hint: "Not connected yet" },
-  { label: "Open tasks", value: "—", hint: "Not connected yet" },
-  { label: "Team members", value: "—", hint: "Not connected yet" },
-];
+export async function generateMetadata(): Promise<Metadata> {
+  const dict = getDictionary(await getLocale());
+  return { title: `${dict.dashboard.title} · ${BRAND_NAME}` };
+}
 
 export default async function DashboardPage() {
-  const session = await requireSession();
+  // Still gates the route even though the page renders nothing about the user.
+  await requireSession();
+  const dict = getDictionary(await getLocale());
 
   return (
-    <div className="space-y-6 p-4 md:p-6">
-      <div className="space-y-1">
-        <h1 className="text-lg font-semibold tracking-tight">
-          Welcome back, {session.user.name.split(" ")[0]}
-        </h1>
-        <p className="text-xs text-muted-foreground">
-          Here&apos;s what&apos;s happening across the company.
-        </p>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {STATS.map((stat) => (
-          <Card key={stat.label} size="sm">
-            <CardHeader>
-              <CardDescription>{stat.label}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <p className="text-2xl font-semibold tabular-nums">{stat.value}</p>
-              <p className="text-xs text-muted-foreground">{stat.hint}</p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <Card className="min-h-80">
-        <CardContent className="flex flex-1">
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <BarChart3 />
-              </EmptyMedia>
-              <EmptyTitle>No data sources connected</EmptyTitle>
-              <EmptyDescription>
-                Company metrics and charts arrive in the next phase. Account management is available
-                now under Administration.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        </CardContent>
-      </Card>
+    <div className="space-y-4 p-4 md:p-6">
+      <h1 className="text-lg font-semibold tracking-tight">{dict.dashboard.title}</h1>
+      <DashboardOverview />
     </div>
   );
 }

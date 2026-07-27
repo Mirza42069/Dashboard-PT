@@ -10,12 +10,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@DashboardV2/ui/components/dropdown-menu";
-import { Skeleton } from "@DashboardV2/ui/components/skeleton";
-import { KeyRound, LogOut } from "lucide-react";
+import { LogOut, Settings } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { useT } from "@/i18n/provider";
 import { authClient } from "@/lib/auth-client";
+
+import type { ShellUser } from "./app-shell";
 
 function initials(name: string) {
   return name
@@ -26,30 +28,23 @@ function initials(name: string) {
     .join("");
 }
 
-export default function UserMenu() {
+/**
+ * Takes the user as a prop rather than calling authClient.useSession(). That
+ * hook only resolves in the browser, so SSR rendered a loading skeleton while
+ * the client rendered the real menu — React treated the whole tree as
+ * mismatched and re-rendered it, refetching every dashboard query on load.
+ *
+ * The (app) layout has already resolved and verified the session server-side,
+ * so there is nothing to look up again here.
+ */
+export default function UserMenu({ user }: { user: ShellUser }) {
+  const t = useT();
   const router = useRouter();
-  const { data: session, isPending } = authClient.useSession();
-
-  if (isPending) {
-    return <Skeleton className="h-7 w-24" />;
-  }
-
-  if (!session) {
-    return (
-      <Link href="/login">
-        <Button variant="outline" size="sm">
-          Sign in
-        </Button>
-      </Link>
-    );
-  }
-
-  const { user } = session;
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
-        <span className="flex size-5 items-center justify-center bg-muted text-[0.625rem] font-medium">
+        <span className="flex size-5 items-center justify-center rounded-full bg-muted text-[0.625rem] font-medium">
           {initials(user.name)}
         </span>
         <span className="hidden sm:inline">{user.name}</span>
@@ -58,15 +53,15 @@ export default function UserMenu() {
         <div className="space-y-1 px-2 py-2">
           <p className="text-xs font-medium">{user.name}</p>
           <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-          <Badge variant={user.role === "admin" ? "default" : "outline"} className="capitalize">
-            {user.role}
+          <Badge variant={user.role === "admin" ? "default" : "outline"}>
+            {user.role === "admin" ? t.users.roleAdmin : t.users.roleUser}
           </Badge>
         </div>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuItem render={<Link href="/change-password" />}>
-            <KeyRound />
-            Change password
+          <DropdownMenuItem render={<Link href="/settings" />}>
+            <Settings />
+            {t.nav.settings}
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
@@ -82,7 +77,7 @@ export default function UserMenu() {
             }}
           >
             <LogOut />
-            Sign out
+            {t.auth.signOut}
           </DropdownMenuItem>
         </DropdownMenuGroup>
       </DropdownMenuContent>

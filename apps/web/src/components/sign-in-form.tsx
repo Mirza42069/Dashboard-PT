@@ -8,18 +8,21 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import z from "zod";
 
+import { PasswordInput } from "@/components/password-input";
+import { useT } from "@/i18n/provider";
 import { authClient } from "@/lib/auth-client";
 
-const schema = z.object({
-  email: z.email("Invalid email address"),
-  password: z.string().min(1, "Password is required"),
-});
-
 export default function SignInForm() {
+  const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
-  // middleware.ts stores the page you were trying to reach here.
+  // proxy.ts stores the page you were trying to reach here.
   const next = searchParams.get("next");
+
+  const schema = z.object({
+    email: z.email(t.auth.invalidEmail),
+    password: z.string().min(1, t.auth.passwordRequired),
+  });
 
   const form = useForm({
     defaultValues: {
@@ -41,6 +44,12 @@ export default function SignInForm() {
             router.refresh();
           },
           onError: (error) => {
+            // A paused (banned) account gets the subscription message, not
+            // better-auth's raw "You have been banned" text.
+            if (error.error.code === "BANNED_USER") {
+              toast.error(t.auth.accountPaused, { duration: 8000 });
+              return;
+            }
             toast.error(error.error.message || error.error.statusText);
           },
         },
@@ -60,10 +69,15 @@ export default function SignInForm() {
       }}
       className="space-y-4"
     >
+      <div className="space-y-1">
+        <h1 className="text-sm font-medium">{t.auth.signIn}</h1>
+        <p className="text-xs text-muted-foreground">{t.auth.useIssuedCredentials}</p>
+      </div>
+
       <form.Field name="email">
         {(field) => (
           <div className="space-y-2">
-            <Label htmlFor={field.name}>Email</Label>
+            <Label htmlFor={field.name}>{t.auth.email}</Label>
             <Input
               id={field.name}
               name={field.name}
@@ -86,11 +100,10 @@ export default function SignInForm() {
       <form.Field name="password">
         {(field) => (
           <div className="space-y-2">
-            <Label htmlFor={field.name}>Password</Label>
-            <Input
+            <Label htmlFor={field.name}>{t.auth.password}</Label>
+            <PasswordInput
               id={field.name}
               name={field.name}
-              type="password"
               autoComplete="current-password"
               value={field.state.value}
               onBlur={field.handleBlur}
@@ -110,7 +123,7 @@ export default function SignInForm() {
       >
         {({ canSubmit, isSubmitting }) => (
           <Button type="submit" size="lg" className="w-full" disabled={!canSubmit || isSubmitting}>
-            {isSubmitting ? "Signing in…" : "Sign in"}
+            {isSubmitting ? t.auth.signingIn : t.auth.signIn}
           </Button>
         )}
       </form.Subscribe>

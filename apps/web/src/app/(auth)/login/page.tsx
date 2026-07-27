@@ -1,36 +1,30 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@DashboardV2/ui/components/card";
+import { Card, CardContent } from "@DashboardV2/ui/components/card";
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
+import { BRAND_NAME, BrandMark } from "@/components/brand";
 import Loader from "@/components/loader";
-import { ModeToggle } from "@/components/mode-toggle";
 import SignInForm from "@/components/sign-in-form";
+import { getDictionary, getLocale } from "@/i18n";
 
-export const metadata: Metadata = {
-  title: "Sign in · DashboardV2",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const dict = getDictionary(await getLocale());
+  return { title: `${dict.auth.signIn} · ${BRAND_NAME}` };
+}
 
-export default function LoginPage() {
+export default async function LoginPage() {
+  const dict = getDictionary(await getLocale());
+
   return (
     <div className="grid min-h-svh place-items-center px-4 py-10">
-      <div className="absolute top-4 right-4">
-        <ModeToggle />
-      </div>
-
       <div className="w-full max-w-sm space-y-6">
+        {/* The mark carries the brand — no repeated "V2" heading under it. */}
         <div className="space-y-1 text-center">
-          <div className="mx-auto mb-4 flex size-10 items-center justify-center bg-primary text-sm font-semibold text-primary-foreground">
-            D2
-          </div>
-          <h1 className="text-lg font-semibold tracking-tight">DashboardV2</h1>
-          <p className="text-xs text-muted-foreground">Internal company dashboard</p>
+          <BrandMark size="lg" className="mx-auto mb-3" />
+          <p className="text-xs text-muted-foreground">{dict.auth.tagline}</p>
         </div>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Sign in</CardTitle>
-            <CardDescription>Use the credentials issued to you.</CardDescription>
-          </CardHeader>
           <CardContent>
             {/* useSearchParams needs a suspense boundary during prerender. */}
             <Suspense fallback={<Loader />}>
@@ -40,8 +34,7 @@ export default function LoginPage() {
         </Card>
 
         <p className="text-center text-xs text-muted-foreground">
-          Accounts are created by an administrator. Contact yours if you need access or a password
-          reset.
+          {dict.auth.contactAdminFootnote}
         </p>
       </div>
     </div>

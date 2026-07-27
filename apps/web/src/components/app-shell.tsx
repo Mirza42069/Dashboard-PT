@@ -1,0 +1,45 @@
+"use client";
+
+import { useState } from "react";
+
+import { writeSidebarCookie } from "@/lib/sidebar";
+
+import AppSidebar from "./app-sidebar";
+import Header from "./header";
+
+export type ShellUser = { name: string; email: string; role: string };
+
+/**
+ * Owns the sidebar collapse state so the trigger can live in the topbar while
+ * the sidebar itself reacts. Initial value comes from a cookie read on the
+ * server, so there is no expand-then-collapse flash.
+ */
+export default function AppShell({
+  user,
+  initialCollapsed,
+  children,
+}: {
+  user: ShellUser;
+  initialCollapsed: boolean;
+  children: React.ReactNode;
+}) {
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
+  const isAdmin = user.role === "admin";
+
+  function toggle() {
+    setCollapsed((value) => {
+      writeSidebarCookie(!value);
+      return !value;
+    });
+  }
+
+  return (
+    <div className="flex h-svh">
+      <AppSidebar isAdmin={isAdmin} collapsed={collapsed} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Header user={user} collapsed={collapsed} onToggleSidebar={toggle} />
+        <main className="flex-1 overflow-y-auto">{children}</main>
+      </div>
+    </div>
+  );
+}

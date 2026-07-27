@@ -1,16 +1,33 @@
-import AppNav from "./app-nav";
+import { cn } from "@DashboardV2/ui/lib/utils";
 
-export default function AppSidebar({ isAdmin }: { isAdmin: boolean }) {
+import AppNav from "./app-nav";
+import { BrandMark } from "./brand";
+
+export default function AppSidebar({
+  isAdmin,
+  collapsed,
+}: {
+  isAdmin: boolean;
+  collapsed: boolean;
+}) {
   return (
-    <aside className="hidden w-56 shrink-0 flex-col border-r bg-card md:flex">
-      <div className="flex h-12 items-center gap-2 border-b px-4">
-        <span className="flex size-6 items-center justify-center bg-primary text-[0.625rem] font-semibold text-primary-foreground">
-          D2
-        </span>
-        <span className="text-sm font-semibold tracking-tight">DashboardV2</span>
+    <aside
+      className={cn(
+        "hidden shrink-0 flex-col border-r bg-card transition-[width] duration-200 md:flex",
+        collapsed ? "w-14" : "w-56",
+      )}
+    >
+      {/* The mark already reads "V2" — a wordmark beside it would just say it twice. */}
+      <div
+        className={cn(
+          "flex h-12 shrink-0 items-center border-b",
+          collapsed ? "justify-center px-0" : "px-4",
+        )}
+      >
+        <BrandMark />
       </div>
-      <div className="flex-1 overflow-y-auto p-3">
-        <AppNav isAdmin={isAdmin} />
+      <div className={cn("flex-1 overflow-y-auto py-3", collapsed ? "px-2" : "px-3")}>
+        <AppNav isAdmin={isAdmin} collapsed={collapsed} />
       </div>
     </aside>
   );

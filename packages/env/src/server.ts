@@ -36,6 +36,9 @@ export const env = createEnv({
     ADMIN_EMAIL: z.string().optional(),
     ADMIN_PASSWORD: z.string().optional(),
     ADMIN_NAME: z.string().optional(),
+    // Vercel Blob, for note photos. Optional so the whole app still boots
+    // without a Blob store — only uploads fail, and they say why.
+    BLOB_READ_WRITE_TOKEN: z.string().optional(),
   },
   runtimeEnv: runtimeEnv,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

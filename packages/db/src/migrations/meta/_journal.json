@@ -8,6 +8,20 @@
       "when": 1785148035337,
       "tag": "0000_tranquil_wind_dancer",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785154419389,
+      "tag": "0001_lying_madame_hydra",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785159851037,
+      "tag": "0002_secret_reavers",
+      "breakpoints": true
     }
   ]
 }
