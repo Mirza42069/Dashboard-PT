@@ -1,0 +1,24 @@
+{
+  "name": "@DashboardV2/auth",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {},
+  "dependencies": {
+    "@DashboardV2/db": "workspace:*",
+    "@DashboardV2/env": "workspace:*",
+    "better-auth": "catalog:",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@DashboardV2/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}
