@@ -13,10 +13,10 @@ apps/web/src/routeTree.gen.ts
 
 # Environment variables
 # Broad on purpose: catches .env.local, .env.bak, .env.production and friends.
-# .env.example is the one file that must stay tracked.
+# No .env template files are kept in this repo — the required variables are
+# documented in README.md (Database Setup) and enforced by packages/env.
 .env
 .env.*
-!.env.example
 
 # IDEs and editors
 .vscode/*
@@ -56,3 +56,6 @@ coverage
 .cache
 tmp
 temp
+
+.vercel
+.env*

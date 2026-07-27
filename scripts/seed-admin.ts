@@ -36,7 +36,7 @@ async function main() {
   if (!env.ADMIN_EMAIL || !env.ADMIN_PASSWORD) {
     console.error(
       "Missing ADMIN_EMAIL and/or ADMIN_PASSWORD.\n" +
-        "Add them to apps/server/.env (see apps/server/.env.example), then re-run.",
+        "Add them to apps/server/.env (see the Database Setup table in README.md), then re-run.",
     );
     process.exit(1);
   }

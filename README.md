@@ -42,8 +42,27 @@ bun install
 This project uses PostgreSQL with Drizzle ORM.
 
 1. Make sure you have a PostgreSQL database set up (Neon, or anything Postgres-compatible).
-2. Copy `apps/server/.env.example` to `apps/server/.env` and fill in `DATABASE_URL` and
-   `BETTER_AUTH_SECRET`. Copy `apps/web/.env.example` to `apps/web/.env` too.
+2. Create `apps/server/.env` and `apps/web/.env` with the variables below. The authoritative schema
+   is `packages/env/src/server.ts` and `packages/env/src/web.ts` — the app refuses to boot if a
+   required variable is missing or malformed.
+
+**`apps/server/.env`**
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | yes | Postgres connection string, e.g. `postgresql://user:pass@ep-xxx.region.aws.neon.tech/dbname?sslmode=require` |
+| `BETTER_AUTH_SECRET` | yes | Session signing secret, **min 32 chars**. Generate with `openssl rand -base64 32` |
+| `BETTER_AUTH_URL` | local only | `http://localhost:3000/api/auth`. Must include the `/api/auth` path. Derived from `VERCEL_URL` on Vercel — leave unset there |
+| `CORS_ORIGIN` | local only | `http://localhost:3001`. Derived from `VERCEL_URL` on Vercel — leave unset there |
+| `ADMIN_EMAIL` | seed only | Read by `db:seed-admin` only, never by the running server |
+| `ADMIN_PASSWORD` | seed only | **Min 12 chars.** Clear once the admin account exists |
+| `ADMIN_NAME` | seed only | Defaults to `Administrator` |
+
+**`apps/web/.env`**
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `NEXT_PUBLIC_SERVER_URL` | yes | `http://localhost:3000` locally. The Vercel deploy overrides this to the same-origin path `/api` |
 
 3. Apply the schema to your database:
 

@@ -60,7 +60,7 @@
     "@types/node": "^22.13.14",
     "tsx": "^4.22.5",
     "typescript": "catalog:",
-    "vercel": "^54.18.6"
+    "vercel": "^57.0.0"
   },
   "packageManager": "bun@1.3.6"
 }
