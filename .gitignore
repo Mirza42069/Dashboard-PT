@@ -12,8 +12,11 @@ build
 apps/web/src/routeTree.gen.ts
 
 # Environment variables
+# Broad on purpose: catches .env.local, .env.bak, .env.production and friends.
+# .env.example is the one file that must stay tracked.
 .env
-.env*.local
+.env.*
+!.env.example
 
 # IDEs and editors
 .vscode/*

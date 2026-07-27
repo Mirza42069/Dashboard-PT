@@ -37,6 +37,7 @@
     "db:studio": "bun run --filter @DashboardV2/db db:studio",
     "db:generate": "bun run --filter @DashboardV2/db db:generate",
     "db:migrate": "bun run --filter @DashboardV2/db db:migrate",
+    "db:seed-admin": "bun --env-file=apps/server/.env scripts/seed-admin.ts",
     "deploy:setup": "vercel link",
     "dev:vercel": "vercel dev -L",
     "env:preview": "tsx scripts/sync-vercel-env.ts preview",
@@ -46,8 +47,11 @@
     "deploy:check": "vercel deploy --dry"
   },
   "dependencies": {
+    "@DashboardV2/auth": "workspace:*",
+    "@DashboardV2/db": "workspace:*",
     "@DashboardV2/env": "workspace:*",
     "dotenv": "catalog:",
+    "drizzle-orm": "^0.45.2",
     "zod": "catalog:"
   },
   "devDependencies": {

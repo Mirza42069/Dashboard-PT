@@ -7,7 +7,18 @@ const DEFAULT_ENVIRONMENT = "preview";
 const VALID_ENVIRONMENTS = new Set(["development", "preview", "production"]);
 const VERCEL_COMMAND = ["bunx", "vercel"] as const;
 const DEFAULT_FILES = ["apps/web/.env", "apps/server/.env"];
-const SKIP_KEYS = new Set(["BETTER_AUTH_URL", "CORS_ORIGIN", "NODE_ENV"]);
+const SKIP_KEYS = new Set([
+  // Derived from VERCEL_URL at runtime in packages/env/src/server.ts
+  "BETTER_AUTH_URL",
+  "CORS_ORIGIN",
+  "NODE_ENV",
+  // Seed-only credentials for scripts/seed-admin.ts. That script is run locally
+  // against whichever database you point it at, so these must never become
+  // deployment env vars.
+  "ADMIN_EMAIL",
+  "ADMIN_PASSWORD",
+  "ADMIN_NAME",
+]);
 const OVERRIDE_KEYS = new Map([
   ["NEXT_PUBLIC_SERVER_URL", "/api"],
   ["NUXT_PUBLIC_SERVER_URL", "/api"],

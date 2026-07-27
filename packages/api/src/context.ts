@@ -6,11 +6,12 @@ export type CreateContextOptions = {
 };
 
 export async function createContext({ context }: CreateContextOptions) {
-  const session = await auth.api.getSession({
-    headers: context.req.raw.headers,
-  });
+  const headers = context.req.raw.headers;
+  const session = await auth.api.getSession({ headers });
   return {
-    auth: null,
+    // Forwarded to auth.api.* calls so better-auth re-verifies the caller
+    // server-side rather than trusting whatever the procedure passes in.
+    headers,
     session,
   };
 }

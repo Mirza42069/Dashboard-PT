@@ -1,33 +1,18 @@
-"use client";
-import Link from "next/link";
-
 import { ModeToggle } from "./mode-toggle";
+import MobileNav from "./mobile-nav";
 import UserMenu from "./user-menu";
 
-export default function Header() {
-  const links = [
-    { to: "/", label: "Home" },
-    { to: "/dashboard", label: "Dashboard" },
-  ] as const;
-
+export default function Header({ isAdmin }: { isAdmin: boolean }) {
   return (
-    <div>
-      <div className="flex flex-row items-center justify-between px-2 py-1">
-        <nav className="flex gap-4 text-lg">
-          {links.map(({ to, label }) => {
-            return (
-              <Link key={to} href={to}>
-                {label}
-              </Link>
-            );
-          })}
-        </nav>
-        <div className="flex items-center gap-2">
-          <ModeToggle />
-          <UserMenu />
-        </div>
+    <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b bg-card px-3 md:px-4">
+      <div className="flex items-center gap-2">
+        <MobileNav isAdmin={isAdmin} />
+        <span className="text-sm font-semibold tracking-tight md:hidden">DashboardV2</span>
       </div>
-      <hr />
-    </div>
+      <div className="flex items-center gap-1.5">
+        <ModeToggle />
+        <UserMenu />
+      </div>
+    </header>
   );
 }

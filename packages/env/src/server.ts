@@ -29,6 +29,13 @@ export const env = createEnv({
     BETTER_AUTH_URL: z.url(),
     CORS_ORIGIN: z.url(),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+    // Only read by scripts/seed-admin.ts to bootstrap the first admin account.
+    // Optional, and deliberately unconstrained beyond a string: the seed script
+    // does its own validation, so a leftover weak value can never stop the API
+    // from booting.
+    ADMIN_EMAIL: z.string().optional(),
+    ADMIN_PASSWORD: z.string().optional(),
+    ADMIN_NAME: z.string().optional(),
   },
   runtimeEnv: runtimeEnv,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

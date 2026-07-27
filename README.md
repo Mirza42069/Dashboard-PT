@@ -13,7 +13,21 @@ This project was created with [Better-T-Stack](https://github.com/AmanVarshney01
 - **Bun** - Runtime environment
 - **Drizzle** - TypeScript-first ORM
 - **PostgreSQL** - Database engine
-- **Authentication** - Better-Auth
+- **Authentication** - Better-Auth, admin-managed accounts only
+
+## Accounts & access
+
+This is an internal dashboard, so **public sign-up is disabled** — `POST /api/auth/sign-up/email`
+rejects every request. Accounts exist only because an admin created them.
+
+- Two roles: `admin` and `user`. Admins additionally see **Administration → Users**.
+- An admin creates an account at `/admin/users`; the app generates a temporary password and shows
+  it **once**. It is never stored in plaintext and never logged — if it's lost, reset it.
+- The new user is forced through `/change-password` on first sign-in before reaching anything else.
+- Route protection is two-layer: `apps/web/src/proxy.ts` does an optimistic session-cookie check at
+  the edge, and every page under `app/(app)/` calls `requireSession()` / `requireAdmin()` from
+  `apps/web/src/lib/session.ts` for the authoritative check. tRPC enforces it independently via
+  `protectedProcedure` / `adminProcedure` in `packages/api/src/index.ts`.
 
 ## Getting Started
 
@@ -27,14 +41,25 @@ bun install
 
 This project uses PostgreSQL with Drizzle ORM.
 
-1. Make sure you have a PostgreSQL database set up.
-2. Update your `apps/server/.env` file with your PostgreSQL connection details.
+1. Make sure you have a PostgreSQL database set up (Neon, or anything Postgres-compatible).
+2. Copy `apps/server/.env.example` to `apps/server/.env` and fill in `DATABASE_URL` and
+   `BETTER_AUTH_SECRET`. Copy `apps/web/.env.example` to `apps/web/.env` too.
 
 3. Apply the schema to your database:
 
 ```bash
 bun run db:push
 ```
+
+4. Create the first admin. Set `ADMIN_EMAIL` / `ADMIN_PASSWORD` (min 12 chars) / `ADMIN_NAME` in
+   `apps/server/.env`, then:
+
+```bash
+bun run db:seed-admin
+```
+
+This is the only way to create the first account, since sign-up is closed. It is safe to re-run —
+an existing account is re-promoted rather than duplicated. Remove the `ADMIN_*` values afterwards.
 
 Then, run the development server:
 
@@ -72,6 +97,37 @@ import { Button } from "@DashboardV2/ui/components/button";
 If you want to add app-specific blocks instead of shared primitives, run the shadcn CLI from `apps/web`.
 
 ## Deployment
+
+### First deploy checklist
+
+1. `bun run deploy:setup` — links the repo to a Vercel project (`vercel link`).
+2. `bun run env:production` — pushes `DATABASE_URL`, `BETTER_AUTH_SECRET` and
+   `NEXT_PUBLIC_SERVER_URL` (forced to `/api`) to Vercel.
+   `BETTER_AUTH_URL`, `CORS_ORIGIN` and `NODE_ENV` are **skipped** — they are derived from
+   `VERCEL_URL` at runtime in `packages/env/src/server.ts`. The `ADMIN_*` seed credentials are
+   skipped too, and must never become deployment env vars.
+3. Apply the schema to the production database. `db:push` reads `DATABASE_URL` from
+   `apps/server/.env`, so point that at the production database first (or export the variable for
+   the one command).
+4. Create the first admin against that same database with `bun run db:seed-admin`, then clear the
+   `ADMIN_*` values from `apps/server/.env`.
+5. `bun run deploy:prod`.
+
+Repeat steps 3–4 for any preview database. Preview deployments get their own `VERCEL_URL`, so auth
+URLs and CORS follow automatically — no per-preview configuration.
+
+### Notes
+
+- **Session cookies** are `HttpOnly; Secure; SameSite=Lax` in production and drop `Secure` in
+  development so plain-http localhost works in every browser (Safari rejects `Secure` over http,
+  even on localhost). `Lax` is correct here because `vercel.json` serves the web app and the API
+  from one origin; it is what keeps tRPC mutations out of reach of cross-site requests. If you ever
+  split the two onto different domains, this has to change — see
+  `packages/auth/src/index.ts`.
+- **Sign-up stays disabled in every environment.** New deployments have zero accounts until you run
+  the seed script.
+- `packages/db` depends on `pg` **only as a devDependency**, for the drizzle-kit CLI. The deployed
+  server uses the Neon HTTP driver and never loads it.
 
 ### Vercel Services
 
@@ -112,6 +168,7 @@ DashboardV2/
 - `bun run dev:server`: Start only the server
 - `bun run check-types`: Check TypeScript types across all apps
 - `bun run db:push`: Push schema changes to database
+- `bun run db:seed-admin`: Create/promote the first admin account from the `ADMIN_*` env vars
 - `bun run db:generate`: Generate database client/types
 - `bun run db:migrate`: Run database migrations
 - `bun run db:studio`: Open database studio UI

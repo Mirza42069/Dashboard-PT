@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import "../index.css";
-import Header from "@/components/header";
 import Providers from "@/components/providers";
 
 const geistSans = Geist({
@@ -17,7 +16,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "DashboardV2",
-  description: "DashboardV2",
+  description: "Internal company dashboard",
 };
 
 export default function RootLayout({
@@ -28,12 +27,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <Providers>
-          <div className="grid grid-rows-[auto_1fr] h-svh">
-            <Header />
-            {children}
-          </div>
-        </Providers>
+        {/* Chrome lives in app/(app)/layout.tsx — /login and /change-password
+            render bare so they cannot show navigation to pages you can't open. */}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
