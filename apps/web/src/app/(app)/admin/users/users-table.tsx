@@ -137,7 +137,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
             </TableHeader>
             <TableBody>
               {usersQuery.isPending &&
-                Array.from({ length: 5 }, (_, index) => (
+                Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
                     <TableCell colSpan={7} className="pl-4">
                       <Skeleton className="h-5 w-full" />

@@ -1,13 +1,13 @@
 import { db } from "@DashboardV2/db";
 import { MOVEMENT_TYPES, material, materialMovement, project, user } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import z from "zod";
 
 import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { roundAmount, toAmount, toNumericString } from "../lib/money";
-import { assertMaterialInScope, assertProjectInScope } from "../lib/scope";
+import { assertProjectInScope } from "../lib/scope";
 
 /**
  * Signed stock expression. `out` subtracts, `in` and `adjustment` add — so a
@@ -58,7 +58,35 @@ export const materialRouter = router({
           : undefined,
       );
 
-      const [rows, [total]] = await Promise.all([
+      // Low stock compares against the summed ledger, so it is an aggregate
+      // condition and belongs in HAVING. It used to be a .filter() on the
+      // mapped rows, which ran after the SQL LIMIT — so low-stock items past
+      // the first page were unreachable and `total` counted the unfiltered set.
+      const isLowStock = sql`${material.reorderLevel} > 0 and ${signedQuantity} <= ${material.reorderLevel}`;
+      const having = input.lowStockOnly ? isLowStock : undefined;
+
+      const matching = db
+        .select({ id: material.id })
+        .from(material)
+        .leftJoin(materialMovement, eq(materialMovement.materialId, material.id))
+        .where(where)
+        .groupBy(material.id)
+        .having(having)
+        .as("matching");
+
+      // Every low-stock row for the current search, not just the current page —
+      // the filter toggle carries this as a badge, and a per-page number there
+      // would understate the problem as soon as paging exists.
+      const lowStock = db
+        .select({ id: material.id })
+        .from(material)
+        .leftJoin(materialMovement, eq(materialMovement.materialId, material.id))
+        .where(where)
+        .groupBy(material.id)
+        .having(isLowStock)
+        .as("low_stock");
+
+      const [rows, [total], [lowStockTotal]] = await Promise.all([
         db
           .select({
             id: material.id,
@@ -73,32 +101,40 @@ export const materialRouter = router({
           .leftJoin(materialMovement, eq(materialMovement.materialId, material.id))
           .where(where)
           .groupBy(material.id)
+          .having(having)
           .orderBy(asc(material.name))
           .limit(input.limit)
           .offset(input.offset),
-        db.select({ value: count() }).from(material).where(where),
+        // Counts the same grouped/filtered set, so the footer agrees with what
+        // paging can actually reach.
+        db.select({ value: count() }).from(matching),
+        db.select({ value: count() }).from(lowStock),
       ]);
 
-      const materials = rows
-        .map((row) => {
-          const stock = toAmount(row.stock);
-          const reorderLevel = toAmount(row.reorderLevel);
-          const unitCost = toAmount(row.unitCost);
-          return {
-            id: row.id,
-            sku: row.sku,
-            name: row.name,
-            unit: row.unit,
-            stock,
-            reorderLevel,
-            unitCost,
-            stockValue: roundAmount(stock * unitCost),
-            isLowStock: reorderLevel > 0 && stock <= reorderLevel,
-          };
-        })
-        .filter((row) => !input.lowStockOnly || row.isLowStock);
+      const materials = rows.map((row) => {
+        const stock = toAmount(row.stock);
+        const reorderLevel = toAmount(row.reorderLevel);
+        const unitCost = toAmount(row.unitCost);
+        return {
+          id: row.id,
+          sku: row.sku,
+          name: row.name,
+          unit: row.unit,
+          stock,
+          reorderLevel,
+          unitCost,
+          stockValue: roundAmount(stock * unitCost),
+          // Still returned — the table renders a badge from it — but no longer
+          // the thing that does the filtering.
+          isLowStock: reorderLevel > 0 && stock <= reorderLevel,
+        };
+      });
 
-      return { materials, total: total?.value ?? 0 };
+      return {
+        materials,
+        total: total?.value ?? 0,
+        lowStockTotal: lowStockTotal?.value ?? 0,
+      };
     }),
 
   listMovements: companyProcedure
@@ -267,24 +303,99 @@ export const materialRouter = router({
       return { success: true, stock: await stockOf(input.materialId) };
     }),
 
+  /**
+   * `force` mirrors project.delete. Without it this was unusable: stock exists
+   * only because movements exist, so refusing on any movement history made every
+   * material that had ever been stocked permanently undeletable — and nothing
+   * deletes a movement, so there was no way out. The material_movement FK is
+   * ON DELETE cascade, so the ledger goes with the row.
+   */
   delete: adminCompanyProcedure
-    .input(z.object({ id: z.string().min(1) }))
+    .input(z.object({ id: z.string().min(1), force: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
-      await assertMaterialInScope(ctx.companyId, input.id);
+      // Read the label before deleting — afterwards there is nothing left to
+      // name it with, and that is the row the audit trail most needs.
+      const [target] = await db
+        .select({ sku: material.sku, name: material.name })
+        .from(material)
+        .where(and(eq(material.id, input.id), eq(material.companyId, ctx.companyId)));
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Material not found" });
+      }
 
       const [movements] = await db
         .select({ value: count() })
         .from(materialMovement)
         .where(eq(materialMovement.materialId, input.id));
+      const movementCount = movements?.value ?? 0;
 
-      if ((movements?.value ?? 0) > 0) {
+      if (!input.force && movementCount > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "This material has movement history. Delete it only if it was created in error.",
+          message: `This material has ${movementCount} movement(s), which will be deleted with it. Confirm to continue.`,
         });
       }
 
       await db.delete(material).where(eq(material.id, input.id));
-      return { success: true };
+
+      await recordActivity(ctx, {
+        action: "deleted",
+        entityType: "material",
+        entityId: input.id,
+        entityLabel: `${target.sku} · ${target.name}`,
+      });
+
+      return { success: true, deletedMovements: movementCount };
+    }),
+
+  /**
+   * Bulk counterpart of delete. Scoping lives in the same where clause as the
+   * id filter, so an id from another tenant is simply not matched rather than
+   * reported as forbidden — which would confirm the row exists.
+   */
+  deleteMany: adminCompanyProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().min(1)).min(1).max(100),
+        force: z.boolean().default(false),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const targets = await db
+        .select({ id: material.id, sku: material.sku, name: material.name })
+        .from(material)
+        .where(and(inArray(material.id, input.ids), eq(material.companyId, ctx.companyId)));
+      if (targets.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "No materials found" });
+      }
+
+      const ids = targets.map((row) => row.id);
+
+      const [movements] = await db
+        .select({ value: count() })
+        .from(materialMovement)
+        .where(inArray(materialMovement.materialId, ids));
+      const movementCount = movements?.value ?? 0;
+
+      if (!input.force && movementCount > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `These materials have ${movementCount} movement(s), which will be deleted with them. Confirm to continue.`,
+        });
+      }
+
+      await db.delete(material).where(inArray(material.id, ids));
+
+      // One entry per material, matching the per-row semantics of the feed.
+      for (const target of targets) {
+        await recordActivity(ctx, {
+          action: "deleted",
+          entityType: "material",
+          entityId: target.id,
+          entityLabel: `${target.sku} · ${target.name}`,
+        });
+      }
+
+      return { success: true, count: targets.length, deletedMovements: movementCount };
     }),
 });

@@ -1,7 +1,7 @@
 import { db } from "@DashboardV2/db";
 import { EQUIPMENT_STATUSES, equipment, project } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, eq, ilike, or } from "drizzle-orm";
+import { and, asc, count, eq, ilike, inArray, or } from "drizzle-orm";
 import z from "zod";
 
 import { adminCompanyProcedure, companyProcedure, router } from "../index";
@@ -251,5 +251,166 @@ export const equipmentRouter = router({
       });
 
       return { success: true };
+    }),
+
+  /**
+   * Bulk variants.
+   *
+   * Company scoping goes in the same where clause as the id filter, so an id
+   * belonging to another tenant simply does not match — rather than raising
+   * FORBIDDEN, which would confirm the row exists. Labels are read before the
+   * write because the audit trail needs them and a deleted row has none.
+   */
+  deleteMany: adminCompanyProcedure
+    .input(z.object({ ids: z.array(z.string().min(1)).min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      const targets = await db
+        .select({ id: equipment.id, code: equipment.code, name: equipment.name })
+        .from(equipment)
+        .where(and(inArray(equipment.id, input.ids), eq(equipment.companyId, ctx.companyId)));
+      if (targets.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "No equipment found" });
+      }
+
+      await db.delete(equipment).where(
+        inArray(
+          equipment.id,
+          targets.map((row) => row.id),
+        ),
+      );
+
+      for (const target of targets) {
+        await recordActivity(ctx, {
+          action: "deleted",
+          entityType: "equipment",
+          entityId: target.id,
+          entityLabel: `${target.code} · ${target.name}`,
+        });
+      }
+
+      return { success: true, count: targets.length };
+    }),
+
+  updateStatusMany: adminCompanyProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().min(1)).min(1).max(100),
+        status: statusSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const targets = await db
+        .select({
+          id: equipment.id,
+          code: equipment.code,
+          name: equipment.name,
+          status: equipment.status,
+        })
+        .from(equipment)
+        .where(and(inArray(equipment.id, input.ids), eq(equipment.companyId, ctx.companyId)));
+      if (targets.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "No equipment found" });
+      }
+
+      // Same rule as update: taking a machine out of service takes it off site
+      // too, or it stays listed on a project that assign would refuse to honour.
+      const goesOffSite = input.status === "retired" || input.status === "maintenance";
+
+      await db
+        .update(equipment)
+        .set({ status: input.status, ...(goesOffSite ? { projectId: null } : {}) })
+        .where(
+          inArray(
+            equipment.id,
+            targets.map((row) => row.id),
+          ),
+        );
+
+      // Only rows that actually moved are worth an audit entry.
+      for (const target of targets.filter((row) => row.status !== input.status)) {
+        await recordActivity(ctx, {
+          action: "status_changed",
+          entityType: "equipment",
+          entityId: target.id,
+          entityLabel: `${target.code} · ${target.name}`,
+          detail: input.status,
+        });
+      }
+
+      return { success: true, count: targets.length };
+    }),
+
+  assignMany: adminCompanyProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().min(1)).min(1).max(100),
+        projectId: z.string().min(1).nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const targets = await db
+        .select({
+          id: equipment.id,
+          code: equipment.code,
+          name: equipment.name,
+          status: equipment.status,
+        })
+        .from(equipment)
+        .where(and(inArray(equipment.id, input.ids), eq(equipment.companyId, ctx.companyId)));
+      if (targets.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "No equipment found" });
+      }
+
+      // Rejecting the whole batch rather than quietly assigning the rest: the
+      // single-row assign throws for these, and silently moving fewer machines
+      // than were selected is the kind of thing nobody notices until it matters.
+      const blocked = targets.filter(
+        (row) => row.status === "maintenance" || row.status === "retired",
+      );
+      if (input.projectId && blocked.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `${blocked.length} of the selected item(s) are in maintenance or retired and cannot be assigned to a site: ${blocked
+            .map((row) => row.code)
+            .join(", ")}`,
+        });
+      }
+
+      let targetLabel: string | undefined;
+      if (input.projectId) {
+        const [site] = await db
+          .select({ id: project.id, code: project.code })
+          .from(project)
+          .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
+        if (!site) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        }
+        targetLabel = site.code;
+      }
+
+      await db
+        .update(equipment)
+        .set({
+          projectId: input.projectId,
+          status: input.projectId ? "in_use" : "available",
+        })
+        .where(
+          inArray(
+            equipment.id,
+            targets.map((row) => row.id),
+          ),
+        );
+
+      for (const target of targets) {
+        await recordActivity(ctx, {
+          action: "assigned",
+          entityType: "equipment",
+          entityId: target.id,
+          entityLabel: `${target.code} · ${target.name}`,
+          detail: targetLabel,
+        });
+      }
+
+      return { success: true, count: targets.length };
     }),
 });

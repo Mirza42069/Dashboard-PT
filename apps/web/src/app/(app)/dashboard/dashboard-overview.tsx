@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Hammer, ListChecks, TrendingUp, Wallet } from "lucide-react";
 
 import { Meter } from "@/components/meter";
+import { QueryError } from "@/components/query-error";
 import { StatusBadge } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -21,17 +22,37 @@ export default function DashboardOverview() {
   const { money, moneyCompact, percent } = useFormat();
   const summary = useQuery(trpc.project.summary.queryOptions());
 
+  // Traces the real layout below — one stats bar, then a two-column grid — so
+  // the page settles in place instead of reflowing when the data lands.
   if (summary.isPending) {
     return (
-      <div className="space-y-3">
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-64 w-full" />
+      <div className="space-y-4">
+        <Card>
+          <CardContent className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4 xl:gap-0 xl:divide-x">
+            {Array.from({ length: 4 }, (_, index) => (
+              <div key={index} className="space-y-2 xl:px-5 xl:first:pl-0 xl:last:pr-0">
+                <Skeleton className="h-3.5 w-24" />
+                <Skeleton className="h-7 w-20" />
+                <Skeleton className="h-3.5 w-28" />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Skeleton className="h-64 w-full" />
+          <Skeleton className="h-64 w-full" />
+        </div>
       </div>
     );
   }
 
+  // Without this the page went blank on failure: the global QueryCache handler
+  // raises a toast, but a missed toast left nothing on screen and no way back.
+  if (summary.isError || !summary.data) {
+    return <QueryError error={summary.error} onRetry={() => void summary.refetch()} />;
+  }
+
   const data = summary.data;
-  if (!data) return null;
 
   const totalProjects = data.projects.total;
 

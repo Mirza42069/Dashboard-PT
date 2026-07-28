@@ -18,7 +18,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-4 p-4 md:p-6">
-      <h1 className="text-lg font-semibold tracking-tight">{dict.dashboard.title}</h1>
+      <h1 className="sr-only">{dict.dashboard.title}</h1>
       <DashboardOverview />
     </div>
   );

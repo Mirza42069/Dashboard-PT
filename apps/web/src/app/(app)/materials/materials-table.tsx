@@ -13,6 +13,7 @@ import {
 import { Badge } from "@DashboardV2/ui/components/badge";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent } from "@DashboardV2/ui/components/card";
+import { Checkbox } from "@DashboardV2/ui/components/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -41,19 +42,31 @@ import {
 } from "@DashboardV2/ui/components/table";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownToLine, ArrowUpFromLine, Plus, Trash2, TriangleAlert } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Pencil,
+  Plus,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import z from "zod";
 
+import { BulkActionsBar } from "@/components/bulk-actions-bar";
+import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { todayIso } from "@/lib/format";
+import { summarizeSelection } from "@/lib/summarize-selection";
 import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
+import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
 const MOVEMENT_TYPES = ["in", "out", "adjustment"] as const;
+const PAGE_SIZE = 25;
 
 type MaterialRow = {
   id: string;
@@ -73,9 +86,11 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [lowStockOnly, setLowStockOnly] = useState(false);
+  const [page, setPage] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [movementTarget, setMovementTarget] = useState<MaterialRow | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<MaterialRow | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const debouncedSearch = useDebounced(search);
 
@@ -83,29 +98,41 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
     trpc.material.list.queryOptions({
       search: debouncedSearch,
       lowStockOnly,
-      limit: 100,
-      offset: 0,
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
     }),
   );
   const projectOptions = useQuery(trpc.project.options.queryOptions());
-  const deleteMaterial = useMutation(trpc.material.delete.mutationOptions());
+  const deleteMany = useMutation(trpc.material.deleteMany.mutationOptions());
 
   const materials = materialsQuery.data?.materials ?? [];
-  const lowStockCount = materials.filter((row) => row.isLowStock).length;
+  const total = materialsQuery.data?.total ?? 0;
+  const lowStockCount = materialsQuery.data?.lowStockTotal ?? 0;
+  const hasNextPage = (page + 1) * PAGE_SIZE < total;
 
-  async function confirmDelete() {
-    if (!deleteTarget) return;
+  const selection = useRowSelection(materials);
+  const editTarget =
+    selection.selectedCount === 1
+      ? (materials.find((row) => selection.isSelected(row.id)) ?? null)
+      : null;
+
+  async function run(action: () => Promise<unknown>, success: string) {
     try {
-      await deleteMaterial.mutateAsync({ id: deleteTarget.id });
+      await action();
       await queryClient.invalidateQueries(trpc.material.pathFilter());
-      toast.success(t.materials.deletedToast);
+      toast.success(success);
     } catch (error) {
-      // Carries the server's refusal for a material that has movement history,
-      // which is the common case and explains itself better than a generic line.
       toast.error(error instanceof Error ? error.message : t.common.somethingWentWrong);
-    } finally {
-      setDeleteTarget(null);
     }
+  }
+
+  async function confirmBulkDelete() {
+    const ids = selection.selectedIds;
+    await run(
+      () => deleteMany.mutateAsync({ ids, force: true }),
+      interpolate(t.materials.bulkDeletedToast, { count: ids.length }),
+    );
+    selection.clear();
   }
 
   return (
@@ -113,7 +140,10 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
       <div className="flex flex-wrap items-center gap-2">
         <Input
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(0);
+          }}
           placeholder={t.materials.searchPlaceholder}
           className="w-full sm:max-w-xs"
           aria-label={t.common.search}
@@ -121,7 +151,10 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
         <Button
           variant={lowStockOnly ? "default" : "outline"}
           size="sm"
-          onClick={() => setLowStockOnly((value) => !value)}
+          onClick={() => {
+            setLowStockOnly((value) => !value);
+            setPage(0);
+          }}
         >
           <TriangleAlert />
           {t.materials.lowStock}
@@ -135,12 +168,41 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
+      {isAdmin && (
+        <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
+          {/* Editing is inherently single-row, so it appears only once the
+              selection names exactly one thing to edit. */}
+          {editTarget && (
+            <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
+              <Pencil />
+              {t.common.edit}
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={() => setBulkDeleteOpen(true)}>
+            <Trash2 />
+            {t.common.deleteSelected}
+          </Button>
+        </BulkActionsBar>
+      )}
+
       <Card>
         <CardContent className="px-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-4">{t.materials.material}</TableHead>
+                {isAdmin && (
+                  <TableHead className="w-10 pl-4">
+                    <Checkbox
+                      checked={selection.allSelected}
+                      indeterminate={selection.someSelected}
+                      onCheckedChange={selection.toggleAll}
+                      aria-label={t.common.selectAll}
+                    />
+                  </TableHead>
+                )}
+                <TableHead className={isAdmin ? undefined : "pl-4"}>
+                  {t.materials.material}
+                </TableHead>
                 <TableHead>{t.materials.sku}</TableHead>
                 <TableHead className="text-right">{t.materials.onHand}</TableHead>
                 <TableHead className="text-right">{t.materials.reorderAt}</TableHead>
@@ -151,18 +213,30 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
             </TableHeader>
             <TableBody>
               {materialsQuery.isPending &&
-                Array.from({ length: 5 }, (_, index) => (
+                Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={isAdmin ? 7 : 6} className="pl-4">
+                    <TableCell colSpan={isAdmin ? 8 : 6} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
                 ))}
 
-              {!materialsQuery.isPending && materials.length === 0 && (
+              {materialsQuery.isError && (
+                <TableRow>
+                  <TableCell colSpan={isAdmin ? 8 : 6} className="p-4">
+                    <QueryError
+                      error={materialsQuery.error}
+                      onRetry={() => void materialsQuery.refetch()}
+                      className="border-0"
+                    />
+                  </TableCell>
+                </TableRow>
+              )}
+
+              {!materialsQuery.isPending && !materialsQuery.isError && materials.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={isAdmin ? 7 : 6}
+                    colSpan={isAdmin ? 8 : 6}
                     className="py-10 text-center text-muted-foreground"
                   >
                     {lowStockOnly ? t.materials.nothingLow : t.materials.empty}
@@ -171,8 +245,20 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
               )}
 
               {materials.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell className="pl-4 font-medium">
+                <TableRow
+                  key={row.id}
+                  data-state={selection.isSelected(row.id) ? "selected" : undefined}
+                >
+                  {isAdmin && (
+                    <TableCell className="pl-4">
+                      <Checkbox
+                        checked={selection.isSelected(row.id)}
+                        onCheckedChange={() => selection.toggle(row.id)}
+                        aria-label={interpolate(t.common.selectRow, { name: row.name })}
+                      />
+                    </TableCell>
+                  )}
+                  <TableCell className={isAdmin ? "font-medium" : "pl-4 font-medium"}>
                     {row.name}
                     {row.isLowStock && (
                       <Badge variant="destructive" className="ml-2">
@@ -192,17 +278,9 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                   <TableCell className="text-right tabular-nums">{money(row.stockValue)}</TableCell>
                   {isAdmin && (
                     <TableCell className="pr-4">
-                      <div className="flex items-center justify-end gap-1">
+                      <div className="flex items-center justify-end">
                         <Button variant="outline" size="sm" onClick={() => setMovementTarget(row)}>
                           {t.materials.record}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={interpolate(t.materials.deleteLabel, { name: row.name })}
-                          onClick={() => setDeleteTarget(row)}
-                        >
-                          <Trash2 />
                         </Button>
                       </div>
                     </TableCell>
@@ -214,15 +292,56 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
         </CardContent>
       </Card>
 
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {total === 0
+            ? t.materials.noMaterials
+            : interpolate(t.materials.showing, {
+                from: page * PAGE_SIZE + 1,
+                to: page * PAGE_SIZE + materials.length,
+                total,
+              })}
+        </p>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page === 0}
+            onClick={() => setPage((value) => Math.max(0, value - 1))}
+          >
+            {t.common.previous}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasNextPage}
+            onClick={() => setPage((value) => value + 1)}
+          >
+            {t.common.next}
+          </Button>
+        </div>
+      </div>
+
       {isAdmin && (
         <>
-          <CreateMaterialDialog
+          <MaterialFormDialog
             open={createOpen}
             onOpenChange={setCreateOpen}
             onSaved={() => queryClient.invalidateQueries(trpc.material.pathFilter())}
           />
+          <MaterialFormDialog
+            // Remount per target so defaultValues pick up the new row.
+            // Namespaced: this and MovementDialog below are siblings, and both
+            // fall back to a placeholder when nothing is targeted — a bare
+            // "none" on each collides.
+            key={`edit-${editTarget?.id ?? "none"}`}
+            editing={editTarget}
+            open={editOpen && editTarget !== null}
+            onOpenChange={setEditOpen}
+            onSaved={() => queryClient.invalidateQueries(trpc.material.pathFilter())}
+          />
           <MovementDialog
-            key={movementTarget?.id ?? "none"}
+            key={`movement-${movementTarget?.id ?? "none"}`}
             material={movementTarget}
             projects={projectOptions.data ?? []}
             onClose={() => setMovementTarget(null)}
@@ -232,22 +351,33 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
             }}
           />
 
-          <AlertDialog
-            open={deleteTarget !== null}
-            onOpenChange={(open) => {
-              if (!open) setDeleteTarget(null);
-            }}
-          >
+          <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>{t.materials.deleteTitle}</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {interpolate(t.materials.deleteConfirm, { name: deleteTarget?.name ?? "" })}
+                <AlertDialogTitle>
+                  {interpolate(t.common.bulkDeleteTitle, { count: selection.selectedCount })}
+                </AlertDialogTitle>
+                <AlertDialogDescription className="space-y-2">
+                  <span className="block">{t.materials.bulkDeleteDescription}</span>
+                  <span className="block font-medium text-foreground">
+                    {summarizeSelection(
+                      materials
+                        .filter((row) => selection.isSelected(row.id))
+                        .map((row) => `${row.sku} · ${row.name}`),
+                      t,
+                    )}
+                  </span>
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
-                <AlertDialogAction onClick={() => void confirmDelete()}>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => {
+                    setBulkDeleteOpen(false);
+                    void confirmBulkDelete();
+                  }}
+                >
                   {t.common.delete}
                 </AlertDialogAction>
               </AlertDialogFooter>
@@ -259,17 +389,27 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-function CreateMaterialDialog({
+/**
+ * Create and edit share one form: the fields, validation and layout are
+ * identical, and `material.update` takes the same shape as `material.create`.
+ * Pass `editing` to switch modes — remount with a key so defaultValues refresh,
+ * the same way ProjectFormDialog does it.
+ */
+function MaterialFormDialog({
   open,
   onOpenChange,
   onSaved,
+  editing,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void | Promise<unknown>;
+  editing?: MaterialRow | null;
 }) {
   const t = useT();
   const createMaterial = useMutation(trpc.material.create.mutationOptions());
+  const updateMaterial = useMutation(trpc.material.update.mutationOptions());
+  const isEdit = Boolean(editing);
 
   const schema = z.object({
     sku: z
@@ -285,16 +425,31 @@ function CreateMaterialDialog({
   });
 
   const form = useForm({
-    defaultValues: { sku: "", name: "", unit: "", reorderLevel: 0, unitCost: 0 },
+    defaultValues: editing
+      ? {
+          sku: editing.sku,
+          name: editing.name,
+          unit: editing.unit,
+          reorderLevel: editing.reorderLevel,
+          unitCost: editing.unitCost,
+        }
+      : { sku: "", name: "", unit: "", reorderLevel: 0, unitCost: 0 },
     onSubmit: async ({ value, formApi }) => {
       try {
-        await createMaterial.mutateAsync(value);
+        if (editing) await updateMaterial.mutateAsync({ id: editing.id, ...value });
+        else await createMaterial.mutateAsync(value);
         await onSaved();
         onOpenChange(false);
         formApi.reset();
-        toast.success(t.materials.createdToast);
+        toast.success(isEdit ? t.materials.updatedToast : t.materials.createdToast);
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : t.materials.createFailed);
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : isEdit
+              ? t.materials.updateFailed
+              : t.materials.createFailed,
+        );
       }
     },
     validators: { onSubmit: schema },
@@ -312,7 +467,9 @@ function CreateMaterialDialog({
           className="space-y-4"
         >
           <DialogHeader>
-            <DialogTitle>{t.materials.newMaterial}</DialogTitle>
+            <DialogTitle>
+              {isEdit ? t.materials.editMaterial : t.materials.newMaterial}
+            </DialogTitle>
           </DialogHeader>
 
           <div className="grid gap-4 sm:grid-cols-2">
@@ -344,7 +501,11 @@ function CreateMaterialDialog({
             >
               {({ canSubmit, isSubmitting }) => (
                 <Button type="submit" disabled={!canSubmit || isSubmitting}>
-                  {isSubmitting ? t.common.saving : t.materials.createMaterial}
+                  {isSubmitting
+                    ? t.common.saving
+                    : isEdit
+                      ? t.common.save
+                      : t.materials.createMaterial}
                 </Button>
               )}
             </form.Subscribe>

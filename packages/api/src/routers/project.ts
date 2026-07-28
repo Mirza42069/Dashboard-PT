@@ -355,4 +355,67 @@ export const projectRouter = router({
 
       return { success: true, deletedTasks: taskCount, deletedExpenses: expenseCount };
     }),
+
+  /**
+   * Bulk counterpart of delete. Scoping shares the where clause with the id
+   * filter so a cross-tenant id is simply not matched, and equipment is
+   * released before the delete for the same reason as the single-row version —
+   * otherwise the machines keep pointing at a site that no longer exists.
+   */
+  deleteMany: adminCompanyProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string().min(1)).min(1).max(100),
+        force: z.boolean().default(false),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const targets = await db
+        .select({ id: project.id, code: project.code, name: project.name })
+        .from(project)
+        .where(and(inArray(project.id, input.ids), eq(project.companyId, ctx.companyId)));
+      if (targets.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "No projects found" });
+      }
+
+      const ids = targets.map((row) => row.id);
+
+      const [[expenses], [tasks]] = await Promise.all([
+        db.select({ value: count() }).from(expense).where(inArray(expense.projectId, ids)),
+        db.select({ value: count() }).from(task).where(inArray(task.projectId, ids)),
+      ]);
+
+      const expenseCount = expenses?.value ?? 0;
+      const taskCount = tasks?.value ?? 0;
+
+      if (!input.force && (expenseCount > 0 || taskCount > 0)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `These projects have ${taskCount} task(s) and ${expenseCount} expense(s), which will be deleted with them. Confirm to continue.`,
+        });
+      }
+
+      await db
+        .update(equipment)
+        .set({ projectId: null, status: "available" })
+        .where(inArray(equipment.projectId, ids));
+
+      await db.delete(project).where(inArray(project.id, ids));
+
+      for (const target of targets) {
+        await recordActivity(ctx, {
+          action: "deleted",
+          entityType: "project",
+          entityId: target.id,
+          entityLabel: `${target.code} · ${target.name}`,
+        });
+      }
+
+      return {
+        success: true,
+        count: targets.length,
+        deletedTasks: taskCount,
+        deletedExpenses: expenseCount,
+      };
+    }),
 });
