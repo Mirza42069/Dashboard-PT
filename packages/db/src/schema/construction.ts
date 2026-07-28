@@ -1,6 +1,7 @@
 import { relations } from "drizzle-orm";
 import {
   boolean,
+  customType,
   date,
   index,
   integer,
@@ -8,9 +9,11 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
 } from "drizzle-orm/pg-core";
 
 import { user } from "./auth";
+import { company } from "./company";
 
 /**
  * Construction management domain.
@@ -70,11 +73,20 @@ export type MovementType = (typeof MOVEMENT_TYPES)[number];
 export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
+const companyId = () =>
+  text("company_id")
+    .notNull()
+    // restrict, not cascade: deleting a company must never silently take a
+    // portfolio of projects with it.
+    .references(() => company.id, { onDelete: "restrict" });
+
 export const project = pgTable(
   "project",
   {
     id: id(),
-    code: text("code").notNull().unique(),
+    companyId: companyId(),
+    // Unique per company, not globally — two tenants may both run a "PRJ-001".
+    code: text("code").notNull(),
     name: text("name").notNull(),
     client: text("client"),
     location: text("location"),
@@ -93,6 +105,8 @@ export const project = pgTable(
   (table) => [
     index("project_status_idx").on(table.status),
     index("project_managerId_idx").on(table.managerId),
+    index("project_companyId_idx").on(table.companyId),
+    unique("project_companyId_code_key").on(table.companyId, table.code),
   ],
 );
 
@@ -124,7 +138,8 @@ export const material = pgTable(
   "material",
   {
     id: id(),
-    sku: text("sku").notNull().unique(),
+    companyId: companyId(),
+    sku: text("sku").notNull(),
     name: text("name").notNull(),
     /** Unit of measure: bag, m3, ton, piece… */
     unit: text("unit").notNull(),
@@ -133,7 +148,11 @@ export const material = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (table) => [index("material_name_idx").on(table.name)],
+  (table) => [
+    index("material_name_idx").on(table.name),
+    index("material_companyId_idx").on(table.companyId),
+    unique("material_companyId_sku_key").on(table.companyId, table.sku),
+  ],
 );
 
 /**
@@ -169,7 +188,8 @@ export const equipment = pgTable(
   "equipment",
   {
     id: id(),
-    code: text("code").notNull().unique(),
+    companyId: companyId(),
+    code: text("code").notNull(),
     name: text("name").notNull(),
     category: text("category"),
     status: text("status").$type<EquipmentStatus>().default("available").notNull(),
@@ -183,6 +203,8 @@ export const equipment = pgTable(
   (table) => [
     index("equipment_status_idx").on(table.status),
     index("equipment_projectId_idx").on(table.projectId),
+    index("equipment_companyId_idx").on(table.companyId),
+    unique("equipment_companyId_code_key").on(table.companyId, table.code),
   ],
 );
 
@@ -224,6 +246,22 @@ export const projectNote = pgTable(
   (table) => [index("projectNote_projectId_idx").on(table.projectId)],
 );
 
+/**
+ * Binary column for image bytes.
+ *
+ * Going out, the value has to be a `\x`-prefixed hex string: the neon-http
+ * driver serialises parameters as JSON, which cannot carry a raw Buffer.
+ * Coming back, pg-types has already decoded the column into a Buffer, so
+ * fromDriver only needs to pass it through — re-parsing it as hex would eat
+ * the first two bytes of every image.
+ */
+const bytea = customType<{ data: Buffer; driverData: Buffer | string }>({
+  dataType: () => "bytea",
+  toDriver: (value) => `\\x${value.toString("hex")}`,
+  fromDriver: (value) =>
+    Buffer.isBuffer(value) ? value : Buffer.from(value.replace(/^\\x/, ""), "hex"),
+});
+
 export const notePhoto = pgTable(
   "note_photo",
   {
@@ -231,10 +269,9 @@ export const notePhoto = pgTable(
     noteId: text("note_id")
       .notNull()
       .references(() => projectNote.id, { onDelete: "cascade" }),
-    url: text("url").notNull(),
-    /** Blob key — required to delete the object, not derivable from the URL. */
-    pathname: text("pathname").notNull(),
-    contentType: text("content_type"),
+    /** The image itself, compressed in the browser before upload. */
+    data: bytea("data").notNull(),
+    contentType: text("content_type").notNull(),
     size: integer("size"),
     createdAt: createdAt(),
   },
@@ -278,6 +315,8 @@ export const activityLog = pgTable(
   "activity_log",
   {
     id: id(),
+    /** Nullable: rows written before companies existed have no tenant. */
+    companyId: text("company_id").references(() => company.id, { onDelete: "cascade" }),
     actorId: text("actor_id").references(() => user.id, { onDelete: "set null" }),
     actorName: text("actor_name").notNull(),
     action: text("action").$type<ActivityAction>().notNull(),
@@ -291,10 +330,19 @@ export const activityLog = pgTable(
   (table) => [
     index("activityLog_createdAt_idx").on(table.createdAt),
     index("activityLog_entityId_idx").on(table.entityId),
+    index("activityLog_companyId_idx").on(table.companyId),
   ],
 );
 
+export const companyRelations = relations(company, ({ many }) => ({
+  projects: many(project),
+  materials: many(material),
+  equipment: many(equipment),
+  users: many(user),
+}));
+
 export const projectRelations = relations(project, ({ one, many }) => ({
+  company: one(company, { fields: [project.companyId], references: [company.id] }),
   manager: one(user, { fields: [project.managerId], references: [user.id] }),
   tasks: many(task),
   expenses: many(expense),
@@ -318,7 +366,8 @@ export const taskRelations = relations(task, ({ one }) => ({
   assignee: one(user, { fields: [task.assigneeId], references: [user.id] }),
 }));
 
-export const materialRelations = relations(material, ({ many }) => ({
+export const materialRelations = relations(material, ({ one, many }) => ({
+  company: one(company, { fields: [material.companyId], references: [company.id] }),
   movements: many(materialMovement),
 }));
 
@@ -329,6 +378,7 @@ export const materialMovementRelations = relations(materialMovement, ({ one }) =
 }));
 
 export const equipmentRelations = relations(equipment, ({ one }) => ({
+  company: one(company, { fields: [equipment.companyId], references: [company.id] }),
   project: one(project, { fields: [equipment.projectId], references: [project.id] }),
 }));
 

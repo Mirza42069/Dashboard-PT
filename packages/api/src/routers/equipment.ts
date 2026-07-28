@@ -4,8 +4,9 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, count, eq, ilike, or } from "drizzle-orm";
 import z from "zod";
 
-import { adminProcedure, protectedProcedure, router } from "../index";
+import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
+import { assertProjectInScope } from "../lib/scope";
 
 const statusSchema = z.enum(EQUIPMENT_STATUSES);
 
@@ -25,7 +26,7 @@ const upsertSchema = z.object({
 });
 
 export const equipmentRouter = router({
-  list: protectedProcedure
+  list: companyProcedure
     .input(
       z.object({
         search: z.string().trim().max(200).default(""),
@@ -34,8 +35,9 @@ export const equipmentRouter = router({
         offset: z.number().int().min(0).default(0),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const filters = [
+        eq(equipment.companyId, ctx.companyId),
         input.search
           ? or(ilike(equipment.name, `%${input.search}%`), ilike(equipment.code, `%${input.search}%`))
           : undefined,
@@ -63,7 +65,12 @@ export const equipmentRouter = router({
           .limit(input.limit)
           .offset(input.offset),
         db.select({ value: count() }).from(equipment).where(where),
-        db.select({ status: equipment.status, value: count() }).from(equipment).groupBy(equipment.status),
+        // Status tiles count the company's fleet, not every tenant's.
+        db
+          .select({ status: equipment.status, value: count() })
+          .from(equipment)
+          .where(eq(equipment.companyId, ctx.companyId))
+          .groupBy(equipment.status),
       ]);
 
       return {
@@ -78,16 +85,22 @@ export const equipmentRouter = router({
       };
     }),
 
-  create: adminProcedure.input(upsertSchema).mutation(async ({ ctx, input }) => {
+  create: adminCompanyProcedure.input(upsertSchema).mutation(async ({ ctx, input }) => {
     const code = input.code.toUpperCase();
-    const [existing] = await db.select({ id: equipment.id }).from(equipment).where(eq(equipment.code, code));
+    const [existing] = await db
+      .select({ id: equipment.id })
+      .from(equipment)
+      .where(and(eq(equipment.code, code), eq(equipment.companyId, ctx.companyId)));
     if (existing) {
       throw new TRPCError({ code: "CONFLICT", message: `Equipment code ${code} is already in use` });
+    }
+    if (input.projectId) {
+      await assertProjectInScope(ctx.companyId, input.projectId);
     }
 
     const [created] = await db
       .insert(equipment)
-      .values({ ...input, code })
+      .values({ ...input, code, companyId: ctx.companyId })
       .returning({ id: equipment.id });
 
     if (created) {
@@ -102,20 +115,28 @@ export const equipmentRouter = router({
     return { id: created?.id };
   }),
 
-  update: adminProcedure
+  update: adminCompanyProcedure
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { id: equipmentId, code, ...rest } = input;
 
-      const [current] = await db.select().from(equipment).where(eq(equipment.id, equipmentId));
+      const [current] = await db
+        .select()
+        .from(equipment)
+        .where(and(eq(equipment.id, equipmentId), eq(equipment.companyId, ctx.companyId)));
       if (!current) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Equipment not found" });
+      }
+      if (rest.projectId) {
+        await assertProjectInScope(ctx.companyId, rest.projectId);
       }
       if (code && code.toUpperCase() !== current.code) {
         const [clash] = await db
           .select({ id: equipment.id })
           .from(equipment)
-          .where(eq(equipment.code, code.toUpperCase()));
+          .where(
+            and(eq(equipment.code, code.toUpperCase()), eq(equipment.companyId, ctx.companyId)),
+          );
         if (clash) {
           throw new TRPCError({ code: "CONFLICT", message: `Equipment code ${code} is already in use` });
         }
@@ -156,7 +177,7 @@ export const equipmentRouter = router({
    * something recalled is available again. Keeping these in one procedure stops
    * the two fields drifting out of agreement.
    */
-  assign: adminProcedure
+  assign: adminCompanyProcedure
     .input(
       z.object({
         id: z.string().min(1),
@@ -164,7 +185,10 @@ export const equipmentRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const [current] = await db.select().from(equipment).where(eq(equipment.id, input.id));
+      const [current] = await db
+        .select()
+        .from(equipment)
+        .where(and(eq(equipment.id, input.id), eq(equipment.companyId, ctx.companyId)));
       if (!current) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Equipment not found" });
       }
@@ -180,7 +204,7 @@ export const equipmentRouter = router({
         const [target] = await db
           .select({ id: project.id, code: project.code })
           .from(project)
-          .where(eq(project.id, input.projectId));
+          .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
         if (!target) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
         }
@@ -206,24 +230,26 @@ export const equipmentRouter = router({
       return { success: true };
     }),
 
-  delete: adminProcedure.input(z.object({ id: z.string().min(1) })).mutation(async ({ ctx, input }) => {
-    const [target] = await db
-      .select({ code: equipment.code, name: equipment.name })
-      .from(equipment)
-      .where(eq(equipment.id, input.id));
-    if (!target) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Equipment not found" });
-    }
+  delete: adminCompanyProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const [target] = await db
+        .select({ code: equipment.code, name: equipment.name })
+        .from(equipment)
+        .where(and(eq(equipment.id, input.id), eq(equipment.companyId, ctx.companyId)));
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Equipment not found" });
+      }
 
-    await db.delete(equipment).where(eq(equipment.id, input.id));
+      await db.delete(equipment).where(eq(equipment.id, input.id));
 
-    await recordActivity(ctx, {
-      action: "deleted",
-      entityType: "equipment",
-      entityId: input.id,
-      entityLabel: `${target.code} · ${target.name}`,
-    });
+      await recordActivity(ctx, {
+        action: "deleted",
+        entityType: "equipment",
+        entityId: input.id,
+        entityLabel: `${target.code} · ${target.name}`,
+      });
 
-    return { success: true };
-  }),
+      return { success: true };
+    }),
 });

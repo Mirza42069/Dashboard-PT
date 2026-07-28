@@ -4,11 +4,22 @@
  *
  * Run with: bun run db:seed-demo
  *
- * Idempotent: every row it creates carries a DEMO- prefixed code, and those are
- * deleted first. Anything you created by hand is left alone.
+ * Idempotent, and narrowly so: it deletes exactly the codes listed below, in
+ * the target company only, then recreates them. Anything you entered by hand
+ * survives even if it sits in the same company — there is no prefix match and
+ * no "delete everything here" step.
+ *
+ * The codes are deliberately ordinary (PRJ-001, CEM, EQ-EXC1) rather than
+ * DEMO-prefixed: this data is meant to read as a real portfolio in a live
+ * deployment. That is also why the clear list has to be explicit — there is no
+ * longer a marker distinguishing seeded rows from real ones.
+ *
+ * Everything lands in one company — SKN by default, so BKU stays a clean slate.
+ * Override with `--company=<code>`.
  */
 import { db } from "@DashboardV2/db";
 import {
+  company,
   equipment,
   expense,
   material,
@@ -18,9 +29,19 @@ import {
   user,
 } from "@DashboardV2/db/schema";
 import type { ExpenseCategory, ProjectStatus, TaskStatus } from "@DashboardV2/db/schema";
-import { eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
-const PREFIX = "DEMO-";
+const DEFAULT_COMPANY_CODE = "SKN";
+
+/** Codes this script owns. Everything else in the company is left alone. */
+const projectCode = (suffix: string) => `PRJ-${suffix}`;
+const materialSku = (suffix: string) => suffix;
+const equipmentCode = (suffix: string) => `EQ-${suffix}`;
+
+function targetCompanyCode() {
+  const flag = process.argv.find((arg) => arg.startsWith("--company="));
+  return (flag ? flag.slice("--company=".length) : DEFAULT_COMPANY_CODE).toUpperCase();
+}
 
 /** Deterministic pseudo-random so re-runs produce comparable numbers. */
 let seed = 42;
@@ -115,34 +136,46 @@ const EXPENSE_NOTES: Record<ExpenseCategory, string[]> = {
   other: ["Site welfare units", "Waste removal", "Permits and fees"],
 };
 
-async function clearDemoData() {
-  // Tasks and expenses cascade from project; equipment/materials are separate.
-  const demoProjects = await db
-    .select({ id: project.id })
-    .from(project)
-    .where(like(project.code, `${PREFIX}%`));
+async function clearDemoData(companyId: string) {
+  // Exactly the codes this script generates, in this company only.
+  const isSeededProject = and(
+    eq(project.companyId, companyId),
+    inArray(project.code, PROJECT_SEEDS.map((entry) => projectCode(entry.suffix))),
+  );
+  const isSeededMaterial = and(
+    eq(material.companyId, companyId),
+    inArray(material.sku, MATERIAL_SEEDS.map((entry) => materialSku(entry.suffix))),
+  );
 
-  if (demoProjects.length > 0) {
-    await db.delete(project).where(like(project.code, `${PREFIX}%`));
+  // Tasks and expenses cascade from project; equipment/materials are separate.
+  const seededProjects = await db.select({ id: project.id }).from(project).where(isSeededProject);
+
+  if (seededProjects.length > 0) {
+    await db.delete(project).where(isSeededProject);
   }
-  // Only movements belonging to demo materials — a blanket delete would wipe
-  // hand-entered history too.
-  const demoMaterials = await db
+  // Only movements belonging to the seeded materials — a blanket delete would
+  // wipe hand-entered history too.
+  const seededMaterials = await db
     .select({ id: material.id })
     .from(material)
-    .where(like(material.sku, `${PREFIX}%`));
-  if (demoMaterials.length > 0) {
+    .where(isSeededMaterial);
+  if (seededMaterials.length > 0) {
     await db.delete(materialMovement).where(
       inArray(
         materialMovement.materialId,
-        demoMaterials.map((row) => row.id),
+        seededMaterials.map((row) => row.id),
       ),
     );
   }
-  await db.delete(material).where(like(material.sku, `${PREFIX}%`));
-  await db.delete(equipment).where(like(equipment.code, `${PREFIX}%`));
+  await db.delete(material).where(isSeededMaterial);
+  await db.delete(equipment).where(
+    and(
+      eq(equipment.companyId, companyId),
+      inArray(equipment.code, EQUIPMENT_SEEDS.map((entry) => equipmentCode(entry.suffix))),
+    ),
+  );
 
-  console.log(`Cleared ${demoProjects.length} existing demo project(s)`);
+  console.log(`Cleared ${seededProjects.length} previously seeded project(s)`);
 }
 
 async function main() {
@@ -152,11 +185,24 @@ async function main() {
     process.exit(1);
   }
 
-  await clearDemoData();
+  const code = targetCompanyCode();
+  const [target] = await db
+    .select({ id: company.id, name: company.name })
+    .from(company)
+    .where(eq(company.code, code));
+  if (!target) {
+    console.error(`No company with code ${code}. Create it under Admin → Companies first.`);
+    process.exit(1);
+  }
+  const companyId = target.id;
+  console.log(`Seeding into ${target.name} (${code})`);
+
+  await clearDemoData(companyId);
 
   // --- Projects -----------------------------------------------------------
   const projectRows = PROJECT_SEEDS.map((entry) => ({
-    code: `${PREFIX}${entry.suffix}`,
+    companyId,
+    code: projectCode(entry.suffix),
     name: entry.name,
     client: entry.client,
     location: entry.location,
@@ -225,7 +271,8 @@ async function main() {
     .insert(material)
     .values(
       MATERIAL_SEEDS.map((entry) => ({
-        sku: `${PREFIX}${entry.suffix}`,
+        companyId,
+        sku: materialSku(entry.suffix),
         name: entry.name,
         unit: entry.unit,
         reorderLevel: entry.reorder.toFixed(2),
@@ -274,7 +321,8 @@ async function main() {
   const equipmentRows = EQUIPMENT_SEEDS.map((entry, index) => {
     const deployed = index < 6;
     return {
-      code: `${PREFIX}${entry.suffix}`,
+      companyId,
+      code: equipmentCode(entry.suffix),
       name: entry.name,
       category: entry.category,
       status: deployed ? ("in_use" as const) : index < 8 ? ("available" as const) : ("maintenance" as const),

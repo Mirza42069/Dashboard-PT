@@ -14,24 +14,29 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Textarea } from "@DashboardV2/ui/components/textarea";
 import { env } from "@DashboardV2/env/web";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { upload } from "@vercel/blob/client";
 import { ImagePlus, Send, Trash2, X } from "lucide-react";
-import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { compressImage } from "@/lib/compress-image";
 import { getServerUrl } from "@/lib/server-url";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 /**
- * In development this resolves to http://localhost:3000/blob/upload; in
- * production NEXT_PUBLIC_SERVER_URL is "/api", giving /api/blob/upload, which
- * vercel.json rewrites to the same Hono route.
+ * In development these resolve against http://localhost:3000; in production
+ * NEXT_PUBLIC_SERVER_URL is "/api", which vercel.json rewrites to the same
+ * Hono routes.
  */
-const uploadUrl = () => `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/blob/upload`;
+const uploadUrl = (noteId: string) =>
+  `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/notes/${noteId}/photos`;
+const photoSrc = (photoId: string) =>
+  `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/photos/${photoId}`;
+
+/** Intake limit — files are compressed to ~1 MB in-browser before upload. */
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
 type Pending = { file: File; previewUrl: string };
 
@@ -54,7 +59,6 @@ export default function NotesTab({
 
   const notesQuery = useQuery(trpc.note.listByProject.queryOptions({ projectId }));
   const createNote = useMutation(trpc.note.create.mutationOptions());
-  const attachPhoto = useMutation(trpc.note.attachPhoto.mutationOptions());
   const deleteNote = useMutation(trpc.note.delete.mutationOptions());
   const deletePhoto = useMutation(trpc.note.deletePhoto.mutationOptions());
 
@@ -67,7 +71,14 @@ export default function NotesTab({
 
   function addFiles(files: FileList | null) {
     if (!files) return;
-    const images = Array.from(files).filter((file) => file.type.startsWith("image/"));
+    const images = Array.from(files).filter((file) => {
+      if (!file.type.startsWith("image/")) return false;
+      if (file.size > MAX_FILE_BYTES) {
+        toast.error(interpolate(t.notes.tooLarge, { name: file.name }));
+        return false;
+      }
+      return true;
+    });
     setPending((current) => [
       ...current,
       ...images.map((file) => ({ file, previewUrl: URL.createObjectURL(file) })),
@@ -83,9 +94,9 @@ export default function NotesTab({
   }
 
   /**
-   * Note row first, then uploads, then attach. If an upload fails you get a
-   * note with fewer photos — visible and fixable. Uploading first would leave
-   * blobs in storage that nothing in the database references.
+   * Note row first, then photos — each upload needs a note id to hang off.
+   * A failed upload therefore costs you one photo, not the whole note, and
+   * the toast names the file so it can be re-added.
    */
   async function submit() {
     if (body.trim() === "") {
@@ -100,17 +111,18 @@ export default function NotesTab({
 
       for (const item of pending) {
         try {
-          const blob = await upload(item.file.name, item.file, {
-            access: "public",
-            handleUploadUrl: uploadUrl(),
+          // Compress client-side: the server (and Vercel) cap bodies at ~4 MB.
+          const blob = await compressImage(item.file);
+          const response = await fetch(uploadUrl(noteId), {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": blob.type },
+            body: blob,
           });
-          await attachPhoto.mutateAsync({
-            noteId,
-            url: blob.url,
-            pathname: blob.pathname,
-            contentType: item.file.type,
-            size: item.file.size,
-          });
+          if (!response.ok) {
+            const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+            throw new Error(payload?.error ?? `Upload failed (${response.status})`);
+          }
         } catch (error) {
           const detail = error instanceof Error ? error.message : "";
           toast.error(
@@ -253,14 +265,16 @@ export default function NotesTab({
                       type="button"
                       aria-label={t.notes.viewPhoto}
                       className="relative block size-full overflow-hidden rounded-md ring-1 ring-foreground/10"
-                      onClick={() => setLightbox(photo.url)}
+                      onClick={() => setLightbox(photo.id)}
                     >
-                      <Image
-                        src={photo.url}
+                      {/* Plain <img>: the next/image optimizer fetches without
+                          the session cookie the /photos route requires. */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photoSrc(photo.id)}
                         alt=""
-                        fill
-                        sizes="(max-width: 768px) 33vw, 160px"
-                        className="object-cover"
+                        loading="lazy"
+                        className="absolute inset-0 size-full object-cover"
                       />
                     </button>
                     <Button
@@ -300,7 +314,12 @@ export default function NotesTab({
           <DialogTitle className="sr-only">{t.notes.viewPhoto}</DialogTitle>
           {lightbox && (
             <div className="relative aspect-video w-full">
-              <Image src={lightbox} alt="" fill sizes="90vw" className="object-contain" />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={photoSrc(lightbox)}
+                alt=""
+                className="absolute inset-0 size-full object-contain"
+              />
             </div>
           )}
         </DialogContent>

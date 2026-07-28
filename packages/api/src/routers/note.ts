@@ -1,32 +1,19 @@
 import { db } from "@DashboardV2/db";
 import { notePhoto, project, projectNote } from "@DashboardV2/db/schema";
-import { env } from "@DashboardV2/env/server";
 import { TRPCError } from "@trpc/server";
-import { del } from "@vercel/blob";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import z from "zod";
 
-import { adminProcedure, protectedProcedure, router } from "../index";
+import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
-
-/**
- * Removes objects from Blob storage. Never throws: a note row that is already
- * gone must not resurrect because cleanup failed, and an orphaned blob is a
- * billing footnote, not a correctness problem.
- */
-async function deleteBlobs(pathnames: string[]) {
-  if (pathnames.length === 0 || !env.BLOB_READ_WRITE_TOKEN) return;
-  try {
-    await del(pathnames, { token: env.BLOB_READ_WRITE_TOKEN });
-  } catch (error) {
-    console.warn("[note] blob cleanup failed:", error instanceof Error ? error.message : error);
-  }
-}
+import { assertNoteInScope, assertProjectInScope } from "../lib/scope";
 
 export const noteRouter = router({
-  listByProject: protectedProcedure
+  listByProject: companyProcedure
     .input(z.object({ projectId: z.string().min(1), limit: z.number().int().min(1).max(100).default(50) }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      await assertProjectInScope(ctx.companyId, input.projectId);
+
       const notes = await db
         .select()
         .from(projectNote)
@@ -36,8 +23,16 @@ export const noteRouter = router({
 
       if (notes.length === 0) return { notes: [] };
 
+      // Everything except `data` — the bytes are megabytes each and are
+      // served by GET /photos/:id, never through tRPC JSON.
       const photos = await db
-        .select()
+        .select({
+          id: notePhoto.id,
+          noteId: notePhoto.noteId,
+          contentType: notePhoto.contentType,
+          size: notePhoto.size,
+          createdAt: notePhoto.createdAt,
+        })
         .from(notePhoto)
         .where(
           inArray(
@@ -56,10 +51,10 @@ export const noteRouter = router({
     }),
 
   /**
-   * protectedProcedure, not admin: recording site evidence is exactly what
+   * companyProcedure, not admin: recording site evidence is exactly what
    * non-admin site staff are there to do. Deleting a note stays admin-only.
    */
-  create: protectedProcedure
+  create: companyProcedure
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -70,7 +65,7 @@ export const noteRouter = router({
       const [target] = await db
         .select({ id: project.id, code: project.code, name: project.name })
         .from(project)
-        .where(eq(project.id, input.projectId));
+        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
@@ -99,59 +94,32 @@ export const noteRouter = router({
       return { id: created.id };
     }),
 
-  /**
-   * Called by the browser after upload() resolves. The note row already exists
-   * at this point by design: if this call fails you get a note with fewer
-   * photos, which is visible and fixable. Uploading first would leave a blob
-   * nothing in the database references.
-   */
-  attachPhoto: protectedProcedure
-    .input(
-      z.object({
-        noteId: z.string().min(1),
-        url: z.url(),
-        pathname: z.string().min(1),
-        contentType: z.string().max(100).optional(),
-        size: z.number().int().nonnegative().optional(),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const [note] = await db
-        .select({ id: projectNote.id })
-        .from(projectNote)
-        .where(eq(projectNote.id, input.noteId));
-      if (!note) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
-      }
+  // Photo uploads bypass tRPC: the browser POSTs raw bytes to
+  // /notes/:noteId/photos on the Hono server, which inserts the row itself.
 
-      const [created] = await db.insert(notePhoto).values(input).returning({ id: notePhoto.id });
-      return { id: created?.id };
-    }),
-
-  deletePhoto: protectedProcedure
+  deletePhoto: companyProcedure
     .input(z.object({ id: z.string().min(1) }))
-    .mutation(async ({ input }) => {
-      const [photo] = await db.select().from(notePhoto).where(eq(notePhoto.id, input.id));
+    .mutation(async ({ ctx, input }) => {
+      // Resolve the owning note first so scope is checked before the delete.
+      const [photo] = await db
+        .select({ noteId: notePhoto.noteId })
+        .from(notePhoto)
+        .where(eq(notePhoto.id, input.id));
       if (!photo) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Photo not found" });
       }
+      await assertNoteInScope(ctx.companyId, photo.noteId);
 
       await db.delete(notePhoto).where(eq(notePhoto.id, input.id));
-      await deleteBlobs([photo.pathname]);
-
       return { success: true };
     }),
 
-  delete: adminProcedure.input(z.object({ id: z.string().min(1) })).mutation(async ({ input }) => {
-    // Read the pathnames before the cascade removes them.
-    const photos = await db
-      .select({ pathname: notePhoto.pathname })
-      .from(notePhoto)
-      .where(eq(notePhoto.noteId, input.id));
-
-    await db.delete(projectNote).where(eq(projectNote.id, input.id));
-    await deleteBlobs(photos.map((photo) => photo.pathname));
-
-    return { success: true, deletedPhotos: photos.length };
-  }),
+  delete: adminCompanyProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      await assertNoteInScope(ctx.companyId, input.id);
+      // Bytes live in note_photo rows, so the cascade removes them too.
+      await db.delete(projectNote).where(eq(projectNote.id, input.id));
+      return { success: true };
+    }),
 });

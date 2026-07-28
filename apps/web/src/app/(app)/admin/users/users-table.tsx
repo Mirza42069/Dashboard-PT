@@ -32,6 +32,7 @@ import {
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Building2,
   KeyRound,
   MoreHorizontal,
   PauseCircle,
@@ -64,6 +65,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
   const [page, setPage] = useState(0);
   const [tempPassword, setTempPassword] = useState<TempPasswordResult | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [companyTarget, setCompanyTarget] = useState<{ id: string; name: string } | null>(null);
 
   const usersQuery = useQuery(
     trpc.admin.listUsers.queryOptions({
@@ -72,6 +74,8 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
       offset: page * PAGE_SIZE,
     }),
   );
+  const companiesQuery = useQuery(trpc.company.list.queryOptions());
+  const companies = companiesQuery.data?.companies ?? [];
 
   async function refresh() {
     await queryClient.invalidateQueries(trpc.admin.pathFilter());
@@ -80,6 +84,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
   const resetPassword = useMutation(trpc.admin.resetPassword.mutationOptions());
   const setRole = useMutation(trpc.admin.setRole.mutationOptions());
   const setBanned = useMutation(trpc.admin.setBanned.mutationOptions());
+  const setCompany = useMutation(trpc.admin.setCompany.mutationOptions());
   const deleteUser = useMutation(trpc.admin.deleteUser.mutationOptions());
 
   /** Every mutation here is admin-only server-side; this is just error surfacing. */
@@ -121,6 +126,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                 <TableHead className="pl-4">{t.users.name}</TableHead>
                 <TableHead>{t.users.email}</TableHead>
                 <TableHead>{t.users.role}</TableHead>
+                <TableHead>{t.company.label}</TableHead>
                 <TableHead>{t.users.statusColumn}</TableHead>
                 <TableHead>{t.users.created}</TableHead>
                 <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>
@@ -130,7 +136,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
               {usersQuery.isPending &&
                 Array.from({ length: 5 }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={6} className="pl-4">
+                    <TableCell colSpan={7} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -138,7 +144,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
 
               {!usersQuery.isPending && users.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
                     {search ? interpolate(t.users.noMatch, { search }) : t.users.empty}
                   </TableCell>
                 </TableRow>
@@ -161,6 +167,11 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                       <Badge variant={isAdmin ? "default" : "outline"}>
                         {isAdmin ? t.users.roleAdmin : t.users.roleUser}
                       </Badge>
+                    </TableCell>
+                    {/* Admins are unpinned by design — they pick an active
+                        company from the header instead of belonging to one. */}
+                    <TableCell className="text-muted-foreground">
+                      {user.companyName ?? t.common.none}
                     </TableCell>
                     <TableCell>
                       {user.banned ? (
@@ -217,6 +228,18 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                             {isAdmin ? <ShieldMinus /> : <ShieldPlus />}
                             {isAdmin ? t.users.demote : t.users.promote}
                           </DropdownMenuItem>
+
+                          {/* Admins have no company to move; they pick one. */}
+                          {!isAdmin && (
+                            <DropdownMenuItem
+                              onClick={() =>
+                                setCompanyTarget({ id: user.id, name: user.name })
+                              }
+                            >
+                              <Building2 />
+                              {t.company.move}
+                            </DropdownMenuItem>
+                          )}
 
                           <DropdownMenuSeparator />
 
@@ -299,6 +322,48 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
       </div>
 
       <TempPasswordDialog result={tempPassword} onClose={() => setTempPassword(null)} />
+
+      {/* Moving an account between companies changes everything it can see, so
+          it is an explicit pick rather than a cycle-through. */}
+      <AlertDialog
+        open={companyTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setCompanyTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.company.moveTitle}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {interpolate(t.company.moveDescription, { name: companyTarget?.name ?? "" })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="grid gap-2">
+            {companies.map((item) => (
+              <Button
+                key={item.id}
+                variant="outline"
+                className="justify-start"
+                onClick={() => {
+                  const target = companyTarget;
+                  setCompanyTarget(null);
+                  if (!target) return;
+                  void run(
+                    () => setCompany.mutateAsync({ userId: target.id, companyId: item.id }),
+                    t.company.moved,
+                  );
+                }}
+              >
+                <Building2 />
+                {item.name}
+              </Button>
+            ))}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={pendingDelete !== null}

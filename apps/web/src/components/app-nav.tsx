@@ -2,7 +2,7 @@
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
-import { Boxes, HardHat, LayoutDashboard, Truck, Users } from "lucide-react";
+import { Boxes, Building2, HardHat, LayoutDashboard, Truck, Users } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -48,7 +48,10 @@ const SECTIONS: NavSection[] = [
   {
     headingKey: "administration",
     adminOnly: true,
-    items: [{ href: "/admin/users", labelKey: "users", icon: Users }],
+    items: [
+      { href: "/admin/users", labelKey: "users", icon: Users },
+      { href: "/admin/companies", labelKey: "companies", icon: Building2 },
+    ],
   },
 ];
 

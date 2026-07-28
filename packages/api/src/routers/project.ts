@@ -4,9 +4,10 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, ilike, inArray, or, sql, sum } from "drizzle-orm";
 import z from "zod";
 
-import { adminProcedure, protectedProcedure, router } from "../index";
+import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { percentOf, toAmount, toNumericString } from "../lib/money";
+import { assertUserAssignable } from "../lib/scope";
 
 const statusSchema = z.enum(PROJECT_STATUSES);
 
@@ -72,7 +73,7 @@ function decorate(row: typeof project.$inferSelect, spent: number, openTasks: nu
 }
 
 export const projectRouter = router({
-  list: protectedProcedure
+  list: companyProcedure
     .input(
       z.object({
         search: z.string().trim().max(200).default(""),
@@ -81,8 +82,9 @@ export const projectRouter = router({
         offset: z.number().int().min(0).default(0),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const filters = [
+        eq(project.companyId, ctx.companyId),
         input.search
           ? or(
               ilike(project.name, `%${input.search}%`),
@@ -120,15 +122,19 @@ export const projectRouter = router({
     }),
 
   /** Lightweight list for the project pickers on other screens. */
-  options: protectedProcedure.query(async () => {
+  options: companyProcedure.query(async ({ ctx }) => {
     return db
       .select({ id: project.id, code: project.code, name: project.name, status: project.status })
       .from(project)
+      .where(eq(project.companyId, ctx.companyId))
       .orderBy(asc(project.code));
   }),
 
-  get: protectedProcedure.input(z.object({ id: z.string().min(1) })).query(async ({ input }) => {
-    const [row] = await db.select().from(project).where(eq(project.id, input.id));
+  get: companyProcedure.input(z.object({ id: z.string().min(1) })).query(async ({ ctx, input }) => {
+    const [row] = await db
+      .select()
+      .from(project)
+      .where(and(eq(project.id, input.id), eq(project.companyId, ctx.companyId)));
     if (!row) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
     }
@@ -160,20 +166,33 @@ export const projectRouter = router({
   }),
 
   /** Everything the dashboard needs, in one round trip. */
-  summary: protectedProcedure.query(async () => {
+  summary: companyProcedure.query(async ({ ctx }) => {
+    const inCompany = eq(project.companyId, ctx.companyId);
+    // expense and task carry no company of their own, so both join through
+    // project rather than filtering directly.
     const [statusRows, [totals], [spentRow], [openTaskRow]] = await Promise.all([
-      db.select({ status: project.status, value: count() }).from(project).groupBy(project.status),
+      db
+        .select({ status: project.status, value: count() })
+        .from(project)
+        .where(inCompany)
+        .groupBy(project.status),
       db
         .select({
           contractValue: sum(project.contractValue),
           budget: sum(project.budget),
         })
-        .from(project),
-      db.select({ total: sum(expense.amount) }).from(expense),
+        .from(project)
+        .where(inCompany),
+      db
+        .select({ total: sum(expense.amount) })
+        .from(expense)
+        .innerJoin(project, eq(expense.projectId, project.id))
+        .where(inCompany),
       db
         .select({ value: count() })
         .from(task)
-        .where(sql`${task.status} <> 'done'`),
+        .innerJoin(project, eq(task.projectId, project.id))
+        .where(and(inCompany, sql`${task.status} <> 'done'`)),
     ]);
 
     const byStatus = Object.fromEntries(
@@ -199,15 +218,22 @@ export const projectRouter = router({
     };
   }),
 
-  create: adminProcedure.input(upsertSchema).mutation(async ({ ctx, input }) => {
+  create: adminCompanyProcedure.input(upsertSchema).mutation(async ({ ctx, input }) => {
     const code = input.code.toUpperCase();
 
-    const [existing] = await db.select({ id: project.id }).from(project).where(eq(project.code, code));
+    // Codes are unique per company, so the clash check is scoped too.
+    const [existing] = await db
+      .select({ id: project.id })
+      .from(project)
+      .where(and(eq(project.code, code), eq(project.companyId, ctx.companyId)));
     if (existing) {
       throw new TRPCError({ code: "CONFLICT", message: `Project code ${code} is already in use` });
     }
     if (input.startDate && input.endDate && input.endDate < input.startDate) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date" });
+    }
+    if (input.managerId) {
+      await assertUserAssignable(ctx.companyId, input.managerId);
     }
 
     const [created] = await db
@@ -215,6 +241,7 @@ export const projectRouter = router({
       .values({
         ...input,
         code,
+        companyId: ctx.companyId,
         contractValue: toNumericString(input.contractValue),
         budget: toNumericString(input.budget),
       })
@@ -232,12 +259,15 @@ export const projectRouter = router({
     return { id: created?.id };
   }),
 
-  update: adminProcedure
+  update: adminCompanyProcedure
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { id: projectId, contractValue, budget, code, ...rest } = input;
 
-      const [current] = await db.select().from(project).where(eq(project.id, projectId));
+      const [current] = await db
+        .select()
+        .from(project)
+        .where(and(eq(project.id, projectId), eq(project.companyId, ctx.companyId)));
       if (!current) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
@@ -247,12 +277,17 @@ export const projectRouter = router({
       if (startDate && endDate && endDate < startDate) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date" });
       }
+      if (rest.managerId) {
+        await assertUserAssignable(ctx.companyId, rest.managerId);
+      }
 
       if (code && code.toUpperCase() !== current.code) {
         const [clash] = await db
           .select({ id: project.id })
           .from(project)
-          .where(eq(project.code, code.toUpperCase()));
+          .where(
+            and(eq(project.code, code.toUpperCase()), eq(project.companyId, ctx.companyId)),
+          );
         if (clash) {
           throw new TRPCError({ code: "CONFLICT", message: `Project code ${code} is already in use` });
         }
@@ -276,7 +311,7 @@ export const projectRouter = router({
    * accident, so deleting a project with either requires an explicit confirm.
    * Equipment is only unassigned, never deleted — it outlives the site.
    */
-  delete: adminProcedure
+  delete: adminCompanyProcedure
     .input(z.object({ id: z.string().min(1), force: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
       // Read the label before deleting — after the row is gone there is nothing
@@ -284,7 +319,7 @@ export const projectRouter = router({
       const [target] = await db
         .select({ code: project.code, name: project.name })
         .from(project)
-        .where(eq(project.id, input.id));
+        .where(and(eq(project.id, input.id), eq(project.companyId, ctx.companyId)));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }

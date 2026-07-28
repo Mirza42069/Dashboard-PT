@@ -16,8 +16,8 @@
     "@DashboardV2/env": "workspace:*",
     "@hono/trpc-server": "^0.4.2",
     "@trpc/server": "catalog:",
-    "@vercel/blob": "^2.6.1",
     "better-auth": "catalog:",
+    "drizzle-orm": "^0.45.2",
     "dotenv": "catalog:",
     "hono": "catalog:",
     "zod": "catalog:"

@@ -1,6 +1,8 @@
 import { relations } from "drizzle-orm";
 import { pgTable, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
 
+import { company } from "./company";
+
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -19,6 +21,11 @@ export const user = pgTable("user", {
   banExpires: timestamp("ban_expires"),
   // Forces the /change-password flow after an admin issues a temporary password
   mustChangePassword: boolean("must_change_password").default(true).notNull(),
+  /**
+   * The tenant this account is pinned to. Null means "not pinned" — the case
+   * for admins, who instead pick an active company from the header switcher.
+   */
+  companyId: text("company_id").references(() => company.id, { onDelete: "restrict" }),
 });
 
 export const session = pgTable(
@@ -82,7 +89,8 @@ export const verification = pgTable(
   (table) => [index("verification_identifier_idx").on(table.identifier)],
 );
 
-export const userRelations = relations(user, ({ many }) => ({
+export const userRelations = relations(user, ({ one, many }) => ({
+  company: one(company, { fields: [user.companyId], references: [company.id] }),
   sessions: many(session),
   accounts: many(account),
 }));
