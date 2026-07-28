@@ -63,14 +63,16 @@ export default function ProgressTab({
   const periods = report?.periods ?? [];
   const dataDate = report?.project.dataDate ?? null;
 
-  if (!version || version.status !== "active") {
+  if (!version || version.status !== "active" || version.scheduleStatus !== "active") {
     return (
       <Card>
         <CardContent>
           <Empty>
             <EmptyHeader>
               <EmptyTitle>{t.progress.title}</EmptyTitle>
-              <EmptyDescription>{t.progress.needsBaseline}</EmptyDescription>
+              <EmptyDescription>
+                {version?.status === "active" ? t.progress.needsSchedule : t.progress.needsBaseline}
+              </EmptyDescription>
             </EmptyHeader>
           </Empty>
         </CardContent>

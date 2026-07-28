@@ -41,10 +41,9 @@ import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import AddExpenseDialog from "./add-expense-dialog";
-import BoqTab from "./boq-tab";
+import BaselineTab from "./baseline-tab";
 import NotesTab from "./notes-tab";
 import ProgressTab from "./progress-tab";
-import ScheduleTab from "./schedule-tab";
 
 const TASK_STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
 
@@ -204,20 +203,15 @@ export default function ProjectDetail({
           <TabsTrigger value="tasks">
             {interpolate(t.projects.tabTasks, { count: tasks.length })}
           </TabsTrigger>
-          <TabsTrigger value="boq">{t.projects.tabBoq}</TabsTrigger>
-          <TabsTrigger value="schedule">{t.projects.tabSchedule}</TabsTrigger>
+          <TabsTrigger value="baseline">{t.projects.tabBaseline}</TabsTrigger>
           <TabsTrigger value="progress">{t.projects.tabProgress}</TabsTrigger>
           <TabsTrigger value="expenses">{t.projects.tabExpenses}</TabsTrigger>
           <TabsTrigger value="materials">{t.projects.tabMaterials}</TabsTrigger>
           <TabsTrigger value="notes">{t.notes.tab}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="boq">
-          <BoqTab projectId={projectId} isAdmin={isAdmin} />
-        </TabsContent>
-
-        <TabsContent value="schedule">
-          <ScheduleTab projectId={projectId} isAdmin={isAdmin} />
+        <TabsContent value="baseline">
+          <BaselineTab projectId={projectId} isAdmin={isAdmin} />
         </TabsContent>
 
         <TabsContent value="progress">

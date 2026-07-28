@@ -53,6 +53,7 @@ const actualPercent = sql<string | null>`(
   ) reading on true
   where version.project_id = ${outerProjectId}
     and version.status = 'active'
+    and version.schedule_status = 'active'
 )`;
 
 /** Everything the plan said should be finished by the data date. */
@@ -70,13 +71,16 @@ const plannedPercent = sql<string | null>`(
   join reporting_period period on period.id = cell.period_id
   where version.project_id = ${outerProjectId}
     and version.status = 'active'
+    and version.schedule_status = 'active'
     and ${outerDataDate} is not null
     and period.end_date <= ${outerDataDate}
 )`;
 
 const hasBaseline = sql<boolean>`exists (
   select 1 from boq_version version
-  where version.project_id = ${outerProjectId} and version.status = 'active'
+  where version.project_id = ${outerProjectId}
+    and version.status = 'active'
+    and version.schedule_status = 'active'
 )`;
 
 export type BoqMetrics = {

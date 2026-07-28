@@ -2,6 +2,7 @@ import { db } from "@DashboardV2/db";
 import {
   boqItem,
   boqItemDistribution,
+  boqVersion,
   progressEntry,
   project,
   reportingPeriod,
@@ -13,13 +14,24 @@ import z from "zod";
 import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
-import { getVersion, leafPredicate, requireDraft } from "../lib/boq";
+import { getVersion, leafPredicate } from "../lib/boq";
 import { assertProjectInScope } from "../lib/scope";
 import { PeriodRangeError, generatePeriods } from "../lib/periods";
 import { toAmount } from "../lib/money";
 
 /** Percentages are stored to six decimals, matching the column. */
 const toPctString = (value: number) => value.toFixed(6);
+
+async function requireScheduleDraft(companyId: string, versionId: string) {
+  const version = await getVersion(companyId, versionId);
+  const editable =
+    version.scheduleStatus === "draft" &&
+    (version.status === "draft" || version.status === "active");
+  if (!editable) {
+    throw new TRPCError({ code: "CONFLICT", message: "This schedule is active and locked." });
+  }
+  return version;
+}
 
 async function listPeriodsFor(projectId: string) {
   return db
@@ -87,6 +99,67 @@ export const scheduleRouter = router({
       return listPeriodsFor(input.projectId);
     }),
 
+  updateSettings: adminCompanyProcedure
+    .input(
+      z.object({
+        projectId: z.string().min(1),
+        versionId: z.string().min(1),
+        startDate: z.iso.date(),
+        endDate: z.iso.date(),
+        scheduleStart: z.iso.date().nullish(),
+        periodType: z.enum(["weekly", "biweekly", "monthly"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertProjectInScope(ctx.companyId, input.projectId);
+      const version = await requireScheduleDraft(ctx.companyId, input.versionId);
+      if (version.projectId !== input.projectId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Baseline does not belong to this project." });
+      }
+      if (input.endDate < input.startDate) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date." });
+      }
+      if (input.scheduleStart && input.scheduleStart < input.startDate) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Reporting cannot start before the project." });
+      }
+
+      const [[recorded], [activeSchedule]] = await Promise.all([
+        db
+          .select({ id: progressEntry.id })
+          .from(progressEntry)
+          .where(eq(progressEntry.projectId, input.projectId))
+          .limit(1),
+        db
+          .select({ id: boqVersion.id })
+          .from(boqVersion)
+          .where(
+            and(
+              eq(boqVersion.projectId, input.projectId),
+              eq(boqVersion.status, "active"),
+              eq(boqVersion.scheduleStatus, "active"),
+            ),
+          )
+          .limit(1),
+      ]);
+      if (recorded || activeSchedule) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Baseline timing is fixed after the first baseline is activated.",
+        });
+      }
+
+      await db
+        .update(project)
+        .set({
+          startDate: input.startDate,
+          endDate: input.endDate,
+          scheduleStart: input.scheduleStart ?? null,
+          periodType: input.periodType,
+        })
+        .where(eq(project.id, input.projectId));
+      return { success: true };
+    }),
+
   /**
    * Rebuilds the time axis from the project's dates and cadence.
    *
@@ -124,6 +197,20 @@ export const scheduleRouter = router({
         throw new TRPCError({
           code: "CONFLICT",
           message: "Progress has already been recorded, so the reporting periods can no longer be rebuilt.",
+        });
+      }
+
+      const [activeSchedule] = await db
+        .select({ id: boqVersion.id })
+        .from(boqVersion)
+        .where(
+          and(eq(boqVersion.projectId, input.projectId), eq(boqVersion.scheduleStatus, "active")),
+        )
+        .limit(1);
+      if (activeSchedule) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "The active schedule uses these periods, so they can no longer be rebuilt.",
         });
       }
 
@@ -216,7 +303,7 @@ export const scheduleRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const version = await requireDraft(ctx.companyId, input.versionId);
+      const version = await requireScheduleDraft(ctx.companyId, input.versionId);
 
       const itemIds = [...new Set(input.cells.map((cell) => cell.boqItemId))];
       const periodIds = [...new Set(input.cells.map((cell) => cell.periodId))];
@@ -279,7 +366,7 @@ export const scheduleRouter = router({
   distributeEvenly: adminCompanyProcedure
     .input(z.object({ versionId: z.string().min(1), boqItemId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const version = await requireDraft(ctx.companyId, input.versionId);
+      const version = await requireScheduleDraft(ctx.companyId, input.versionId);
       await assertLeavesOfVersion(input.versionId, [input.boqItemId]);
 
       const periods = await listPeriodsFor(version.projectId);
@@ -324,7 +411,7 @@ export const scheduleRouter = router({
   clearItemDistribution: adminCompanyProcedure
     .input(z.object({ versionId: z.string().min(1), boqItemId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await requireDraft(ctx.companyId, input.versionId);
+      await requireScheduleDraft(ctx.companyId, input.versionId);
       await assertLeavesOfVersion(input.versionId, [input.boqItemId]);
 
       await db

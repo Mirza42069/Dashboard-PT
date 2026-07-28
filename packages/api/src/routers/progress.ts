@@ -29,7 +29,7 @@ export const progressRouter = router({
    * can never disagree with the line the user is looking at.
    */
   report: companyProcedure
-    .input(z.object({ projectId: z.string().min(1) }))
+    .input(z.object({ projectId: z.string().min(1), versionId: z.string().min(1).optional() }))
     .query(async ({ ctx, input }) => {
       await assertProjectInScope(ctx.companyId, input.projectId);
 
@@ -54,7 +54,12 @@ export const progressRouter = router({
         .where(eq(boqVersion.projectId, input.projectId))
         .orderBy(desc(boqVersion.versionNo));
 
-      const current = versions.find((row) => row.status === "active") ?? versions[0];
+      const current = input.versionId
+        ? versions.find((row) => row.id === input.versionId)
+        : versions.find((row) => row.status === "active");
+      if (input.versionId && !current) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "BoQ version not found" });
+      }
 
       const periods = await db
         .select({
@@ -105,7 +110,8 @@ export const progressRouter = router({
             note: progressEntry.note,
           })
           .from(progressEntry)
-          .where(eq(progressEntry.projectId, input.projectId)),
+          .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
+          .where(eq(boqItem.boqVersionId, current.id)),
       ]);
 
       return {
@@ -190,6 +196,12 @@ export const progressRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Baseline the BoQ before recording progress against it.",
+        });
+      }
+      if (active.scheduleStatus !== "active") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Activate the schedule before recording progress against it.",
         });
       }
 

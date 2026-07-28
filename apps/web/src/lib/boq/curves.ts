@@ -63,15 +63,29 @@ export function buildSections<T extends BoqItemLike>(items: T[]): Section<T>[] {
  */
 export function scheduleRows<T extends BoqItemLike>(items: T[]): ScheduleRow<T>[] {
   const rows: ScheduleRow<T>[] = [];
+  const sorted = [...items].sort(
+    (a, b) =>
+      a.sortOrder - b.sortOrder || a.code.localeCompare(b.code, undefined, { numeric: true }),
+  );
+  const children = new Map<string, T[]>();
+  for (const item of sorted) {
+    if (item.parentId === null) continue;
+    const siblings = children.get(item.parentId) ?? [];
+    siblings.push(item);
+    children.set(item.parentId, siblings);
+  }
 
-  for (const section of buildSections(items)) {
-    if (section.leaves.length > 0) {
-      for (const leaf of section.leaves) {
-        rows.push({ section: section.header.description, leaf });
-      }
-    } else {
-      rows.push({ section: section.header.description, leaf: section.header });
+  function appendLeaves(item: T, section: string) {
+    const descendants = children.get(item.id) ?? [];
+    if (descendants.length === 0) {
+      rows.push({ section, leaf: item });
+      return;
     }
+    for (const child of descendants) appendLeaves(child, section);
+  }
+
+  for (const root of sorted.filter((item) => item.parentId === null)) {
+    appendLeaves(root, root.description);
   }
 
   return rows;

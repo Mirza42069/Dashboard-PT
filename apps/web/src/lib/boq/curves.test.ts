@@ -139,3 +139,16 @@ test("a childless section prices itself as its own row", () => {
   const built = scheduleRows(items);
   expect(built.map((row) => row.leaf.id)).toEqual(["l1", "s2"]);
 });
+
+test("nested BoQ trees expose only their deepest leaves to scheduling", () => {
+  const items: BoqItemLike[] = [
+    { id: "s", parentId: null, code: "1", description: "Structure", weight: 0, sortOrder: 1 },
+    { id: "g", parentId: "s", code: "1.1", description: "Concrete", weight: 0, sortOrder: 1 },
+    { id: "a", parentId: "g", code: "1.1.1", description: "Columns", weight: 60, sortOrder: 1 },
+    { id: "b", parentId: "g", code: "1.1.2", description: "Beams", weight: 40, sortOrder: 2 },
+  ];
+
+  const built = scheduleRows(items);
+  expect(built.map((row) => row.leaf.id)).toEqual(["a", "b"]);
+  expect(built.map((row) => row.section)).toEqual(["Structure", "Structure"]);
+});

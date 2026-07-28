@@ -68,13 +68,8 @@ export const EXPENSE_CATEGORIES = [
   "other",
 ] as const;
 
-/**
- * Only draft and active exist today. The version number and the
- * one-active-per-project index are already in place, so adding "superseded" for
- * a revise-and-supersede flow later is a widening of this array, not a
- * migration.
- */
-export const BOQ_VERSION_STATUSES = ["draft", "active"] as const;
+export const BOQ_VERSION_STATUSES = ["draft", "active", "superseded"] as const;
+export const SCHEDULE_VERSION_STATUSES = ["draft", "active"] as const;
 /** "derived" weights are recomputed from value; "manual" ones are left alone. */
 export const WEIGHT_SOURCES = ["derived", "manual"] as const;
 export const DISTRIBUTION_TYPES = ["linear", "manual"] as const;
@@ -89,6 +84,7 @@ export type MovementType = (typeof MOVEMENT_TYPES)[number];
 export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 export type BoqVersionStatus = (typeof BOQ_VERSION_STATUSES)[number];
+export type ScheduleVersionStatus = (typeof SCHEDULE_VERSION_STATUSES)[number];
 export type WeightSource = (typeof WEIGHT_SOURCES)[number];
 export type DistributionType = (typeof DISTRIBUTION_TYPES)[number];
 export type ProgressMode = (typeof PROGRESS_MODES)[number];
@@ -291,12 +287,23 @@ export const boqVersion = pgTable(
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
     versionNo: integer("version_no").notNull(),
+    sourceVersionId: text("source_version_id").references((): AnyPgColumn => boqVersion.id, {
+      onDelete: "set null",
+    }),
     title: text("title").notNull(),
     status: text("status").$type<BoqVersionStatus>().default("draft").notNull(),
+    scheduleStatus: text("schedule_status")
+      .$type<ScheduleVersionStatus>()
+      .default("draft")
+      .notNull(),
     /** Sum of leaf values, cached at recalc time for display only. */
     totalValue: numeric("total_value", { precision: 20, scale: 2 }),
     baselinedAt: timestamp("baselined_at"),
     baselinedById: text("baselined_by_id").references(() => user.id, { onDelete: "set null" }),
+    scheduleBaselinedAt: timestamp("schedule_baselined_at"),
+    scheduleBaselinedById: text("schedule_baselined_by_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -308,6 +315,9 @@ export const boqVersion = pgTable(
     uniqueIndex("boqVersion_oneActive_idx")
       .on(table.projectId)
       .where(sql`status = 'active'`),
+    uniqueIndex("boqVersion_oneDraft_idx")
+      .on(table.projectId)
+      .where(sql`status = 'draft'`),
   ],
 );
 
@@ -329,6 +339,10 @@ export const boqItem = pgTable(
     boqVersionId: text("boq_version_id")
       .notNull()
       .references(() => boqVersion.id, { onDelete: "cascade" }),
+    /** Stable identity copied into revisions so schedule and progress can be carried forward. */
+    lineageId: text("lineage_id")
+      .notNull()
+      .$defaultFn(() => crypto.randomUUID()),
     parentId: text("parent_id").references((): AnyPgColumn => boqItem.id, { onDelete: "cascade" }),
     /** WBS code, unique among its siblings: "1", "2.1", "A.3". */
     code: text("code").notNull(),
@@ -352,6 +366,7 @@ export const boqItem = pgTable(
   },
   (table) => [
     index("boqItem_boqVersionId_idx").on(table.boqVersionId),
+    index("boqItem_lineageId_idx").on(table.lineageId),
     index("boqItem_parentId_idx").on(table.parentId),
     // coalesce() rather than NULLS NOT DISTINCT: section codes (parentId null)
     // must collide with each other too, and this form works on any Postgres.

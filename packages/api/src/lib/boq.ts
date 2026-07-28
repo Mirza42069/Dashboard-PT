@@ -181,6 +181,7 @@ export function serializeItem(row: typeof boqItem.$inferSelect) {
   return {
     id: row.id,
     boqVersionId: row.boqVersionId,
+    lineageId: row.lineageId,
     parentId: row.parentId,
     code: row.code,
     description: row.description,
@@ -201,10 +202,13 @@ export function serializeVersion(row: typeof boqVersion.$inferSelect) {
     id: row.id,
     projectId: row.projectId,
     versionNo: row.versionNo,
+    sourceVersionId: row.sourceVersionId,
     title: row.title,
     status: row.status,
+    scheduleStatus: row.scheduleStatus,
     totalValue: toAmount(row.totalValue),
     baselinedAt: row.baselinedAt,
+    scheduleBaselinedAt: row.scheduleBaselinedAt,
   };
 }
 

@@ -101,13 +101,9 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
       client: row.client ?? "",
       location: row.location ?? "",
       status: row.status,
-      startDate: row.startDate ?? "",
-      endDate: row.endDate ?? "",
       contractValue: row.contractValue,
       budget: row.budget,
       progress: row.progress,
-      periodType: row.periodType,
-      scheduleStart: row.scheduleStart ?? "",
       managerId: row.managerId ?? "",
       notes: row.notes ?? "",
     });

@@ -4,8 +4,11 @@ import {
   PROGRESS_MODES,
   WEIGHT_SOURCES,
   boqItem,
+  boqItemDistribution,
   boqVersion,
+  progressEntry,
   project,
+  reportingPeriod,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
@@ -13,6 +16,7 @@ import z from "zod";
 
 import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
+import { runBatch } from "../lib/batch";
 import {
   WEIGHT_TOLERANCE,
   getVersion,
@@ -91,7 +95,7 @@ export const boqRouter = router({
    * out which lines are leaves.
    */
   overview: companyProcedure
-    .input(z.object({ projectId: z.string().min(1) }))
+    .input(z.object({ projectId: z.string().min(1), versionId: z.string().min(1).optional() }))
     .query(async ({ ctx, input }) => {
       await assertProjectInScope(ctx.companyId, input.projectId);
 
@@ -101,7 +105,14 @@ export const boqRouter = router({
         .where(eq(boqVersion.projectId, input.projectId))
         .orderBy(desc(boqVersion.versionNo));
 
-      const current = versions.find((row) => row.status === "active") ?? versions[0];
+      const current = input.versionId
+        ? versions.find((row) => row.id === input.versionId)
+        : (versions.find((row) => row.status === "draft") ??
+          versions.find((row) => row.status === "active") ??
+          versions[0]);
+      if (input.versionId && !current) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "BoQ version not found" });
+      }
       if (!current) {
         return { version: null, items: [] };
       }
@@ -115,9 +126,21 @@ export const boqRouter = router({
       return { version: serializeVersion(current), items: items.map(serializeItem) };
     }),
 
+  listVersions: companyProcedure
+    .input(z.object({ projectId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      await assertProjectInScope(ctx.companyId, input.projectId);
+      const versions = await db
+        .select()
+        .from(boqVersion)
+        .where(eq(boqVersion.projectId, input.projectId))
+        .orderBy(desc(boqVersion.versionNo));
+      return versions.map(serializeVersion);
+    }),
+
   /**
-   * Opens the BoQ for editing. Returns the existing draft if one is already
-   * open, so the button is safe to press twice.
+   * Opens the BoQ for editing. An active baseline is deep-cloned so edits never
+   * rewrite the contract, plan or progress history currently in force.
    */
   getOrCreateDraft: adminCompanyProcedure
     .input(z.object({ projectId: z.string().min(1), title: z.string().trim().max(200).optional() }))
@@ -133,26 +156,131 @@ export const boqRouter = router({
 
       if (existing) return { version: serializeVersion(existing) };
 
-      const [highest] = await db
-        .select({ value: sql<number | null>`max(${boqVersion.versionNo})` })
+      const versions = await db
+        .select()
         .from(boqVersion)
-        .where(eq(boqVersion.projectId, input.projectId));
+        .where(eq(boqVersion.projectId, input.projectId))
+        .orderBy(desc(boqVersion.versionNo));
 
-      const versionNo = Number(highest?.value ?? 0) + 1;
+      const versionNo = (versions[0]?.versionNo ?? 0) + 1;
+      const active = versions.find((version) => version.status === "active");
+      const versionId = crypto.randomUUID();
 
-      const [created] = await db
-        .insert(boqVersion)
-        .values({
+      if (!active) {
+        const [created] = await db
+          .insert(boqVersion)
+          .values({
+            id: versionId,
+            projectId: input.projectId,
+            versionNo,
+            title: input.title ?? `Rev ${versionNo}`,
+            status: "draft",
+          })
+          .returning();
+
+        if (!created) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the BoQ" });
+        }
+
+        await recordActivity(ctx, {
+          action: "created",
+          entityType: "boq",
+          entityId: created.id,
+          entityLabel: label,
+          detail: created.title,
+        });
+        return { version: serializeVersion(created) };
+      }
+
+      const sourceItems = await db
+        .select()
+        .from(boqItem)
+        .where(and(eq(boqItem.boqVersionId, active.id), isNull(boqItem.deletedAt)))
+        .orderBy(asc(boqItem.sortOrder));
+      const sourceIds = sourceItems.map((item) => item.id);
+      const [sourceDistribution, sourceProgress] =
+        sourceIds.length === 0
+          ? [[], []]
+          : await Promise.all([
+              db
+                .select()
+                .from(boqItemDistribution)
+                .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
+                .where(eq(boqItem.boqVersionId, active.id)),
+              db
+                .select()
+                .from(progressEntry)
+                .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
+                .where(eq(boqItem.boqVersionId, active.id)),
+            ]);
+
+      const itemIds = new Map(sourceItems.map((item) => [item.id, crypto.randomUUID()]));
+      const statements: Parameters<typeof runBatch>[0] = [
+        db.insert(boqVersion).values({
+          id: versionId,
           projectId: input.projectId,
           versionNo,
+          sourceVersionId: active.id,
           title: input.title ?? `Rev ${versionNo}`,
           status: "draft",
-        })
-        .returning();
+          scheduleStatus: "draft",
+        }),
+      ];
 
-      if (!created) {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the BoQ" });
+      if (sourceItems.length > 0) {
+        statements.push(
+          db.insert(boqItem).values(
+            sourceItems.map((item) => ({
+              id: itemIds.get(item.id)!,
+              boqVersionId: versionId,
+              lineageId: item.lineageId,
+              parentId: item.parentId ? (itemIds.get(item.parentId) ?? null) : null,
+              code: item.code,
+              description: item.description,
+              unit: item.unit,
+              quantity: item.quantity,
+              unitRate: item.unitRate,
+              weight: item.weight,
+              weightSource: item.weightSource,
+              distribution: item.distribution,
+              progressMode: item.progressMode,
+              sortOrder: item.sortOrder,
+            })),
+          ),
+        );
       }
+
+      if (sourceDistribution.length > 0) {
+        statements.push(
+          db.insert(boqItemDistribution).values(
+            sourceDistribution.map(({ boq_item_distribution: cell }) => ({
+              boqItemId: itemIds.get(cell.boqItemId)!,
+              periodId: cell.periodId,
+              plannedPct: cell.plannedPct,
+            })),
+          ),
+        );
+      }
+
+      if (sourceProgress.length > 0) {
+        statements.push(
+          db.insert(progressEntry).values(
+            sourceProgress.map(({ progress_entry: entry }) => ({
+              projectId: entry.projectId,
+              periodId: entry.periodId,
+              boqItemId: itemIds.get(entry.boqItemId)!,
+              cumulativeQuantity: entry.cumulativeQuantity,
+              cumulativePercent: entry.cumulativePercent,
+              pctComplete: entry.pctComplete,
+              note: entry.note,
+              recordedById: entry.recordedById,
+            })),
+          ),
+        );
+      }
+
+      await runBatch(statements);
+      const created = await getVersion(ctx.companyId, versionId);
 
       await recordActivity(ctx, {
         action: "created",
@@ -178,69 +306,164 @@ export const boqRouter = router({
   /**
    * Baselines the BoQ.
    *
-   * Weights are recalculated first, then the activation runs as a single
-   * guarded UPDATE: the "do the weights total 100" test lives in the WHERE
-   * clause, so there is no window in which a concurrent edit could slip between
-   * the check and the write. Zero rows updated means a guard rejected it, and
-   * the reason is worked out afterwards purely to write a decent error message.
+   * A prior active baseline is superseded in the same database batch. Its items,
+   * schedule and progress remain intact as the historical snapshot.
    */
   activate: adminCompanyProcedure
     .input(z.object({ versionId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const draft = await requireDraft(ctx.companyId, input.versionId);
+      const draft = await getVersion(ctx.companyId, input.versionId);
+      const activatable =
+        draft.scheduleStatus === "draft" &&
+        (draft.status === "draft" || draft.status === "active");
+      if (!activatable) {
+        throw new TRPCError({ code: "CONFLICT", message: "This baseline is not an editable draft." });
+      }
       await recalcWeights(input.versionId);
-
-      const [activated] = await db
-        .update(boqVersion)
-        .set({
-          status: "active",
-          baselinedAt: new Date(),
-          baselinedById: ctx.session.user.id,
-        })
-        .where(
-          and(
-            eq(boqVersion.id, input.versionId),
-            eq(boqVersion.status, "draft"),
-            sql`not exists (
-              select 1 from boq_version other
-              where other.project_id = ${boqVersion.projectId} and other.status = 'active'
-            )`,
-            sql`abs(coalesce((
-              select sum(item.weight) from boq_item item
-              where item.boq_version_id = ${input.versionId}
-                and item.deleted_at is null
-                and ${leafPredicate("item")}
-            ), 0) - 100) <= ${WEIGHT_TOLERANCE}`,
-          ),
-        )
-        .returning();
-
-      if (!activated) {
-        const [otherActive] = await db
-          .select({ versionNo: boqVersion.versionNo })
-          .from(boqVersion)
-          .where(and(eq(boqVersion.projectId, draft.projectId), eq(boqVersion.status, "active")));
-
-        if (otherActive) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `Rev ${otherActive.versionNo} is already the active baseline for this project`,
-          });
-        }
-
-        const total = await leafWeightTotal(input.versionId);
+      const total = await leafWeightTotal(input.versionId);
+      if (Math.abs(total - 100) > WEIGHT_TOLERANCE) {
         throw new TRPCError({
           code: "CONFLICT",
           message: `Weights must total 100% before baselining — they currently total ${total.toFixed(2)}%. Add priced items, or check any manually weighted lines.`,
         });
       }
 
+      const [periods, leaves, distribution] = await Promise.all([
+        db
+          .select({ id: reportingPeriod.id })
+          .from(reportingPeriod)
+          .where(eq(reportingPeriod.projectId, draft.projectId)),
+        db
+          .select({ id: boqItem.id })
+          .from(boqItem)
+          .where(
+            and(
+              eq(boqItem.boqVersionId, input.versionId),
+              isNull(boqItem.deletedAt),
+              leafPredicate("boq_item"),
+            ),
+          ),
+        db
+          .select({ boqItemId: boqItemDistribution.boqItemId, plannedPct: boqItemDistribution.plannedPct })
+          .from(boqItemDistribution)
+          .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
+          .where(eq(boqItem.boqVersionId, input.versionId)),
+      ]);
+      if (periods.length === 0) {
+        throw new TRPCError({ code: "CONFLICT", message: "Generate reporting periods first." });
+      }
+      if (leaves.length === 0) {
+        throw new TRPCError({ code: "CONFLICT", message: "The BoQ has no schedulable lines." });
+      }
+      const scheduleTotals = new Map<string, number>();
+      for (const cell of distribution) {
+        scheduleTotals.set(
+          cell.boqItemId,
+          (scheduleTotals.get(cell.boqItemId) ?? 0) + Number(cell.plannedPct),
+        );
+      }
+      const incomplete = leaves.filter(
+        (leaf) => Math.abs((scheduleTotals.get(leaf.id) ?? 0) - 100) > WEIGHT_TOLERANCE,
+      );
+      if (incomplete.length > 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `${incomplete.length} schedule row(s) must total 100% before activation.`,
+        });
+      }
+
+      const now = new Date();
+      const [currentActive] = await db
+        .select({ id: boqVersion.id })
+        .from(boqVersion)
+        .where(and(eq(boqVersion.projectId, draft.projectId), eq(boqVersion.status, "active")));
+      const statements: Parameters<typeof runBatch>[0] = [];
+
+      if (currentActive && currentActive.id !== input.versionId) {
+        const [sourceItems, targetItems, latestProgress] = await Promise.all([
+          db
+            .select({ id: boqItem.id, lineageId: boqItem.lineageId })
+            .from(boqItem)
+            .where(eq(boqItem.boqVersionId, currentActive.id)),
+          db
+            .select({ id: boqItem.id, lineageId: boqItem.lineageId })
+            .from(boqItem)
+            .where(eq(boqItem.boqVersionId, input.versionId)),
+          db
+            .select({ entry: progressEntry, itemId: boqItem.id })
+            .from(progressEntry)
+            .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
+            .where(eq(boqItem.boqVersionId, currentActive.id)),
+        ]);
+        const sourceLineage = new Map(sourceItems.map((item) => [item.id, item.lineageId]));
+        const targetByLineage = new Map(targetItems.map((item) => [item.lineageId, item.id]));
+        const carried = latestProgress.flatMap(({ entry, itemId }) => {
+          const targetId = targetByLineage.get(sourceLineage.get(itemId) ?? "");
+          return targetId
+            ? [
+                {
+                  projectId: entry.projectId,
+                  periodId: entry.periodId,
+                  boqItemId: targetId,
+                  cumulativeQuantity: entry.cumulativeQuantity,
+                  cumulativePercent: entry.cumulativePercent,
+                  pctComplete: entry.pctComplete,
+                  note: entry.note,
+                  recordedById: entry.recordedById,
+                },
+              ]
+            : [];
+        });
+        if (carried.length > 0) {
+          statements.push(
+            db
+              .insert(progressEntry)
+              .values(carried)
+              .onConflictDoUpdate({
+                target: [progressEntry.periodId, progressEntry.boqItemId],
+                set: {
+                  cumulativeQuantity: sql`excluded.cumulative_quantity`,
+                  cumulativePercent: sql`excluded.cumulative_percent`,
+                  pctComplete: sql`excluded.pct_complete`,
+                  note: sql`excluded.note`,
+                  recordedById: sql`excluded.recorded_by_id`,
+                  updatedAt: now,
+                },
+              }),
+          );
+        }
+      }
+
+      if (currentActive && currentActive.id !== input.versionId) {
+        statements.push(
+          db
+          .update(boqVersion)
+          .set({ status: "superseded" })
+          .where(eq(boqVersion.id, currentActive.id)),
+        );
+      }
+      statements.push(
+        db
+          .update(boqVersion)
+          .set({
+            status: "active",
+            scheduleStatus: "active",
+            baselinedAt: now,
+            baselinedById: ctx.session.user.id,
+            scheduleBaselinedAt: now,
+            scheduleBaselinedById: ctx.session.user.id,
+          })
+          .where(eq(boqVersion.id, input.versionId)),
+      );
+      await runBatch(statements);
+      const activated = await getVersion(ctx.companyId, input.versionId);
+
       await recordActivity(ctx, {
         action: "baselined",
         entityType: "boq",
         entityId: activated.id,
         entityLabel: await projectLabel(ctx.companyId, activated.projectId),
-        detail: activated.title,
+        detail: `${activated.title} · BoQ and schedule`,
       });
 
       return { version: serializeVersion(activated) };

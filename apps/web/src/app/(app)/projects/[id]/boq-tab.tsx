@@ -22,6 +22,13 @@ import {
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@DashboardV2/ui/components/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -51,18 +58,36 @@ type DialogTarget = {
   initialValues: BoqItemFormValues;
 };
 
-export default function BoqTab({ projectId, isAdmin }: { projectId: string; isAdmin: boolean }) {
+export default function BoqTab({
+  projectId,
+  isAdmin,
+  targetVersionId,
+  setupMode = false,
+  onContinue,
+}: {
+  projectId: string;
+  isAdmin: boolean;
+  targetVersionId?: string;
+  setupMode?: boolean;
+  onContinue?: () => void;
+}) {
   const t = useT();
   const { money, quantity } = useFormat();
   const queryClient = useQueryClient();
 
   const [dialog, setDialog] = useState<DialogTarget | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; code: string } | null>(null);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
 
-  const boqQuery = useQuery(trpc.boq.overview.queryOptions({ projectId }));
+  const boqQuery = useQuery(
+    trpc.boq.overview.queryOptions({
+      projectId,
+      versionId: targetVersionId ?? selectedVersionId ?? undefined,
+    }),
+  );
+  const versionsQuery = useQuery(trpc.boq.listVersions.queryOptions({ projectId }));
   const createDraft = useMutation(trpc.boq.getOrCreateDraft.mutationOptions());
   const recalcWeights = useMutation(trpc.boq.recalcWeights.mutationOptions());
-  const activate = useMutation(trpc.boq.activate.mutationOptions());
   const deleteItem = useMutation(trpc.boq.deleteItem.mutationOptions());
   const reorder = useMutation(trpc.boq.reorderItems.mutationOptions());
 
@@ -86,6 +111,7 @@ export default function BoqTab({ projectId, isAdmin }: { projectId: string; isAd
 
   const version = boqQuery.data?.version ?? null;
   const items = boqQuery.data?.items ?? [];
+  const versions = versionsQuery.data ?? [];
 
   if (!version) {
     return (
@@ -114,6 +140,7 @@ export default function BoqTab({ projectId, isAdmin }: { projectId: string; isAd
   const versionId = version.id;
   const isDraft = version.status === "draft";
   const canEdit = isAdmin && isDraft;
+  const hasDraft = versions.some((candidate) => candidate.status === "draft");
   const sections = buildSections(items);
   const weightTotal = totalLeafWeight(items);
   const contractTotal = sections.reduce((total, section) => total + sectionAmount(section), 0);
@@ -143,7 +170,11 @@ export default function BoqTab({ projectId, isAdmin }: { projectId: string; isAd
               <CardTitle className="flex items-center gap-2">
                 {interpolate(t.boq.revision, { number: version.versionNo })}
                 <Badge variant={isDraft ? "outline" : "secondary"}>
-                  {isDraft ? t.boq.draft : t.boq.active}
+                  {isDraft
+                    ? t.boq.draft
+                    : version.status === "active"
+                      ? t.boq.active
+                      : t.boq.superseded}
                 </Badge>
                 {!isDraft && <Lock className="size-3.5 text-muted-foreground" />}
               </CardTitle>
@@ -157,8 +188,40 @@ export default function BoqTab({ projectId, isAdmin }: { projectId: string; isAd
               </CardDescription>
             </div>
 
-            {canEdit && (
-              <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
+              {!setupMode && versions.length > 1 && (
+                <Select
+                  value={version.id}
+                  onValueChange={(value) => setSelectedVersionId(value ?? null)}
+                >
+                  <SelectTrigger size="sm" className="w-36" aria-label={t.boq.history}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {versions.map((candidate) => (
+                      <SelectItem key={candidate.id} value={candidate.id}>
+                        {interpolate(t.boq.revision, { number: candidate.versionNo })} · {candidate.status}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {!setupMode && isAdmin && version.status === "active" && !hasDraft && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={createDraft.isPending}
+                  onClick={() => {
+                    setSelectedVersionId(null);
+                    void run(() => createDraft.mutateAsync({ projectId }), t.boq.revisionCreated);
+                  }}
+                >
+                  <Pencil />
+                  {t.boq.revise}
+                </Button>
+              )}
+              {canEdit && (
+                <>
                 <Button
                   variant="outline"
                   size="sm"
@@ -173,18 +236,14 @@ export default function BoqTab({ projectId, isAdmin }: { projectId: string; isAd
                   <Scale />
                   {t.boq.recalcWeights}
                 </Button>
-                <Button
-                  size="sm"
-                  disabled={activate.isPending || items.length === 0}
-                  onClick={() =>
-                    void run(() => activate.mutateAsync({ versionId: version.id }), t.boq.activated)
-                  }
-                >
-                  <Lock />
-                  {t.boq.activate}
+                </>
+              )}
+              {setupMode && onContinue && (
+                <Button size="sm" disabled={items.length === 0} onClick={onContinue}>
+                  {t.baseline.continueSchedule}
                 </Button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </CardHeader>
 
