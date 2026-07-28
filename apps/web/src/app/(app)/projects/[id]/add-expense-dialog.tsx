@@ -36,6 +36,10 @@ export default function AddExpenseDialog({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(false);
   const queryClient = useQueryClient();
   const createExpense = useMutation(trpc.expense.create.mutationOptions());
+  const categoryOptions = CATEGORIES.map((value) => ({
+    value,
+    label: t.expenses.categories[value],
+  }));
 
   const schema = z.object({
     category: z.enum(CATEGORIES),
@@ -116,6 +120,7 @@ export default function AddExpenseDialog({ projectId }: { projectId: string }) {
                 <div className="space-y-2">
                   <Label htmlFor={field.name}>{t.expenses.category}</Label>
                   <Select
+                    items={categoryOptions}
                     value={field.state.value}
                     onValueChange={(value) =>
                       field.handleChange((value ?? "materials") as (typeof CATEGORIES)[number])
@@ -125,9 +130,9 @@ export default function AddExpenseDialog({ projectId }: { projectId: string }) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {CATEGORIES.map((category) => (
-                        <SelectItem key={category} value={category}>
-                          {t.expenses.categories[category]}
+                      {categoryOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
                         </SelectItem>
                       ))}
                     </SelectContent>

@@ -83,6 +83,10 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
   const setStatusMutation = useMutation(trpc.equipment.update.mutationOptions());
   const rows = equipmentQuery.data?.equipment ?? [];
   const counts = equipmentQuery.data?.counts;
+  const statusItems = [
+    { value: ALL, label: t.common.all },
+    ...STATUSES.map((value) => ({ value, label: statusLabel("equipment", value) })),
+  ];
 
   async function changeStatus(id: string, next: (typeof STATUSES)[number]) {
     try {
@@ -108,7 +112,11 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
           className="w-full sm:max-w-xs"
           aria-label={t.common.search}
         />
-        <Select value={status} onValueChange={(value) => setStatus(value ?? ALL)}>
+        <Select
+          items={statusItems}
+          value={status}
+          onValueChange={(value) => setStatus(value ?? ALL)}
+        >
           <SelectTrigger className="w-44" aria-label={t.tasks.statusColumn}>
             <SelectValue />
           </SelectTrigger>
@@ -360,6 +368,13 @@ function AssignDialog({
   const queryClient = useQueryClient();
   const assign = useMutation(trpc.equipment.assign.mutationOptions());
   const [projectId, setProjectId] = useState(target?.projectId ?? UNASSIGNED);
+  const projectItems = [
+    { value: UNASSIGNED, label: t.equipment.yardUnassigned },
+    ...projects.map((option) => ({
+      value: option.id,
+      label: `${option.code} · ${option.name}`,
+    })),
+  ];
 
   async function submit() {
     if (!target) return;
@@ -395,9 +410,18 @@ function AssignDialog({
 
         <div className="space-y-2">
           <Label htmlFor="assign-project">{t.equipment.site}</Label>
-          <Select value={projectId} onValueChange={(value) => setProjectId(value ?? UNASSIGNED)}>
+          <Select
+            items={projectItems}
+            value={projectId}
+            onValueChange={(value) => setProjectId(value ?? UNASSIGNED)}
+          >
             <SelectTrigger id="assign-project" className="w-full">
-              <SelectValue />
+              <SelectValue>
+                {(value) =>
+                  projectItems.find((option) => option.value === value)?.label ??
+                  t.equipment.yardUnassigned
+                }
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={UNASSIGNED}>{t.equipment.yardUnassigned}</SelectItem>

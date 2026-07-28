@@ -41,7 +41,15 @@ export default function CreateUserDialog({
 
   const createUser = useMutation(trpc.admin.createUser.mutationOptions());
   const companies = useQuery(trpc.company.list.queryOptions());
-  const companyOptions = companies.data?.companies ?? [];
+  const roleItems = [
+    { value: "user", label: t.users.roleUser },
+    { value: "admin", label: t.users.roleAdmin },
+  ];
+  const companyItems =
+    companies.data?.companies.map((company) => ({
+      value: company.id,
+      label: company.name,
+    })) ?? [];
 
   const schema = z
     .object({
@@ -156,6 +164,7 @@ export default function CreateUserDialog({
               <div className="space-y-2">
                 <Label htmlFor={field.name}>{t.users.role}</Label>
                 <Select
+                  items={roleItems}
                   value={field.state.value}
                   onValueChange={(value) => field.handleChange((value ?? "user") as "admin" | "user")}
                 >
@@ -163,8 +172,11 @@ export default function CreateUserDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="user">{t.users.roleUser}</SelectItem>
-                    <SelectItem value="admin">{t.users.roleAdmin}</SelectItem>
+                    {roleItems.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">{t.users.roleHint}</p>
@@ -182,16 +194,22 @@ export default function CreateUserDialog({
                     <div className="space-y-2">
                       <Label htmlFor={field.name}>{t.company.label}</Label>
                       <Select
+                        items={companyItems}
                         value={field.state.value}
                         onValueChange={(value) => field.handleChange(value ?? "")}
                       >
                         <SelectTrigger id={field.name} className="w-full">
-                          <SelectValue placeholder={t.company.placeholder} />
+                          <SelectValue>
+                            {(value) =>
+                              companyItems.find((item) => item.value === value)?.label ??
+                              t.company.placeholder
+                            }
+                          </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
-                          {companyOptions.map((item) => (
-                            <SelectItem key={item.id} value={item.id}>
-                              {item.name}
+                          {companyItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
                             </SelectItem>
                           ))}
                         </SelectContent>

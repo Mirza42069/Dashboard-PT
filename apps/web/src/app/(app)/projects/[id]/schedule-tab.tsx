@@ -388,6 +388,11 @@ function ScheduleSettings({
   const [periodType, setPeriodType] = useState(initialPeriodType);
   const updateSettings = useMutation(trpc.schedule.updateSettings.mutationOptions());
   const generatePeriods = useMutation(trpc.schedule.generatePeriods.mutationOptions());
+  const periodTypeOptions = [
+    { value: "weekly", label: t.projects.periodWeekly },
+    { value: "biweekly", label: t.projects.periodBiweekly },
+    { value: "monthly", label: t.projects.periodMonthly },
+  ];
 
   async function saveAndGenerate() {
     if (!startDate || !endDate) {
@@ -455,6 +460,7 @@ function ScheduleSettings({
         <div className="space-y-2">
           <Label htmlFor="baseline-cadence">{t.projects.periodType}</Label>
           <Select
+            items={periodTypeOptions}
             value={periodType}
             disabled={!editable}
             onValueChange={(value) =>
@@ -465,9 +471,11 @@ function ScheduleSettings({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="weekly">{t.projects.periodWeekly}</SelectItem>
-              <SelectItem value="biweekly">{t.projects.periodBiweekly}</SelectItem>
-              <SelectItem value="monthly">{t.projects.periodMonthly}</SelectItem>
+              {periodTypeOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>

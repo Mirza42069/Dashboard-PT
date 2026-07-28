@@ -63,6 +63,10 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
   const { money, percent, formatDate } = useFormat();
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
+  const statusOptions = [
+    { value: ALL, label: t.common.all },
+    ...STATUSES.map((value) => ({ value, label: statusLabel("project", value) })),
+  ];
 
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<string>(ALL);
@@ -132,6 +136,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
           aria-label={t.common.search}
         />
         <Select
+          items={statusOptions}
           value={status}
           onValueChange={(value) => {
             setStatus(value ?? ALL);
@@ -142,10 +147,9 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ALL}>{t.common.all}</SelectItem>
-            {STATUSES.map((value) => (
-              <SelectItem key={value} value={value}>
-                {statusLabel("project", value)}
+            {statusOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
               </SelectItem>
             ))}
           </SelectContent>

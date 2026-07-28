@@ -33,6 +33,10 @@ export default function CompanySwitcher() {
   const companies = options.data?.companies ?? [];
   const activeId = options.data?.activeId ?? "";
   const canSwitch = options.data?.canSwitch ?? false;
+  const companyItems = companies.map((company) => ({
+    value: company.id,
+    label: company.name,
+  }));
 
   async function select(companyId: string) {
     if (!companyId || companyId === activeId) return;
@@ -61,10 +65,19 @@ export default function CompanySwitcher() {
   }
 
   return (
-    <Select value={activeId} onValueChange={(value) => void select(value ?? "")} disabled={pending}>
+    <Select
+      items={companyItems}
+      value={activeId}
+      onValueChange={(value) => void select(value ?? "")}
+      disabled={pending}
+    >
       <SelectTrigger size="sm" className="w-44" aria-label={t.company.switcherLabel}>
         <Building2 className="size-3.5 shrink-0 text-muted-foreground" />
-        <SelectValue />
+        <SelectValue>
+          {(value) =>
+            companyItems.find((item) => item.value === value)?.label ?? t.company.placeholder
+          }
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {companies.map((item) => (

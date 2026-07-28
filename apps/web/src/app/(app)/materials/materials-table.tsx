@@ -361,6 +361,15 @@ function MovementDialog({
   const t = useT();
   const { quantity } = useFormat();
   const recordMovement = useMutation(trpc.material.recordMovement.mutationOptions());
+  const movementItems = [
+    { value: "in", label: t.materials.deliveryIn },
+    { value: "out", label: t.materials.issuedToSite },
+    { value: "adjustment", label: t.materials.adjustment },
+  ];
+  const projectItems = projects.map((option) => ({
+    value: option.id,
+    label: `${option.code} · ${option.name}`,
+  }));
 
   const schema = z.object({
     type: z.enum(MOVEMENT_TYPES),
@@ -437,6 +446,7 @@ function MovementDialog({
               <div className="space-y-2">
                 <Label htmlFor={field.name}>{t.materials.movementLabel}</Label>
                 <Select
+                  items={movementItems}
                   value={field.state.value}
                   onValueChange={(value) =>
                     field.handleChange((value ?? "in") as (typeof MOVEMENT_TYPES)[number])
@@ -480,11 +490,17 @@ function MovementDialog({
               <div className="space-y-2">
                 <Label htmlFor={field.name}>{t.materials.projectLabel}</Label>
                 <Select
+                  items={projectItems}
                   value={field.state.value}
                   onValueChange={(value) => field.handleChange(value ?? "")}
                 >
                   <SelectTrigger id={field.name} className="w-full">
-                    <SelectValue placeholder={t.materials.centralStore} />
+                    <SelectValue>
+                      {(value) =>
+                        projectItems.find((option) => option.value === value)?.label ??
+                        t.materials.centralStore
+                      }
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {projects.map((option) => (

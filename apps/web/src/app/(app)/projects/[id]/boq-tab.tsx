@@ -112,6 +112,16 @@ export default function BoqTab({
   const version = boqQuery.data?.version ?? null;
   const items = boqQuery.data?.items ?? [];
   const versions = versionsQuery.data ?? [];
+  const versionOptions = versions.map((candidate) => ({
+    value: candidate.id,
+    label: `${interpolate(t.boq.revision, { number: candidate.versionNo })} · ${
+      candidate.status === "draft"
+        ? t.boq.draft
+        : candidate.status === "active"
+          ? t.boq.active
+          : t.boq.superseded
+    }`,
+  }));
 
   if (!version) {
     return (
@@ -189,6 +199,7 @@ export default function BoqTab({
             <div className="flex flex-wrap gap-2">
               {!setupMode && versions.length > 1 && (
                 <Select
+                  items={versionOptions}
                   value={version.id}
                   onValueChange={(value) => setSelectedVersionId(value ?? null)}
                 >
@@ -196,9 +207,9 @@ export default function BoqTab({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {versions.map((candidate) => (
-                      <SelectItem key={candidate.id} value={candidate.id}>
-                        {interpolate(t.boq.revision, { number: candidate.versionNo })} · {candidate.status}
+                    {versionOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectContent>

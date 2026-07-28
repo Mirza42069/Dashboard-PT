@@ -73,6 +73,10 @@ export default function BoqItemDialog({
 }) {
   const t = useT();
   const queryClient = useQueryClient();
+  const progressModeOptions = [
+    { value: "by_quantity", label: t.boq.byQuantity },
+    { value: "by_percent", label: t.boq.byPercent },
+  ];
 
   const createItem = useMutation(trpc.boq.createItem.mutationOptions());
   const updateItem = useMutation(trpc.boq.updateItem.mutationOptions());
@@ -155,6 +159,7 @@ export default function BoqItemDialog({
                 <div className="space-y-2">
                   <Label htmlFor={field.name}>{t.boq.measuredBy}</Label>
                   <Select
+                    items={progressModeOptions}
                     value={field.state.value}
                     onValueChange={(value) =>
                       field.handleChange((value ?? "by_quantity") as BoqItemFormValues["progressMode"])
@@ -164,8 +169,11 @@ export default function BoqItemDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="by_quantity">{t.boq.byQuantity}</SelectItem>
-                      <SelectItem value="by_percent">{t.boq.byPercent}</SelectItem>
+                      {progressModeOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>

@@ -81,6 +81,14 @@ export default function ProjectFormDialog({
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
   const managers = useQuery(trpc.task.assignees.queryOptions());
+  const statusOptions = PROJECT_STATUSES.map((value) => ({
+    value,
+    label: statusLabel("project", value),
+  }));
+  const managerOptions = (managers.data ?? []).map((manager) => ({
+    value: manager.id,
+    label: manager.name,
+  }));
 
   const createProject = useMutation(trpc.project.create.mutationOptions());
   const updateProject = useMutation(trpc.project.update.mutationOptions());
@@ -141,6 +149,7 @@ export default function ProjectFormDialog({
                   <div className="space-y-2">
                     <Label htmlFor={field.name}>{t.projects.statusLabel}</Label>
                     <Select
+                      items={statusOptions}
                       value={field.state.value}
                       onValueChange={(value) =>
                         field.handleChange((value ?? "planning") as ProjectFormValues["status"])
@@ -150,9 +159,9 @@ export default function ProjectFormDialog({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {PROJECT_STATUSES.map((status) => (
-                          <SelectItem key={status} value={status}>
-                            {statusLabel("project", status)}
+                        {statusOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -184,16 +193,22 @@ export default function ProjectFormDialog({
                   <div className="space-y-2">
                     <Label htmlFor={field.name}>{t.projects.manager}</Label>
                     <Select
+                      items={managerOptions}
                       value={field.state.value}
                       onValueChange={(value) => field.handleChange(value ?? "")}
                     >
                       <SelectTrigger id={field.name} className="w-full">
-                        <SelectValue placeholder={t.common.unassigned} />
+                        <SelectValue>
+                          {(value) =>
+                            managerOptions.find((option) => option.value === value)?.label ??
+                            t.common.unassigned
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        {(managers.data ?? []).map((manager) => (
-                          <SelectItem key={manager.id} value={manager.id}>
-                            {manager.name}
+                        {managerOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
                           </SelectItem>
                         ))}
                       </SelectContent>

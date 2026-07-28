@@ -58,6 +58,10 @@ export default function ProjectDetail({
   const { money, percent, quantity, formatDate } = useFormat();
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
+  const taskStatusOptions = TASK_STATUSES.map((value) => ({
+    value,
+    label: statusLabel("task", value),
+  }));
 
   const projectQuery = useQuery(trpc.project.get.queryOptions({ id: projectId }));
   const tasksQuery = useQuery(trpc.task.listByProject.queryOptions({ projectId }));
@@ -270,6 +274,7 @@ export default function ProjectDetail({
                         {/* Any signed-in user may move work along — the one
                             intentional exception to admin-only writes. */}
                         <Select
+                          items={taskStatusOptions}
                           value={row.status}
                           onValueChange={(value) =>
                             void changeTaskStatus(
@@ -282,9 +287,9 @@ export default function ProjectDetail({
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {TASK_STATUSES.map((status) => (
-                              <SelectItem key={status} value={status}>
-                                {statusLabel("task", status)}
+                            {taskStatusOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
                               </SelectItem>
                             ))}
                           </SelectContent>
