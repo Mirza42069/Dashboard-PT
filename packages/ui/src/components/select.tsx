@@ -93,7 +93,13 @@ function SelectContent({
         <SelectPrimitive.Popup
           data-slot="select-content"
           data-align-trigger={alignItemWithTrigger}
-          className={cn("relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-md bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className )}
+          // Sized to the trigger as a floor, not a ceiling. Options are often
+          // longer than the control that opens them — company names here read
+          // "PT <three or four words>" — and pinning the popup to the trigger
+          // width left them nothing to occupy but the space reserved for the
+          // check. Growing to content up to --available-width lets them fit;
+          // past that, SelectItem truncates.
+          className={cn("relative isolate z-50 max-h-(--available-height) w-fit max-w-(--available-width) min-w-(--anchor-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-md bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[align-trigger=true]:animate-none data-[side=bottom]:slide-in-from-top-2 data-[side=inline-end]:slide-in-from-left-2 data-[side=inline-start]:slide-in-from-right-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95", className )}
           {...props}
         >
           <SelectScrollUpButton />
@@ -132,7 +138,19 @@ function SelectItem({
       )}
       {...props}
     >
-      <SelectPrimitive.ItemText className="flex flex-1 shrink-0 gap-2 whitespace-nowrap">
+      {/*
+        Truncates rather than overflowing. `shrink-0` here meant a long label
+        kept its full width and ran straight under the check indicator, which is
+        absolutely positioned and has no background to hide behind.
+
+        Block rather than flex, because text-overflow does not apply to the
+        anonymous flex items that bare text children become — there would be no
+        ellipsis, only a hard clip. Leading icons are laid out inline instead:
+        Tailwind's preflight makes `svg` display:block, so they need
+        inline-block to stay on the label's line, and a margin in place of the
+        flex gap.
+      */}
+      <SelectPrimitive.ItemText className="min-w-0 flex-1 truncate [&>svg]:mr-2 [&>svg]:inline-block [&>svg]:align-middle">
         {children}
       </SelectPrimitive.ItemText>
       <SelectPrimitive.ItemIndicator

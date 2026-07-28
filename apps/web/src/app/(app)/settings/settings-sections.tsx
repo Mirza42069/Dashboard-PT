@@ -5,7 +5,16 @@ import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@DashboardV2/ui/components/card";
 import { cn } from "@DashboardV2/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { Building2, KeyRound, Languages, Moon, Palette, Sun, UserRound } from "lucide-react";
+import {
+  Building2,
+  KeyRound,
+  Languages,
+  Moon,
+  Palette,
+  SlidersHorizontal,
+  Sun,
+  UserRound,
+} from "lucide-react";
 
 import ChangePasswordForm from "@/components/change-password-form";
 import type { Locale } from "@/i18n";
@@ -160,8 +169,12 @@ export function PreferencesSection({
   const t = useT();
   const { locale } = useLocale();
 
+  // Tile icon is deliberately not Palette: that belongs to the Appearance row
+  // below, and using it here too put the same icon twice in one card, which read
+  // as two headings for the same section. The tile covers appearance *and*
+  // language, so it takes the generic control icon and lets each row keep its own.
   return (
-    <Tile title={t.settings.preferences} icon={Palette} className={className}>
+    <Tile title={t.settings.preferences} icon={SlidersHorizontal} className={className}>
       <div className="space-y-5">
         <div className="space-y-2">
           <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">

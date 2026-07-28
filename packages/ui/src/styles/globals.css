@@ -197,22 +197,6 @@
     @apply font-sans;
   }
 
-  /*
-   * Motion is decorative here — the sidebar width transition, dialog fades.
-   * None of it carries meaning, so honour the OS setting rather than animating
-   * anyway. Kept near-zero rather than `none` so transitionend still fires and
-   * anything waiting on it does not hang.
-   */
-  @media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-      animation-duration: 0.01ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 0.01ms !important;
-      scroll-behavior: auto !important;
-    }
-  }
 }
 
 @layer components {
@@ -234,5 +218,84 @@
         no-repeat scroll,
       radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.12), transparent) right / 0.875rem
         100% no-repeat scroll;
+  }
+}
+
+/*
+ * Reduced motion, scoped on purpose.
+ *
+ * Not the usual blanket `* { transition-duration: 0.01ms !important }`. On
+ * Windows this query is driven by Settings > Accessibility > Visual effects >
+ * Animation effects, which is off on plenty of machines for reasons unrelated to
+ * motion sensitivity — perf, RDP, corp image defaults. A blanket rule kills every
+ * transition in the product for those users, including the sidebar collapse,
+ * which reads as broken when it snaps.
+ *
+ * So this covers WCAG 2.2.2 (Pause, Stop, Hide) — motion that runs without being
+ * asked for — and leaves state-change transitions alone:
+ *
+ *   - Overlay entrances (dialog, alert-dialog, dropdown, select, tooltip) keep
+ *     their fade and lose the zoom, slide, spin and blur. Neutralising
+ *     tw-animate's transform variables is enough; the opacity ones are untouched.
+ *   - Looping decorative animation stops: the skeleton and company-switcher
+ *     pulse today, ping and bounce guarded for whenever they turn up. A static
+ *     skeleton still reads as a placeholder.
+ *
+ * Spinners are deliberately left turning: they are the one loop that carries
+ * information, and a frozen spinner reads as a hung app rather than a calm one.
+ *
+ * The sidebar collapse is deliberately NOT suppressed, even though it is
+ * interaction-triggered motion and so squarely what WCAG 2.3.3 (AAA) covers.
+ * That is a considered trade-off, not an oversight: guarding it was tried and
+ * reverted once this dev box turned out to report reduce with MinAnimate=0 —
+ * animation effects switched off for perf, nothing to do with vestibular
+ * triggers — and the rail teleported. On Windows this query is too weak a signal
+ * to hang the product's primary transition on. Looping motion above is a
+ * different matter: nobody asked for it, so it stops.
+ *
+ * If a real motion-sensitivity signal ever arrives (a user-level preference in
+ * settings, say), that is the switch to hang the collapse on — not this query.
+ *
+ * Unlayered on purpose. Tailwind's utilities live in `@layer utilities`, and any
+ * unlayered rule outranks every layered one regardless of specificity, so this
+ * wins over `zoom-in-95` and `animate-pulse` without an !important fight.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    --tw-enter-scale: 1;
+    --tw-exit-scale: 1;
+    --tw-enter-translate-x: 0;
+    --tw-enter-translate-y: 0;
+    --tw-exit-translate-x: 0;
+    --tw-exit-translate-y: 0;
+    --tw-enter-rotate: 0;
+    --tw-exit-rotate: 0;
+    --tw-enter-blur: 0;
+    --tw-exit-blur: 0;
+  }
+
+  .animate-pulse,
+  .animate-ping,
+  .animate-bounce {
+    animation: none;
+  }
+
+  /*
+   * The shimmer on uploading attachments (attachment.tsx) is a third infinite
+   * loop. Substring match because it is only ever applied through a variant —
+   * `group-data-[state=uploading]/attachment:shimmer` — so the generated class
+   * name is the entire variant string and a plain `.shimmer` never matches it.
+   *
+   * It also needs more than `animation: none`. The utility paints a gradient and
+   * clips it to the text with `-webkit-text-fill-color: transparent`, so merely
+   * stopping the sweep would leave the label wearing a frozen gradient. Dropping
+   * the image and restoring the fill gives plain, still text.
+   */
+  [class*="shimmer"] {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
   }
 }
