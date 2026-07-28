@@ -68,17 +68,27 @@ export default function AppNav({
   const pathname = usePathname();
 
   return (
-    <nav className={cn("flex flex-col", collapsed ? "gap-1" : "gap-5")}>
+    <nav
+      className={cn(
+        "flex flex-col transition-[gap] duration-200 ease-out",
+        collapsed ? "gap-1" : "gap-5",
+      )}
+    >
       {SECTIONS.filter((section) => !section.adminOnly || isAdmin).map((section) => (
         <div key={section.headingKey} className="space-y-1">
-          {/* Collapsed: a hairline separates groups, since headings won't fit. */}
-          {collapsed ? (
-            <div className="mx-2 my-1 border-t first:hidden" />
-          ) : (
-            <p className="px-2 text-[0.625rem] font-medium tracking-widest text-muted-foreground uppercase">
-              {t.nav[section.headingKey]}
-            </p>
-          )}
+          {/* Collapsed: a hairline separates groups, since headings won't fit.
+              The heading collapses to zero height rather than unmounting, so it
+              slides away with the rail instead of vanishing on the first frame. */}
+          {collapsed && <div className="mx-2 my-1 border-t first:hidden" />}
+          <p
+            aria-hidden={collapsed}
+            className={cn(
+              "overflow-hidden px-2 text-[0.625rem] font-medium tracking-widest whitespace-nowrap text-muted-foreground uppercase transition-[height,opacity] duration-200 ease-out",
+              collapsed ? "h-0 opacity-0" : "h-4 opacity-100",
+            )}
+          >
+            {t.nav[section.headingKey]}
+          </p>
 
           {section.items.map(({ href, labelKey, icon: Icon }) => {
             const isActive = pathname === href || pathname.startsWith(`${href}/`);
@@ -89,17 +99,36 @@ export default function AppNav({
                 href={href}
                 onClick={onNavigate}
                 aria-current={isActive ? "page" : undefined}
+                // The label below stays in the DOM when collapsed, but at zero
+                // width — not every screen reader announces a clipped text node
+                // reliably, so name the link explicitly rather than depend on it.
                 aria-label={collapsed ? label : undefined}
                 className={cn(
-                  "flex items-center rounded-md text-xs transition-colors",
-                  collapsed ? "size-10 justify-center" : "gap-2 px-2 py-1.5",
+                  // h-10 in both states. Previously the row was ~30px expanded
+                  // and 40px collapsed, so toggling resized every row mid-slide.
+                  // w-10 collapsed is not arbitrary either: it puts the icon at
+                  // the same 20px from the sidebar edge as the expanded layout
+                  // (8px container padding + (40-16)/2), so the icons hold still
+                  // while everything around them moves.
+                  "flex h-10 items-center rounded-md text-sm transition-[width,gap,padding,background-color,color] duration-200 ease-out",
+                  collapsed ? "w-10 justify-center gap-0 px-0" : "w-full gap-2 px-2",
                   isActive
                     ? "bg-muted font-medium text-foreground"
                     : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 )}
               >
                 <Icon className="size-4 shrink-0" />
-                {!collapsed && label}
+                {/* Kept mounted and faded rather than unmounted — a label that
+                    disappears instantly is what made the collapse read as a jump
+                    rather than a slide. max-w-0 keeps it out of the layout. */}
+                <span
+                  className={cn(
+                    "overflow-hidden whitespace-nowrap transition-[max-width,opacity] duration-200 ease-out",
+                    collapsed ? "max-w-0 opacity-0" : "max-w-40 opacity-100",
+                  )}
+                >
+                  {label}
+                </span>
               </Link>
             );
 

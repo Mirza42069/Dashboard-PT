@@ -1,7 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 
 import type { Context } from "./context";
-import { resolveCompanyIdForSession } from "./lib/scope";
 
 export const t = initTRPC.context<Context>().create();
 
@@ -39,14 +38,18 @@ export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
 /**
  * Adds the active company to the context.
  *
- * Resolved here rather than in createContext so that unauthenticated and
- * company-agnostic routes (healthCheck, account.changePassword) cost no
- * queries. Anything reading or writing tenant data must use this instead of
+ * Pulled from the context lazily rather than resolved in createContext, so that
+ * unauthenticated and company-agnostic routes (healthCheck,
+ * account.changePassword) cost no queries. ctx.getCompanyId memoizes for the
+ * life of the request, so a batched call resolves it once no matter how many
+ * procedures ask.
+ *
+ * Anything reading or writing tenant data must use this instead of
  * protectedProcedure — `ctx.companyId` exists only on these procedures, so the
  * type checker flags a router that forgot to scope itself.
  */
 export const companyProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-  const companyId = await resolveCompanyIdForSession(ctx.session.user, ctx.headers);
+  const companyId = await ctx.getCompanyId();
   return next({ ctx: { ...ctx, companyId } });
 });
 

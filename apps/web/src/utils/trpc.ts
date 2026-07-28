@@ -8,6 +8,16 @@ import { toast } from "sonner";
 import { getServerUrl } from "@/lib/server-url";
 
 export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Without this every remount refetches, so moving between pages and back
+      // re-runs the whole list query for data that is seconds old. Mutations
+      // call invalidateQueries explicitly, which ignores staleTime, so edits
+      // still show up immediately — this only suppresses the redundant refetch
+      // on navigation and on window focus.
+      staleTime: 30_000,
+    },
+  },
   queryCache: new QueryCache({
     onError: (error, query) => {
       toast.error(error.message, {

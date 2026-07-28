@@ -46,6 +46,7 @@ import { toast } from "sonner";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
@@ -67,9 +68,11 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [companyTarget, setCompanyTarget] = useState<{ id: string; name: string } | null>(null);
 
+  const debouncedSearch = useDebounced(search);
+
   const usersQuery = useQuery(
     trpc.admin.listUsers.queryOptions({
-      search,
+      search: debouncedSearch,
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
     }),
@@ -134,7 +137,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
             </TableHeader>
             <TableBody>
               {usersQuery.isPending &&
-                Array.from({ length: 5 }, (_, index) => (
+                Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
                     <TableCell colSpan={7} className="pl-4">
                       <Skeleton className="h-5 w-full" />
@@ -145,7 +148,9 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
               {!usersQuery.isPending && users.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
-                    {search ? interpolate(t.users.noMatch, { search }) : t.users.empty}
+                    {debouncedSearch
+                      ? interpolate(t.users.noMatch, { search: debouncedSearch })
+                      : t.users.empty}
                   </TableCell>
                 </TableRow>
               )}

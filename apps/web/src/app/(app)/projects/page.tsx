@@ -17,9 +17,7 @@ export default async function ProjectsPage() {
 
   return (
     <div className="space-y-4 p-4 md:p-6">
-      <div className="space-y-1">
-        <h1 className="text-lg font-semibold tracking-tight">{dict.projects.title}</h1>
-      </div>
+      <h1 className="sr-only">{dict.projects.title}</h1>
 
       <ProjectsTable isAdmin={session.user.role === "admin"} />
     </div>

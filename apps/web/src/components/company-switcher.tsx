@@ -50,16 +50,20 @@ export default function CompanySwitcher() {
   }
 
   if (options.isPending) {
-    return <div className="h-8 w-40 animate-pulse rounded-md bg-muted" aria-hidden />;
+    // w-44 to match the resolved Select trigger below. A narrower placeholder
+    // shifts the whole header the moment the query lands.
+    return <div className="h-8 w-44 animate-pulse rounded-md bg-muted" aria-hidden />;
   }
 
   if (!canSwitch) {
     const name = companies[0]?.name;
     if (!name) return null;
     return (
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      // Same w-44 box as the admin trigger and the placeholder, so the header
+      // lays out identically for both roles and across the loading swap.
+      <div className="flex h-8 w-44 items-center gap-1.5 text-xs text-muted-foreground">
         <Building2 className="size-3.5 shrink-0" />
-        <span className="max-w-40 truncate font-medium text-foreground">{name}</span>
+        <span className="truncate font-medium text-foreground">{name}</span>
       </div>
     );
   }

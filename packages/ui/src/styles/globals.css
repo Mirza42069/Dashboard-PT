@@ -196,4 +196,43 @@
   html {
     @apply font-sans;
   }
+
+  /*
+   * Motion is decorative here — the sidebar width transition, dialog fades.
+   * None of it carries meaning, so honour the OS setting rather than animating
+   * anyway. Kept near-zero rather than `none` so transitionend still fires and
+   * anything waiting on it does not hang.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /*
+   * Horizontal scroll affordance for wide tables.
+   *
+   * The two `local` gradients are painted in the content's coordinate space, so
+   * they slide out of view as you scroll and uncover the `scroll` shadows,
+   * which stay pinned to the container edges. The result is a shadow on
+   * whichever side still has content hidden, and none once you reach an end —
+   * with no scroll or resize listener. The cover gradients must match the
+   * surface behind the table; tables here sit on a Card, hence --card.
+   */
+  .table-scroll-shadows {
+    background:
+      linear-gradient(to right, var(--card) 30%, transparent) left / 2.5rem 100% no-repeat local,
+      linear-gradient(to left, var(--card) 30%, transparent) right / 2.5rem 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.12), transparent) left / 0.875rem 100%
+        no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.12), transparent) right / 0.875rem
+        100% no-repeat scroll;
+  }
 }

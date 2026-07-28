@@ -17,9 +17,10 @@ export default async function MaterialsPage() {
 
   return (
     <div className="space-y-4 p-4 md:p-6">
-      <div className="space-y-1">
-        <h1 className="text-lg font-semibold tracking-tight">{dict.materials.title}</h1>
-      </div>
+      {/* sr-only, not deleted: the sidebar already names the page, so the
+          heading was visual duplication — but the document still needs an h1,
+          and it is what a screen reader announces on navigation. */}
+      <h1 className="sr-only">{dict.materials.title}</h1>
 
       <MaterialsTable isAdmin={session.user.role === "admin"} />
     </div>
