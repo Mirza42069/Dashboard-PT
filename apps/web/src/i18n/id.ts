@@ -147,7 +147,6 @@ export const id = {
     location: "Lokasi",
     startDate: "Tanggal mulai",
     endDate: "Tanggal selesai",
-    progressPercent: "Kemajuan (%)",
     manager: "Manajer proyek",
     notes: "Catatan",
     createProject: "Buat proyek",

@@ -146,7 +146,6 @@ export const en = {
     location: "Location",
     startDate: "Start date",
     endDate: "End date",
-    progressPercent: "Progress (%)",
     manager: "Project manager",
     notes: "Notes",
     createProject: "Create project",

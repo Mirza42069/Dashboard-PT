@@ -41,7 +41,6 @@ const schema = z
     client: z.string().trim().max(200),
     location: z.string().trim().max(200),
     status: z.enum(PROJECT_STATUSES),
-    progress: z.number().int().min(0).max(100),
     managerId: z.string(),
     notes: z.string().max(2000),
   });
@@ -54,7 +53,6 @@ export const EMPTY_PROJECT: ProjectFormValues = {
   client: "",
   location: "",
   status: "planning",
-  progress: 0,
   managerId: "",
   notes: "",
 };
@@ -102,7 +100,6 @@ export default function ProjectFormDialog({
         client: blankToUndefined(value.client),
         location: blankToUndefined(value.location),
         status: value.status,
-        progress: value.progress,
         managerId: blankToUndefined(value.managerId),
         notes: blankToUndefined(value.notes),
       };
@@ -184,39 +181,34 @@ export default function ProjectFormDialog({
               </form.Field>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <form.Field name="progress">
-                {(field) => <NumberField label={t.projects.progressPercent} field={field} max={100} />}
-              </form.Field>
-              <form.Field name="managerId">
-                {(field) => (
-                  <div className="space-y-2">
-                    <Label htmlFor={field.name}>{t.projects.manager}</Label>
-                    <Select
-                      items={managerOptions}
-                      value={field.state.value}
-                      onValueChange={(value) => field.handleChange(value ?? "")}
-                    >
-                      <SelectTrigger id={field.name} className="w-full">
-                        <SelectValue>
-                          {(value) =>
-                            managerOptions.find((option) => option.value === value)?.label ??
-                            t.common.unassigned
-                          }
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {managerOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </form.Field>
-            </div>
+            <form.Field name="managerId">
+              {(field) => (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{t.projects.manager}</Label>
+                  <Select
+                    items={managerOptions}
+                    value={field.state.value}
+                    onValueChange={(value) => field.handleChange(value ?? "")}
+                  >
+                    <SelectTrigger id={field.name} className="w-full">
+                      <SelectValue>
+                        {(value) =>
+                          managerOptions.find((option) => option.value === value)?.label ??
+                          t.common.unassigned
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {managerOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </form.Field>
 
             <form.Field name="notes">
               {(field) => (
@@ -285,32 +277,6 @@ function Field({
         value={field.state.value}
         onBlur={field.handleBlur}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => field.handleChange(e.target.value)}
-      />
-      {field.state.meta.errors.map((error: { message?: string } | undefined) => (
-        <p key={error?.message} className="text-xs text-destructive">
-          {error?.message}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-function NumberField({ label, field, max }: { label: string; field: any; max?: number }) {
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={field.name}>{label}</Label>
-      <Input
-        id={field.name}
-        name={field.name}
-        type="number"
-        min={0}
-        max={max}
-        step="any"
-        value={String(field.state.value)}
-        onBlur={field.handleBlur}
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-          field.handleChange(e.target.value === "" ? 0 : Number(e.target.value))
-        }
       />
       {field.state.meta.errors.map((error: { message?: string } | undefined) => (
         <p key={error?.message} className="text-xs text-destructive">

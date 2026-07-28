@@ -105,7 +105,6 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
       client: row.client ?? "",
       location: row.location ?? "",
       status: row.status,
-      progress: row.progress,
       managerId: row.managerId ?? "",
       notes: row.notes ?? "",
     });
