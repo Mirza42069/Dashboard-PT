@@ -1,22 +1,25 @@
 import { db } from "@DashboardV2/db";
 import { EXPENSE_CATEGORIES, expense, project, user } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { desc, eq, sum } from "drizzle-orm";
+import { and, desc, eq, sum } from "drizzle-orm";
 import z from "zod";
 
-import { adminProcedure, protectedProcedure, router } from "../index";
+import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { toAmount, toNumericString } from "../lib/money";
+import { assertProjectInScope } from "../lib/scope";
 
 export const expenseRouter = router({
-  listByProject: protectedProcedure
+  listByProject: companyProcedure
     .input(
       z.object({
         projectId: z.string().min(1),
         limit: z.number().int().min(1).max(200).default(50),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      await assertProjectInScope(ctx.companyId, input.projectId);
+
       const [rows, [total]] = await Promise.all([
         db
           .select({
@@ -44,7 +47,7 @@ export const expenseRouter = router({
       };
     }),
 
-  create: adminProcedure
+  create: adminCompanyProcedure
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -58,7 +61,7 @@ export const expenseRouter = router({
       const [target] = await db
         .select({ id: project.id, code: project.code })
         .from(project)
-        .where(eq(project.id, input.projectId));
+        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
@@ -84,24 +87,28 @@ export const expenseRouter = router({
       return { id: created?.id };
     }),
 
-  delete: adminProcedure.input(z.object({ id: z.string().min(1) })).mutation(async ({ ctx, input }) => {
-    const [target] = await db
-      .select({ description: expense.description, code: project.code })
-      .from(expense)
-      .innerJoin(project, eq(project.id, expense.projectId))
-      .where(eq(expense.id, input.id));
+  delete: adminCompanyProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      // The company filter doubles as the scope check: no row, no delete.
+      const [target] = await db
+        .select({ description: expense.description, code: project.code })
+        .from(expense)
+        .innerJoin(project, eq(project.id, expense.projectId))
+        .where(and(eq(expense.id, input.id), eq(project.companyId, ctx.companyId)));
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Expense not found" });
+      }
 
-    await db.delete(expense).where(eq(expense.id, input.id));
+      await db.delete(expense).where(eq(expense.id, input.id));
 
-    if (target) {
       await recordActivity(ctx, {
         action: "deleted",
         entityType: "expense",
         entityId: input.id,
         entityLabel: `${target.code} · ${target.description}`,
       });
-    }
 
-    return { success: true };
-  }),
+      return { success: true };
+    }),
 });

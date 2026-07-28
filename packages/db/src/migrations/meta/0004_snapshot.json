@@ -1,6 +1,6 @@
 {
-  "id": "2d55f9a7-d033-4c56-b6d6-1046815ce118",
-  "prevId": "ff6f68d3-291d-4d28-ad3b-e83d9d06519a",
+  "id": "fd18b68a-449d-425f-b305-c9fefd11c817",
+  "prevId": "2d55f9a7-d033-4c56-b6d6-1046815ce118",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1011,11 +1011,17 @@
           "primaryKey": false,
           "notNull": true
         },
+        "data": {
+          "name": "data",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
         "content_type": {
           "name": "content_type",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "size": {
           "name": "size",

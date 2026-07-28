@@ -11,7 +11,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
-import { adminProcedure, protectedProcedure, router } from "../index";
+import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import {
   WEIGHT_TOLERANCE,
@@ -24,6 +24,7 @@ import {
   serializeItem,
   serializeVersion,
 } from "../lib/boq";
+import { assertProjectInScope } from "../lib/scope";
 
 const itemSchema = z.object({
   code: z.string().trim().min(1, "Code is required").max(32),
@@ -42,11 +43,12 @@ function toQuantityString(value: number): string {
   return value.toFixed(4);
 }
 
-async function projectLabel(projectId: string) {
+/** Audit label for the project — the company filter doubles as the scope check. */
+async function projectLabel(companyId: string, projectId: string) {
   const [row] = await db
     .select({ code: project.code, name: project.name })
     .from(project)
-    .where(eq(project.id, projectId));
+    .where(and(eq(project.id, projectId), eq(project.companyId, companyId)));
   if (!row) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
@@ -88,9 +90,11 @@ export const boqRouter = router({
    * the tree — it needs the parent/child relationship in hand anyway to work
    * out which lines are leaves.
    */
-  overview: protectedProcedure
+  overview: companyProcedure
     .input(z.object({ projectId: z.string().min(1) }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      await assertProjectInScope(ctx.companyId, input.projectId);
+
       const versions = await db
         .select()
         .from(boqVersion)
@@ -115,10 +119,10 @@ export const boqRouter = router({
    * Opens the BoQ for editing. Returns the existing draft if one is already
    * open, so the button is safe to press twice.
    */
-  getOrCreateDraft: adminProcedure
+  getOrCreateDraft: adminCompanyProcedure
     .input(z.object({ projectId: z.string().min(1), title: z.string().trim().max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
-      const label = await projectLabel(input.projectId);
+      const label = await projectLabel(ctx.companyId, input.projectId);
 
       const [existing] = await db
         .select()
@@ -162,12 +166,12 @@ export const boqRouter = router({
     }),
 
   /** Redistributes derived weights by value. Draft only. */
-  recalcWeights: adminProcedure
+  recalcWeights: adminCompanyProcedure
     .input(z.object({ versionId: z.string().min(1) }))
-    .mutation(async ({ input }) => {
-      await requireDraft(input.versionId);
+    .mutation(async ({ ctx, input }) => {
+      await requireDraft(ctx.companyId, input.versionId);
       await recalcWeights(input.versionId);
-      const version = await getVersion(input.versionId);
+      const version = await getVersion(ctx.companyId, input.versionId);
       return { version: serializeVersion(version), weightTotal: await leafWeightTotal(input.versionId) };
     }),
 
@@ -180,10 +184,10 @@ export const boqRouter = router({
    * the check and the write. Zero rows updated means a guard rejected it, and
    * the reason is worked out afterwards purely to write a decent error message.
    */
-  activate: adminProcedure
+  activate: adminCompanyProcedure
     .input(z.object({ versionId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const draft = await requireDraft(input.versionId);
+      const draft = await requireDraft(ctx.companyId, input.versionId);
       await recalcWeights(input.versionId);
 
       const [activated] = await db
@@ -235,7 +239,7 @@ export const boqRouter = router({
         action: "baselined",
         entityType: "boq",
         entityId: activated.id,
-        entityLabel: await projectLabel(activated.projectId),
+        entityLabel: await projectLabel(ctx.companyId, activated.projectId),
         detail: activated.title,
       });
 
@@ -243,15 +247,15 @@ export const boqRouter = router({
     }),
 
   /** Adds a section (no parentId) or a line under one. */
-  createItem: adminProcedure
+  createItem: adminCompanyProcedure
     .input(
       itemSchema.extend({
         versionId: z.string().min(1),
         parentId: z.string().min(1).nullish(),
       }),
     )
-    .mutation(async ({ input }) => {
-      await requireDraft(input.versionId);
+    .mutation(async ({ ctx, input }) => {
+      await requireDraft(ctx.companyId, input.versionId);
 
       const parentId = input.parentId ?? null;
       if (parentId) {
@@ -305,10 +309,10 @@ export const boqRouter = router({
       return { item: created ? serializeItem(created) : null };
     }),
 
-  updateItem: adminProcedure
+  updateItem: adminCompanyProcedure
     .input(itemSchema.partial().extend({ id: z.string().min(1) }))
-    .mutation(async ({ input }) => {
-      const current = await requireDraftForItem(input.id);
+    .mutation(async ({ ctx, input }) => {
+      const current = await requireDraftForItem(ctx.companyId, input.id);
       const { id, code, quantity, unitRate, weight, ...rest } = input;
 
       if (code && code !== current.code) {
@@ -344,10 +348,10 @@ export const boqRouter = router({
    * has to take its lines with it, or they survive as parentless leaves that
    * still draw weight.
    */
-  deleteItem: adminProcedure
+  deleteItem: adminCompanyProcedure
     .input(z.object({ id: z.string().min(1) }))
-    .mutation(async ({ input }) => {
-      await requireDraftForItem(input.id);
+    .mutation(async ({ ctx, input }) => {
+      await requireDraftForItem(ctx.companyId, input.id);
 
       await db.execute(sql`
         update boq_item
@@ -367,15 +371,15 @@ export const boqRouter = router({
     }),
 
   /** Applies a new ordering to a group of siblings in one statement. */
-  reorderItems: adminProcedure
+  reorderItems: adminCompanyProcedure
     .input(
       z.object({
         versionId: z.string().min(1),
         orderedIds: z.array(z.string().min(1)).min(1).max(500),
       }),
     )
-    .mutation(async ({ input }) => {
-      await requireDraft(input.versionId);
+    .mutation(async ({ ctx, input }) => {
+      await requireDraft(ctx.companyId, input.versionId);
 
       const rows = sql.join(
         input.orderedIds.map((id, index) => sql`(${id}::text, ${index}::int)`),

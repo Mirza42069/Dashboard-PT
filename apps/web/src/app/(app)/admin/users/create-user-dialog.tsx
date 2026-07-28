@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@DashboardV2/ui/components/select";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UserPlus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -40,22 +40,38 @@ export default function CreateUserDialog({
   const queryClient = useQueryClient();
 
   const createUser = useMutation(trpc.admin.createUser.mutationOptions());
+  const companies = useQuery(trpc.company.list.queryOptions());
+  const companyOptions = companies.data?.companies ?? [];
 
-  const schema = z.object({
-    name: z.string().trim().min(1, t.users.nameRequired).max(120),
-    email: z.email(t.auth.invalidEmail),
-    role: z.enum(["admin", "user"]),
-  });
+  const schema = z
+    .object({
+      name: z.string().trim().min(1, t.users.nameRequired).max(120),
+      email: z.email(t.auth.invalidEmail),
+      role: z.enum(["admin", "user"]),
+      companyId: z.string(),
+    })
+    // Admins are unpinned and pick an active company instead; a regular
+    // account with no company cannot resolve a scope and is locked out.
+    .refine((value) => value.role === "admin" || value.companyId !== "", {
+      message: t.company.required,
+      path: ["companyId"],
+    });
 
   const form = useForm({
     defaultValues: {
       name: "",
       email: "",
       role: "user" as "admin" | "user",
+      companyId: "",
     },
     onSubmit: async ({ value, formApi }) => {
       try {
-        const data = await createUser.mutateAsync(value);
+        const data = await createUser.mutateAsync({
+          name: value.name,
+          email: value.email,
+          role: value.role,
+          companyId: value.companyId === "" ? undefined : value.companyId,
+        });
         await queryClient.invalidateQueries(trpc.admin.pathFilter());
         setOpen(false);
         formApi.reset();
@@ -155,6 +171,43 @@ export default function CreateUserDialog({
               </div>
             )}
           </form.Field>
+
+          {/* Only meaningful for a regular account — admins see every company
+              through the switcher, so pinning them to one would be misleading. */}
+          <form.Subscribe selector={(state) => state.values.role}>
+            {(role) =>
+              role === "admin" ? null : (
+                <form.Field name="companyId">
+                  {(field) => (
+                    <div className="space-y-2">
+                      <Label htmlFor={field.name}>{t.company.label}</Label>
+                      <Select
+                        value={field.state.value}
+                        onValueChange={(value) => field.handleChange(value ?? "")}
+                      >
+                        <SelectTrigger id={field.name} className="w-full">
+                          <SelectValue placeholder={t.company.placeholder} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {companyOptions.map((item) => (
+                            <SelectItem key={item.id} value={item.id}>
+                              {item.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">{t.company.userHint}</p>
+                      {field.state.meta.errors.map((error) => (
+                        <p key={error?.message} className="text-xs text-destructive">
+                          {error?.message}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </form.Field>
+              )
+            }
+          </form.Subscribe>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

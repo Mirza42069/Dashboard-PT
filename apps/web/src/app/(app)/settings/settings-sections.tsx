@@ -2,131 +2,213 @@
 
 import { Badge } from "@DashboardV2/ui/components/badge";
 import { Button } from "@DashboardV2/ui/components/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@DashboardV2/ui/components/card";
-import { Label } from "@DashboardV2/ui/components/label";
-import { Separator } from "@DashboardV2/ui/components/separator";
-import { Moon, Sun } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@DashboardV2/ui/components/card";
+import { cn } from "@DashboardV2/ui/lib/utils";
+import { useQuery } from "@tanstack/react-query";
+import { Building2, KeyRound, Languages, Moon, Palette, Sun, UserRound } from "lucide-react";
 
 import ChangePasswordForm from "@/components/change-password-form";
 import type { Locale } from "@/i18n";
 import { setLocaleCookie, useLocale, useT } from "@/i18n/provider";
 import { setThemeCookie, type Theme } from "@/lib/theme";
+import { trpc } from "@/utils/trpc";
 
-export function LanguageSection() {
-  const t = useT();
-  const { locale } = useLocale();
-
-  const options: { value: Locale; label: string }[] = [
-    { value: "en", label: t.settings.english },
-    { value: "id", label: t.settings.indonesian },
-  ];
-
+/**
+ * Shared tile chrome. Every settings card is the same object at a different
+ * size, so the header — icon, title — is defined once rather than per section.
+ * `h-full` lets a tile fill whatever cell the bento grid gives it, which is
+ * what keeps two tiles sharing a row the same height.
+ */
+function Tile({
+  title,
+  icon: Icon,
+  className,
+  children,
+}: {
+  title: string;
+  icon: typeof UserRound;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <Card>
+    <Card className={cn("h-full", className)}>
       <CardHeader>
-        <CardTitle>{t.settings.language}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Icon className="size-4 shrink-0 text-muted-foreground" />
+          {title}
+        </CardTitle>
       </CardHeader>
-      <CardContent className="flex gap-2">
-        {options.map((option) => (
-          <Button
-            key={option.value}
-            variant={locale === option.value ? "default" : "outline"}
-            onClick={() => {
-              if (locale !== option.value) setLocaleCookie(option.value);
-            }}
-          >
-            {option.label}
-          </Button>
-        ))}
-      </CardContent>
+      <CardContent>{children}</CardContent>
     </Card>
   );
 }
 
-export function AppearanceSection({ theme }: { theme: Theme }) {
-  const t = useT();
+/** Label above value, used for every read-only field in the profile tile. */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-1">
+      <p className="text-[0.625rem] font-medium tracking-widest text-muted-foreground uppercase">
+        {label}
+      </p>
+      <div className="truncate text-sm font-medium">{children}</div>
+    </div>
+  );
+}
 
-  const options = [
-    { value: "light", label: t.settings.light, icon: Sun },
-    { value: "dark", label: t.settings.dark, icon: Moon },
-  ] as const;
+/**
+ * A two-option segmented control. Both settings pages below pick one of two
+ * values, and full-width halves make the current choice obvious at a glance —
+ * the previous inline buttons left most of the card empty.
+ */
+function Segmented<T extends string>({
+  options,
+  value,
+  onSelect,
+}: {
+  options: { value: T; label: string; icon?: typeof Sun }[];
+  value: T;
+  onSelect: (value: T) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {options.map((option) => (
+        <Button
+          key={option.value}
+          variant={value === option.value ? "default" : "outline"}
+          aria-pressed={value === option.value}
+          className="w-full"
+          onClick={() => {
+            if (value !== option.value) onSelect(option.value);
+          }}
+        >
+          {option.icon ? <option.icon /> : null}
+          {option.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+export function ProfileSection({
+  name,
+  email,
+  role,
+  className,
+}: {
+  name: string;
+  email: string;
+  role: string;
+  className?: string;
+}) {
+  const t = useT();
+  const isAdmin = role === "admin";
+
+  // The company the account is acting as — their own, or for an admin whichever
+  // one the header switcher currently points at.
+  const options = useQuery(trpc.company.options.queryOptions());
+  const companyName = options.data?.companies.find(
+    (item) => item.id === options.data?.activeId,
+  )?.name;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t.settings.appearance}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex gap-2">
-        {options.map(({ value, label, icon: Icon }) => (
-          <Button
-            key={value}
-            variant={theme === value ? "default" : "outline"}
-            onClick={() => {
-              if (theme === value) return;
+    <Tile title={t.settings.account} icon={UserRound} className={className}>
+      <div className="flex items-center gap-3 pb-4">
+        <div
+          aria-hidden
+          className="grid size-11 shrink-0 place-items-center rounded-full bg-muted text-sm font-semibold"
+        >
+          {name.charAt(0).toUpperCase()}
+        </div>
+        <p className="min-w-0 truncate font-medium">{name}</p>
+      </div>
+
+      {/* Email lives here rather than under the name: shown once, it earns a
+          column and the row fills the tile instead of half of it. */}
+      <div className="grid gap-4 border-t pt-4 sm:grid-cols-3">
+        <Field label={t.users.email}>
+          <span className="truncate">{email}</span>
+        </Field>
+        <Field label={t.settings.role}>
+          <Badge variant={isAdmin ? "default" : "outline"}>
+            {isAdmin ? t.users.roleAdmin : t.users.roleUser}
+          </Badge>
+        </Field>
+        <Field label={t.company.label}>
+          <span className="flex items-center gap-1.5">
+            <Building2 className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{companyName ?? "—"}</span>
+          </span>
+        </Field>
+      </div>
+    </Tile>
+  );
+}
+
+/**
+ * Appearance and language share a tile rather than getting one each. Alone,
+ * either is a single row of two buttons — beside the taller profile tile the
+ * grid would stretch them and leave the extra height blank. Together they fill
+ * the column, and they belong together anyway: both are display preferences.
+ */
+export function PreferencesSection({
+  theme,
+  className,
+}: {
+  theme: Theme;
+  className?: string;
+}) {
+  const t = useT();
+  const { locale } = useLocale();
+
+  return (
+    <Tile title={t.settings.preferences} icon={Palette} className={className}>
+      <div className="space-y-5">
+        <div className="space-y-2">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Palette className="size-3.5 shrink-0" />
+            {t.settings.appearance}
+          </p>
+          <Segmented
+            value={theme}
+            options={[
+              { value: "light", label: t.settings.light, icon: Sun },
+              { value: "dark", label: t.settings.dark, icon: Moon },
+            ]}
+            onSelect={(value) => {
               setThemeCookie(value);
               // Reload rather than toggling a class: the theme lives on <html>
               // from the server, so a reload keeps client and server agreeing
               // and avoids a second source of truth.
               window.location.reload();
             }}
-          >
-            <Icon />
-            {label}
-          </Button>
-        ))}
-      </CardContent>
-    </Card>
+          />
+        </div>
+
+        <div className="space-y-2 border-t pt-4">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Languages className="size-3.5 shrink-0" />
+            {t.settings.language}
+          </p>
+          <Segmented<Locale>
+            value={locale}
+            options={[
+              { value: "en", label: t.settings.english },
+              { value: "id", label: t.settings.indonesian },
+            ]}
+            onSelect={setLocaleCookie}
+          />
+        </div>
+      </div>
+    </Tile>
   );
 }
 
-export function AccountSection({
-  name,
-  email,
-  role,
-}: {
-  name: string;
-  email: string;
-  role: string;
-}) {
+export function PasswordSection({ className }: { className?: string }) {
   const t = useT();
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t.settings.account}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-3 text-xs sm:grid-cols-3">
-          <div>
-            <Label>{t.settings.name}</Label>
-            <p className="mt-1 font-medium">{name}</p>
-          </div>
-          <div>
-            <Label>{t.users.email}</Label>
-            <p className="mt-1 font-medium">{email}</p>
-          </div>
-          <div>
-            <Label>{t.settings.role}</Label>
-            <p className="mt-1">
-              <Badge variant={role === "admin" ? "default" : "outline"}>
-                {role === "admin" ? t.users.roleAdmin : t.users.roleUser}
-              </Badge>
-            </p>
-          </div>
-        </div>
-
-        <Separator />
-
-        <div className="max-w-sm space-y-3">
-          <p className="text-sm font-medium">{t.password.changeTitle}</p>
-          <ChangePasswordForm />
-        </div>
-      </CardContent>
-    </Card>
+    <Tile title={t.password.changeTitle} icon={KeyRound} className={className}>
+      <ChangePasswordForm horizontal />
+    </Tile>
   );
 }

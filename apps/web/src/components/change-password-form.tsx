@@ -2,6 +2,7 @@
 
 import { Button } from "@DashboardV2/ui/components/button";
 import { Label } from "@DashboardV2/ui/components/label";
+import { cn } from "@DashboardV2/ui/lib/utils";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -12,7 +13,12 @@ import { PasswordInput } from "@/components/password-input";
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
-export default function ChangePasswordForm() {
+/**
+ * `horizontal` lays the three fields across one row. Used in Settings, where
+ * the tile is full-width and a narrow stacked column would leave most of it
+ * empty; the standalone /change-password page keeps the default single column.
+ */
+export default function ChangePasswordForm({ horizontal = false }: { horizontal?: boolean }) {
   const t = useT();
   const router = useRouter();
 
@@ -76,34 +82,41 @@ export default function ChangePasswordForm() {
       }}
       className="space-y-4"
     >
-      {fields.map(({ name, label, autoComplete }) => (
-        <form.Field key={name} name={name}>
-          {(field) => (
-            <div className="space-y-2">
-              <Label htmlFor={field.name}>{label}</Label>
-              <PasswordInput
-                id={field.name}
-                name={field.name}
-                autoComplete={autoComplete}
-                value={field.state.value}
-                onBlur={field.handleBlur}
-                onChange={(e) => field.handleChange(e.target.value)}
-              />
-              {field.state.meta.errors.map((error) => (
-                <p key={error?.message} className="text-xs text-destructive">
-                  {error?.message}
-                </p>
-              ))}
-            </div>
-          )}
-        </form.Field>
-      ))}
+      <div className={cn("gap-4", horizontal ? "grid sm:grid-cols-3" : "space-y-4")}>
+        {fields.map(({ name, label, autoComplete }) => (
+          <form.Field key={name} name={name}>
+            {(field) => (
+              <div className="space-y-2">
+                <Label htmlFor={field.name}>{label}</Label>
+                <PasswordInput
+                  id={field.name}
+                  name={field.name}
+                  autoComplete={autoComplete}
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(e) => field.handleChange(e.target.value)}
+                />
+                {field.state.meta.errors.map((error) => (
+                  <p key={error?.message} className="text-xs text-destructive">
+                    {error?.message}
+                  </p>
+                ))}
+              </div>
+            )}
+          </form.Field>
+        ))}
+      </div>
 
       <form.Subscribe
         selector={(state) => ({ canSubmit: state.canSubmit, isSubmitting: state.isSubmitting })}
       >
         {({ canSubmit, isSubmitting }) => (
-          <Button type="submit" size="lg" className="w-full" disabled={!canSubmit || isSubmitting}>
+          <Button
+            type="submit"
+            size="lg"
+            className={cn(horizontal ? "w-full sm:w-auto" : "w-full")}
+            disabled={!canSubmit || isSubmitting}
+          >
             {isSubmitting ? t.password.updating : t.password.update}
           </Button>
         )}

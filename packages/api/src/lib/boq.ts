@@ -1,7 +1,7 @@
 import { db } from "@DashboardV2/db";
-import { boqItem, boqVersion } from "@DashboardV2/db/schema";
+import { boqItem, boqVersion, project } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { toAmount } from "./money";
 
@@ -43,12 +43,29 @@ export function leafPredicate(alias: string) {
   );
 }
 
-export async function getVersion(versionId: string) {
-  const [version] = await db.select().from(boqVersion).where(eq(boqVersion.id, versionId));
-  if (!version) {
+/**
+ * Company scoping for the BoQ tree.
+ *
+ * A version, item or period names its project only indirectly, so every lookup
+ * joins back to `project` and filters on the company. Threading `companyId`
+ * through these helpers rather than checking it at each call site means a new
+ * procedure cannot forget it — there is no way to reach a version without
+ * passing one.
+ *
+ * Out-of-company ids read as NOT_FOUND, never FORBIDDEN, matching lib/scope.ts:
+ * a "forbidden" would confirm to one tenant that another tenant's row exists.
+ */
+export async function getVersion(companyId: string, versionId: string) {
+  const [row] = await db
+    .select({ version: boqVersion })
+    .from(boqVersion)
+    .innerJoin(project, eq(project.id, boqVersion.projectId))
+    .where(and(eq(boqVersion.id, versionId), eq(project.companyId, companyId)));
+
+  if (!row) {
     throw new TRPCError({ code: "NOT_FOUND", message: "BoQ version not found" });
   }
-  return version;
+  return row.version;
 }
 
 /**
@@ -56,8 +73,8 @@ export async function getVersion(versionId: string) {
  * progress figures are measured against — letting them move afterwards would
  * silently rewrite every deviation already reported.
  */
-export async function requireDraft(versionId: string) {
-  const version = await getVersion(versionId);
+export async function requireDraft(companyId: string, versionId: string) {
+  const version = await getVersion(companyId, versionId);
   if (version.status !== "draft") {
     throw new TRPCError({
       code: "CONFLICT",
@@ -68,12 +85,13 @@ export async function requireDraft(versionId: string) {
 }
 
 /** Same gate, entered from an item rather than its version. */
-export async function requireDraftForItem(itemId: string) {
+export async function requireDraftForItem(companyId: string, itemId: string) {
   const [row] = await db
     .select({ item: boqItem, versionStatus: boqVersion.status })
     .from(boqItem)
     .innerJoin(boqVersion, eq(boqVersion.id, boqItem.boqVersionId))
-    .where(eq(boqItem.id, itemId));
+    .innerJoin(project, eq(project.id, boqVersion.projectId))
+    .where(and(eq(boqItem.id, itemId), eq(project.companyId, companyId)));
 
   if (!row || row.item.deletedAt !== null) {
     throw new TRPCError({ code: "NOT_FOUND", message: "BoQ item not found" });

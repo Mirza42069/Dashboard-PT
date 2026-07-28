@@ -1,6 +1,6 @@
 {
-  "id": "2d55f9a7-d033-4c56-b6d6-1046815ce118",
-  "prevId": "ff6f68d3-291d-4d28-ad3b-e83d9d06519a",
+  "id": "21fa6c71-6c77-466b-b1a7-7df75cb66f4b",
+  "prevId": "6897fc99-17d8-451e-b07a-c57f0b477a5d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -313,10 +313,30 @@
           "primaryKey": false,
           "notNull": true,
           "default": true
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
-      "foreignKeys": {},
+      "foreignKeys": {
+        "user_company_id_company_id_fk": {
+          "name": "user_company_id_company_id_fk",
+          "tableFrom": "user",
+          "tableTo": "company",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "user_email_unique": {
@@ -398,6 +418,59 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.company": {
+      "name": "company",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "company_code_unique": {
+          "name": "company_code_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "code"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.activity_log": {
       "name": "activity_log",
       "schema": "",
@@ -407,6 +480,12 @@
           "type": "text",
           "primaryKey": true,
           "notNull": true
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "actor_id": {
           "name": "actor_id",
@@ -488,9 +567,37 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "activityLog_companyId_idx": {
+          "name": "activityLog_companyId_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
+        "activity_log_company_id_company_id_fk": {
+          "name": "activity_log_company_id_company_id_fk",
+          "tableFrom": "activity_log",
+          "tableTo": "company",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
         "activity_log_actor_id_user_id_fk": {
           "name": "activity_log_actor_id_user_id_fk",
           "tableFrom": "activity_log",
@@ -519,6 +626,12 @@
           "name": "id",
           "type": "text",
           "primaryKey": true,
+          "notNull": true
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true
         },
         "code": {
@@ -609,9 +722,37 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "equipment_companyId_idx": {
+          "name": "equipment_companyId_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
+        "equipment_company_id_company_id_fk": {
+          "name": "equipment_company_id_company_id_fk",
+          "tableFrom": "equipment",
+          "tableTo": "company",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
         "equipment_project_id_project_id_fk": {
           "name": "equipment_project_id_project_id_fk",
           "tableFrom": "equipment",
@@ -628,10 +769,11 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "equipment_code_unique": {
-          "name": "equipment_code_unique",
+        "equipment_companyId_code_key": {
+          "name": "equipment_companyId_code_key",
           "nullsNotDistinct": false,
           "columns": [
+            "company_id",
             "code"
           ]
         }
@@ -777,6 +919,12 @@
           "primaryKey": true,
           "notNull": true
         },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "sku": {
           "name": "sku",
           "type": "text",
@@ -839,15 +987,45 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "material_companyId_idx": {
+          "name": "material_companyId_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "material_company_id_company_id_fk": {
+          "name": "material_company_id_company_id_fk",
+          "tableFrom": "material",
+          "tableTo": "company",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "material_sku_unique": {
-          "name": "material_sku_unique",
+        "material_companyId_sku_key": {
+          "name": "material_companyId_sku_key",
           "nullsNotDistinct": false,
           "columns": [
+            "company_id",
             "sku"
           ]
         }
@@ -1011,11 +1189,17 @@
           "primaryKey": false,
           "notNull": true
         },
+        "data": {
+          "name": "data",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
         "content_type": {
           "name": "content_type",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "size": {
           "name": "size",
@@ -1077,6 +1261,12 @@
           "name": "id",
           "type": "text",
           "primaryKey": true,
+          "notNull": true
+        },
+        "company_id": {
+          "name": "company_id",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true
         },
         "code": {
@@ -1200,9 +1390,37 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "project_companyId_idx": {
+          "name": "project_companyId_idx",
+          "columns": [
+            {
+              "expression": "company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
+        "project_company_id_company_id_fk": {
+          "name": "project_company_id_company_id_fk",
+          "tableFrom": "project",
+          "tableTo": "company",
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
         "project_manager_id_user_id_fk": {
           "name": "project_manager_id_user_id_fk",
           "tableFrom": "project",
@@ -1219,10 +1437,11 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "project_code_unique": {
-          "name": "project_code_unique",
+        "project_companyId_code_key": {
+          "name": "project_companyId_code_key",
           "nullsNotDistinct": false,
           "columns": [
+            "company_id",
             "code"
           ]
         }

@@ -22,7 +22,7 @@
 - `bun run check-types`: Check TypeScript types across all apps
 - `bun run db:push`: Push schema changes to database
 - `bun run db:seed-admin`: Create/promote the first admin account from the `ADMIN_*` env vars
-- `bun run db:seed-demo`: Load demo construction data (idempotent; rows carry a `DEMO-` prefix)
+- `bun run db:seed-demo`: Load a sample construction portfolio into one company (`--company=<code>`, default `SKN`). Idempotent: it replaces only the exact codes it owns, leaving hand-entered rows alone
 - `bun run db:generate`: Generate database client/types
 - `bun run db:migrate`: Run database migrations
 - `bun run db:studio`: Open database studio UI

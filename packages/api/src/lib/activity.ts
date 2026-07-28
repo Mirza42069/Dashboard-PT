@@ -28,12 +28,19 @@ export type ActivityInput = {
  *    they already hold. Looking the entity up afterwards would return nothing
  *    for exactly the events that matter most — deletions.
  */
+/**
+ * `companyId` is required, not optional. The feed filters on it with SQL
+ * equality, so a NULL row is written successfully and then never displayed —
+ * a silent hole. Making it mandatory turns "this router forgot its company"
+ * into a compile error instead of a missing audit entry.
+ */
 export async function recordActivity(
-  ctx: Pick<Context, "session">,
+  ctx: Pick<Context, "session"> & { companyId: string },
   input: ActivityInput,
 ): Promise<void> {
   try {
     await db.insert(activityLog).values({
+      companyId: ctx.companyId,
       actorId: ctx.session?.user.id ?? null,
       actorName: ctx.session?.user.name ?? "System",
       action: input.action,

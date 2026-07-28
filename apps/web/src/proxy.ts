@@ -16,10 +16,13 @@ export default function proxy(request: NextRequest) {
     (path) => pathname === path || pathname.startsWith(`${path}/`),
   );
 
+  // Public pages always render. Bouncing signed-in users away from /login is
+  // done by the page itself, which resolves the *real* session — doing it here
+  // on cookie presence alone deadlocks: a cookie that no longer resolves sends
+  // /login -> /dashboard -> requireSession() -> /login, and the browser gives up
+  // with ERR_TOO_MANY_REDIRECTS. That state is unrecoverable from the UI,
+  // because the one page that could fix it is the one you can never reach.
   if (isPublic) {
-    if (hasSessionCookie) {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
-    }
     return NextResponse.next();
   }
 

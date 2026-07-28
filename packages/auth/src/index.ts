@@ -38,6 +38,15 @@ export function createAuth(opts: CreateAuthOptions = {}) {
           defaultValue: true,
           input: false,
         },
+        // The tenant this account is pinned to. Null for admins, who choose an
+        // active company instead. `input: false` for the same reason as above:
+        // a user must never be able to move themselves to another company by
+        // putting a companyId in a request body.
+        companyId: {
+          type: "string",
+          required: false,
+          input: false,
+        },
       },
     },
     secret: env.BETTER_AUTH_SECRET,

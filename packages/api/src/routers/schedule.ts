@@ -10,10 +10,11 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
-import { adminProcedure, protectedProcedure, router } from "../index";
+import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
-import { leafPredicate, requireDraft } from "../lib/boq";
+import { getVersion, leafPredicate, requireDraft } from "../lib/boq";
+import { assertProjectInScope } from "../lib/scope";
 import { PeriodRangeError, generatePeriods } from "../lib/periods";
 import { toAmount } from "../lib/money";
 
@@ -79,9 +80,12 @@ async function assertPeriodsOfProject(projectId: string, periodIds: string[]) {
 }
 
 export const scheduleRouter = router({
-  listPeriods: protectedProcedure
+  listPeriods: companyProcedure
     .input(z.object({ projectId: z.string().min(1) }))
-    .query(({ input }) => listPeriodsFor(input.projectId)),
+    .query(async ({ ctx, input }) => {
+      await assertProjectInScope(ctx.companyId, input.projectId);
+      return listPeriodsFor(input.projectId);
+    }),
 
   /**
    * Rebuilds the time axis from the project's dates and cadence.
@@ -90,10 +94,13 @@ export const scheduleRouter = router({
    * reading is attached to, and regenerating them would either orphan those
    * readings or move them to dates nobody reported against.
    */
-  generatePeriods: adminProcedure
+  generatePeriods: adminCompanyProcedure
     .input(z.object({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const [target] = await db.select().from(project).where(eq(project.id, input.projectId));
+      const [target] = await db
+        .select()
+        .from(project)
+        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
@@ -161,9 +168,11 @@ export const scheduleRouter = router({
       return { periods: await listPeriodsFor(input.projectId) };
     }),
 
-  getDistribution: protectedProcedure
+  getDistribution: companyProcedure
     .input(z.object({ versionId: z.string().min(1) }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      await getVersion(ctx.companyId, input.versionId);
+
       const rows = await db
         .select({
           boqItemId: boqItemDistribution.boqItemId,
@@ -190,7 +199,7 @@ export const scheduleRouter = router({
    * batch so a half-applied edit cannot leave the row totalling something the
    * user never typed.
    */
-  setDistributionCells: adminProcedure
+  setDistributionCells: adminCompanyProcedure
     .input(
       z.object({
         versionId: z.string().min(1),
@@ -206,8 +215,8 @@ export const scheduleRouter = router({
           .max(2000),
       }),
     )
-    .mutation(async ({ input }) => {
-      const version = await requireDraft(input.versionId);
+    .mutation(async ({ ctx, input }) => {
+      const version = await requireDraft(ctx.companyId, input.versionId);
 
       const itemIds = [...new Set(input.cells.map((cell) => cell.boqItemId))];
       const periodIds = [...new Set(input.cells.map((cell) => cell.periodId))];
@@ -267,10 +276,10 @@ export const scheduleRouter = router({
    * is quicker to correct than an empty row is to fill. The remainder lands on
    * the final period so the row totals exactly 100.
    */
-  distributeEvenly: adminProcedure
+  distributeEvenly: adminCompanyProcedure
     .input(z.object({ versionId: z.string().min(1), boqItemId: z.string().min(1) }))
-    .mutation(async ({ input }) => {
-      const version = await requireDraft(input.versionId);
+    .mutation(async ({ ctx, input }) => {
+      const version = await requireDraft(ctx.companyId, input.versionId);
       await assertLeavesOfVersion(input.versionId, [input.boqItemId]);
 
       const periods = await listPeriodsFor(version.projectId);
@@ -312,10 +321,10 @@ export const scheduleRouter = router({
     }),
 
   /** Clears every planned cell for one item. */
-  clearItemDistribution: adminProcedure
+  clearItemDistribution: adminCompanyProcedure
     .input(z.object({ versionId: z.string().min(1), boqItemId: z.string().min(1) }))
-    .mutation(async ({ input }) => {
-      await requireDraft(input.versionId);
+    .mutation(async ({ ctx, input }) => {
+      await requireDraft(ctx.companyId, input.versionId);
       await assertLeavesOfVersion(input.versionId, [input.boqItemId]);
 
       await db

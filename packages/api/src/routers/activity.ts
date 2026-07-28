@@ -1,27 +1,29 @@
 import { db } from "@DashboardV2/db";
 import { activityLog } from "@DashboardV2/db/schema";
-import { count, desc } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 import z from "zod";
 
-import { protectedProcedure, router } from "../index";
+import { companyProcedure, router } from "../index";
 
 export const activityRouter = router({
-  list: protectedProcedure
+  list: companyProcedure
     .input(
       z.object({
         limit: z.number().int().min(1).max(100).default(10),
         offset: z.number().int().min(0).default(0),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      const inCompany = eq(activityLog.companyId, ctx.companyId);
       const [entries, [total]] = await Promise.all([
         db
           .select()
           .from(activityLog)
+          .where(inCompany)
           .orderBy(desc(activityLog.createdAt))
           .limit(input.limit)
           .offset(input.offset),
-        db.select({ value: count() }).from(activityLog),
+        db.select({ value: count() }).from(activityLog).where(inCompany),
       ]);
 
       // actorName / entityLabel are read straight off the row — no joins. That

@@ -4,9 +4,10 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 import z from "zod";
 
-import { adminProcedure, protectedProcedure, router } from "../index";
+import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { roundAmount, toAmount, toNumericString } from "../lib/money";
+import { assertMaterialInScope, assertProjectInScope } from "../lib/scope";
 
 /**
  * Signed stock expression. `out` subtracts, `in` and `adjustment` add — so a
@@ -40,7 +41,7 @@ const upsertSchema = z.object({
 });
 
 export const materialRouter = router({
-  list: protectedProcedure
+  list: companyProcedure
     .input(
       z.object({
         search: z.string().trim().max(200).default(""),
@@ -49,10 +50,13 @@ export const materialRouter = router({
         offset: z.number().int().min(0).default(0),
       }),
     )
-    .query(async ({ input }) => {
-      const where = input.search
-        ? or(ilike(material.name, `%${input.search}%`), ilike(material.sku, `%${input.search}%`))
-        : undefined;
+    .query(async ({ ctx, input }) => {
+      const where = and(
+        eq(material.companyId, ctx.companyId),
+        input.search
+          ? or(ilike(material.name, `%${input.search}%`), ilike(material.sku, `%${input.search}%`))
+          : undefined,
+      );
 
       const [rows, [total]] = await Promise.all([
         db
@@ -97,7 +101,7 @@ export const materialRouter = router({
       return { materials, total: total?.value ?? 0 };
     }),
 
-  listMovements: protectedProcedure
+  listMovements: companyProcedure
     .input(
       z.object({
         materialId: z.string().min(1).optional(),
@@ -105,8 +109,11 @@ export const materialRouter = router({
         limit: z.number().int().min(1).max(100).default(25),
       }),
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      // The material join below is inner, so scoping the material also scopes
+      // the movements — a movement cannot outlive its material.
       const filters = [
+        eq(material.companyId, ctx.companyId),
         input.materialId ? eq(materialMovement.materialId, input.materialId) : undefined,
         input.projectId ? eq(materialMovement.projectId, input.projectId) : undefined,
       ].filter(Boolean);
@@ -132,9 +139,12 @@ export const materialRouter = router({
         .limit(input.limit);
     }),
 
-  create: adminProcedure.input(upsertSchema).mutation(async ({ ctx, input }) => {
+  create: adminCompanyProcedure.input(upsertSchema).mutation(async ({ ctx, input }) => {
     const sku = input.sku.toUpperCase();
-    const [existing] = await db.select({ id: material.id }).from(material).where(eq(material.sku, sku));
+    const [existing] = await db
+      .select({ id: material.id })
+      .from(material)
+      .where(and(eq(material.sku, sku), eq(material.companyId, ctx.companyId)));
     if (existing) {
       throw new TRPCError({ code: "CONFLICT", message: `SKU ${sku} is already in use` });
     }
@@ -144,6 +154,7 @@ export const materialRouter = router({
       .values({
         ...input,
         sku,
+        companyId: ctx.companyId,
         reorderLevel: toNumericString(input.reorderLevel),
         unitCost: toNumericString(input.unitCost),
       })
@@ -161,12 +172,15 @@ export const materialRouter = router({
     return { id: created?.id };
   }),
 
-  update: adminProcedure
+  update: adminCompanyProcedure
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { id: materialId, sku, reorderLevel, unitCost, ...rest } = input;
 
-      const [current] = await db.select().from(material).where(eq(material.id, materialId));
+      const [current] = await db
+        .select()
+        .from(material)
+        .where(and(eq(material.id, materialId), eq(material.companyId, ctx.companyId)));
       if (!current) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Material not found" });
       }
@@ -174,7 +188,9 @@ export const materialRouter = router({
         const [clash] = await db
           .select({ id: material.id })
           .from(material)
-          .where(eq(material.sku, sku.toUpperCase()));
+          .where(
+            and(eq(material.sku, sku.toUpperCase()), eq(material.companyId, ctx.companyId)),
+          );
         if (clash) {
           throw new TRPCError({ code: "CONFLICT", message: `SKU ${sku} is already in use` });
         }
@@ -193,7 +209,7 @@ export const materialRouter = router({
       return { success: true };
     }),
 
-  recordMovement: adminProcedure
+  recordMovement: adminCompanyProcedure
     .input(
       z.object({
         materialId: z.string().min(1),
@@ -208,9 +224,14 @@ export const materialRouter = router({
       const [target] = await db
         .select({ id: material.id, unit: material.unit, sku: material.sku, name: material.name })
         .from(material)
-        .where(eq(material.id, input.materialId));
+        .where(and(eq(material.id, input.materialId), eq(material.companyId, ctx.companyId)));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Material not found" });
+      }
+      // A movement may name a project, which must belong to the same company —
+      // otherwise it would surface one tenant's site code in the other's ledger.
+      if (input.projectId) {
+        await assertProjectInScope(ctx.companyId, input.projectId);
       }
 
       // Issuing more than is on hand is a data-entry error, not a negative
@@ -246,20 +267,24 @@ export const materialRouter = router({
       return { success: true, stock: await stockOf(input.materialId) };
     }),
 
-  delete: adminProcedure.input(z.object({ id: z.string().min(1) })).mutation(async ({ input }) => {
-    const [movements] = await db
-      .select({ value: count() })
-      .from(materialMovement)
-      .where(eq(materialMovement.materialId, input.id));
+  delete: adminCompanyProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      await assertMaterialInScope(ctx.companyId, input.id);
 
-    if ((movements?.value ?? 0) > 0) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "This material has movement history. Delete it only if it was created in error.",
-      });
-    }
+      const [movements] = await db
+        .select({ value: count() })
+        .from(materialMovement)
+        .where(eq(materialMovement.materialId, input.id));
 
-    await db.delete(material).where(eq(material.id, input.id));
-    return { success: true };
-  }),
+      if ((movements?.value ?? 0) > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This material has movement history. Delete it only if it was created in error.",
+        });
+      }
+
+      await db.delete(material).where(eq(material.id, input.id));
+      return { success: true };
+    }),
 });

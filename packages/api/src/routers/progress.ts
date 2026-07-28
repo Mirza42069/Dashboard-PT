@@ -11,12 +11,13 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
-import { adminProcedure, protectedProcedure, router } from "../index";
+import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { computePctComplete, leafPredicate, serializeItem, serializeVersion } from "../lib/boq";
 import { refreshDataDateStatement } from "../lib/boq-metrics";
 import { toAmount } from "../lib/money";
+import { assertProjectInScope } from "../lib/scope";
 
 export const progressRouter = router({
   /**
@@ -27,9 +28,11 @@ export const progressRouter = router({
    * actual from the same arrays the chart renders means the headline deviation
    * can never disagree with the line the user is looking at.
    */
-  report: protectedProcedure
+  report: companyProcedure
     .input(z.object({ projectId: z.string().min(1) }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      await assertProjectInScope(ctx.companyId, input.projectId);
+
       const [target] = await db
         .select({
           dataDate: project.dataDate,
@@ -139,7 +142,7 @@ export const progressRouter = router({
    * what every progress figure is measured against, and leaving it stale after
    * a successful save would understate the project until the next write.
    */
-  bulkSave: adminProcedure
+  bulkSave: adminCompanyProcedure
     .input(
       z.object({
         periodId: z.string().min(1),
@@ -165,7 +168,8 @@ export const progressRouter = router({
           status: reportingPeriod.status,
         })
         .from(reportingPeriod)
-        .where(eq(reportingPeriod.id, input.periodId));
+        .innerJoin(project, eq(project.id, reportingPeriod.projectId))
+        .where(and(eq(reportingPeriod.id, input.periodId), eq(project.companyId, ctx.companyId)));
 
       if (!period) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Reporting period not found" });
@@ -280,18 +284,32 @@ export const progressRouter = router({
    * Locking freezes a period once it has been reported and agreed. Reversible,
    * because a late correction to an agreed period is a normal thing to need.
    */
-  setPeriodStatus: adminProcedure
+  setPeriodStatus: adminCompanyProcedure
     .input(
       z.object({
         periodId: z.string().min(1),
         status: z.enum(["open", "locked"]),
       }),
     )
-    .mutation(async ({ input }) => {
-      await db
+    .mutation(async ({ ctx, input }) => {
+      const [updated] = await db
         .update(reportingPeriod)
         .set({ status: input.status })
-        .where(eq(reportingPeriod.id, input.periodId));
+        .where(
+          and(
+            eq(reportingPeriod.id, input.periodId),
+            sql`exists (
+              select 1 from project
+              where project.id = ${reportingPeriod.projectId}
+                and project.company_id = ${ctx.companyId}
+            )`,
+          ),
+        )
+        .returning({ id: reportingPeriod.id });
+
+      if (!updated) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Reporting period not found" });
+      }
 
       return { success: true };
     }),

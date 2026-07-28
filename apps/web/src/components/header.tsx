@@ -7,6 +7,7 @@ import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useT } from "@/i18n/provider";
 
 import type { ShellUser } from "./app-shell";
+import CompanySwitcher from "./company-switcher";
 import MobileNav from "./mobile-nav";
 import UserMenu from "./user-menu";
 
@@ -43,6 +44,7 @@ export default function Header({
           </TooltipTrigger>
           <TooltipContent side="bottom">{label}</TooltipContent>
         </Tooltip>
+        <CompanySwitcher />
       </div>
       <UserMenu user={user} />
     </header>

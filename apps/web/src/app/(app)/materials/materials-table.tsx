@@ -1,5 +1,15 @@
 "use client";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@DashboardV2/ui/components/alert-dialog";
 import { Badge } from "@DashboardV2/ui/components/badge";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent } from "@DashboardV2/ui/components/card";
@@ -31,7 +41,7 @@ import {
 } from "@DashboardV2/ui/components/table";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownToLine, ArrowUpFromLine, Plus, TriangleAlert } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import z from "zod";
@@ -64,14 +74,31 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [movementTarget, setMovementTarget] = useState<MaterialRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<MaterialRow | null>(null);
 
   const materialsQuery = useQuery(
     trpc.material.list.queryOptions({ search, lowStockOnly, limit: 100, offset: 0 }),
   );
   const projectOptions = useQuery(trpc.project.options.queryOptions());
+  const deleteMaterial = useMutation(trpc.material.delete.mutationOptions());
 
   const materials = materialsQuery.data?.materials ?? [];
   const lowStockCount = materials.filter((row) => row.isLowStock).length;
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    try {
+      await deleteMaterial.mutateAsync({ id: deleteTarget.id });
+      await queryClient.invalidateQueries(trpc.material.pathFilter());
+      toast.success(t.materials.deletedToast);
+    } catch (error) {
+      // Carries the server's refusal for a material that has movement history,
+      // which is the common case and explains itself better than a generic line.
+      toast.error(error instanceof Error ? error.message : t.common.somethingWentWrong);
+    } finally {
+      setDeleteTarget(null);
+    }
+  }
 
   return (
     <>
@@ -111,7 +138,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                 <TableHead className="text-right">{t.materials.reorderAt}</TableHead>
                 <TableHead className="text-right">{t.materials.unitCost}</TableHead>
                 <TableHead className="text-right">{t.materials.stockValue}</TableHead>
-                {isAdmin && <TableHead className="pr-4 text-right">{t.materials.movement}</TableHead>}
+                {isAdmin && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -156,10 +183,20 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                   <TableCell className="text-right tabular-nums">{money(row.unitCost)}</TableCell>
                   <TableCell className="text-right tabular-nums">{money(row.stockValue)}</TableCell>
                   {isAdmin && (
-                    <TableCell className="pr-4 text-right">
-                      <Button variant="outline" size="sm" onClick={() => setMovementTarget(row)}>
-                        {t.materials.record}
-                      </Button>
+                    <TableCell className="pr-4">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button variant="outline" size="sm" onClick={() => setMovementTarget(row)}>
+                          {t.materials.record}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={interpolate(t.materials.deleteLabel, { name: row.name })}
+                          onClick={() => setDeleteTarget(row)}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
                     </TableCell>
                   )}
                 </TableRow>
@@ -186,6 +223,28 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
               await queryClient.invalidateQueries(trpc.project.pathFilter());
             }}
           />
+
+          <AlertDialog
+            open={deleteTarget !== null}
+            onOpenChange={(open) => {
+              if (!open) setDeleteTarget(null);
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t.materials.deleteTitle}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {interpolate(t.materials.deleteConfirm, { name: deleteTarget?.name ?? "" })}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
+                <AlertDialogAction onClick={() => void confirmDelete()}>
+                  {t.common.delete}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </>
       )}
     </>
