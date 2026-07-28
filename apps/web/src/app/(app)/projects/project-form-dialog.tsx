@@ -78,7 +78,7 @@ export default function ProjectFormDialog({
   const t = useT();
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
-  const managers = useQuery(trpc.task.assignees.queryOptions());
+  const managers = useQuery(trpc.project.managerOptions.queryOptions());
   const statusOptions = PROJECT_STATUSES.map((value) => ({
     value,
     label: statusLabel("project", value),

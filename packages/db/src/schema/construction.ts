@@ -1,7 +1,6 @@
 import { relations, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
-  boolean,
   customType,
   date,
   index,
@@ -56,8 +55,7 @@ export const PROJECT_STATUSES = [
   "completed",
   "cancelled",
 ] as const;
-export const TASK_STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
-export const TASK_PRIORITIES = ["low", "medium", "high"] as const;
+export const TICKET_STATUSES = ["open", "in_progress", "resolved", "closed"] as const;
 export const MOVEMENT_TYPES = ["in", "out", "adjustment"] as const;
 export const EQUIPMENT_STATUSES = ["available", "in_use", "maintenance", "retired"] as const;
 export const EXPENSE_CATEGORIES = [
@@ -78,8 +76,7 @@ export const PERIOD_TYPES = ["weekly", "biweekly", "monthly"] as const;
 export const PERIOD_STATUSES = ["open", "locked"] as const;
 
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
-export type TaskStatus = (typeof TASK_STATUSES)[number];
-export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+export type TicketStatus = (typeof TICKET_STATUSES)[number];
 export type MovementType = (typeof MOVEMENT_TYPES)[number];
 export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
@@ -112,7 +109,7 @@ export const project = pgTable(
     startDate: date("start_date"),
     endDate: date("end_date"),
     /**
-     * Site progress 0-100, entered by the PM rather than derived from tasks.
+      * Site progress 0-100, entered by the PM rather than derived from tickets.
      * Used only as the fallback for projects with no active BoQ baseline — once
      * one exists the API reports progress derived from the BoQ instead.
      */
@@ -140,27 +137,28 @@ export const project = pgTable(
   ],
 );
 
-export const task = pgTable(
-  "task",
+export const ticket = pgTable(
+  "ticket",
   {
     id: id(),
     projectId: text("project_id")
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
-    description: text("description"),
-    status: text("status").$type<TaskStatus>().default("todo").notNull(),
-    priority: text("priority").$type<TaskPriority>().default("medium").notNull(),
-    assigneeId: text("assignee_id").references(() => user.id, { onDelete: "set null" }),
-    dueDate: date("due_date"),
-    isMilestone: boolean("is_milestone").default(false).notNull(),
+    description: text("description").notNull(),
+    issuerId: text("issuer_id").references(() => user.id, { onDelete: "set null" }),
+    /** Snapshot retained if the issuer account is later removed. */
+    issuerName: text("issuer_name").notNull(),
+    responsibleName: text("responsible_name").notNull(),
+    responsibleContactNumber: text("responsible_contact_number").notNull(),
+    status: text("status").$type<TicketStatus>().default("open").notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (table) => [
-    index("task_projectId_idx").on(table.projectId),
-    index("task_assigneeId_idx").on(table.assigneeId),
-    index("task_status_idx").on(table.status),
+    index("ticket_projectId_idx").on(table.projectId),
+    index("ticket_issuerId_idx").on(table.issuerId),
+    index("ticket_status_idx").on(table.status),
   ],
 );
 
@@ -511,7 +509,7 @@ export const notePhoto = pgTable(
 
 export const ACTIVITY_ENTITIES = [
   "project",
-  "task",
+  "ticket",
   "material",
   "equipment",
   "expense",
@@ -525,6 +523,7 @@ export type ActivityEntity = (typeof ACTIVITY_ENTITIES)[number];
 
 export const ACTIVITY_ACTIONS = [
   "created",
+  "updated",
   "deleted",
   "assigned",
   "status_changed",
@@ -581,7 +580,7 @@ export const companyRelations = relations(company, ({ many }) => ({
 export const projectRelations = relations(project, ({ one, many }) => ({
   company: one(company, { fields: [project.companyId], references: [company.id] }),
   manager: one(user, { fields: [project.managerId], references: [user.id] }),
-  tasks: many(task),
+  tickets: many(ticket),
   expenses: many(expense),
   equipment: many(equipment),
   materialMovements: many(materialMovement),
@@ -643,9 +642,9 @@ export const notePhotoRelations = relations(notePhoto, ({ one }) => ({
   note: one(projectNote, { fields: [notePhoto.noteId], references: [projectNote.id] }),
 }));
 
-export const taskRelations = relations(task, ({ one }) => ({
-  project: one(project, { fields: [task.projectId], references: [project.id] }),
-  assignee: one(user, { fields: [task.assigneeId], references: [user.id] }),
+export const ticketRelations = relations(ticket, ({ one }) => ({
+  project: one(project, { fields: [ticket.projectId], references: [project.id] }),
+  issuer: one(user, { fields: [ticket.issuerId], references: [user.id] }),
 }));
 
 export const materialRelations = relations(material, ({ one, many }) => ({

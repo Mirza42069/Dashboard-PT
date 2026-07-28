@@ -374,7 +374,7 @@ function MovementDialog({
   const schema = z.object({
     type: z.enum(MOVEMENT_TYPES),
     quantity: z.number().positive(t.materials.quantityPositive),
-    occurredOn: z.iso.date(t.expenses.pickDate),
+    occurredOn: z.iso.date(t.materials.pickDate),
     projectId: z.string(),
     note: z.string().max(500),
   });

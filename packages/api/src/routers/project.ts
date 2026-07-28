@@ -6,7 +6,7 @@ import {
   equipment,
   expense,
   project,
-  task,
+  ticket,
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
@@ -42,15 +42,15 @@ const upsertSchema = z.object({
   notes: z.string().max(2000).optional(),
 });
 
-/** Open (not done) task counts per project. */
-async function openTasksByProject(projectIds: string[]) {
+/** Tickets remain open until somebody explicitly closes them. */
+async function openTicketsByProject(projectIds: string[]) {
   if (projectIds.length === 0) return new Map<string, number>();
 
   const rows = await db
-    .select({ projectId: task.projectId, open: count() })
-    .from(task)
-    .where(and(inArray(task.projectId, projectIds), sql`${task.status} <> 'done'`))
-    .groupBy(task.projectId);
+    .select({ projectId: ticket.projectId, open: count() })
+    .from(ticket)
+    .where(and(inArray(ticket.projectId, projectIds), sql`${ticket.status} <> 'closed'`))
+    .groupBy(ticket.projectId);
 
   return new Map(rows.map((row) => [row.projectId, row.open]));
 }
@@ -62,7 +62,7 @@ async function openTasksByProject(projectIds: string[]) {
  */
 function decorate(
   row: typeof project.$inferSelect,
-  openTasks: number,
+  openTickets: number,
   boq?: BoqMetrics,
 ) {
   const contractValue = boq?.contractValue ?? null;
@@ -79,7 +79,7 @@ function decorate(
       contractValue === null || workCompletedValue === null
         ? null
         : percentOf(workCompletedValue, contractValue),
-    openTasks,
+    openTickets,
     /** The figure to show. Read this rather than `progress`. */
     progressPercent: boq ? boq.progress : row.progress,
     progressSource: boq ? ("boq" as const) : ("manual" as const),
@@ -126,14 +126,14 @@ export const projectRouter = router({
       ]);
 
       const ids = rows.map((row) => row.id);
-      const [openTasks, boq] = await Promise.all([
-        openTasksByProject(ids),
+      const [openTickets, boq] = await Promise.all([
+        openTicketsByProject(ids),
         boqMetricsByProject(ids),
       ]);
 
       return {
         projects: rows.map((row) =>
-          decorate(row, openTasks.get(row.id) ?? 0, boq.get(row.id)),
+          decorate(row, openTickets.get(row.id) ?? 0, boq.get(row.id)),
         ),
         total: total?.value ?? 0,
       };
@@ -148,6 +148,19 @@ export const projectRouter = router({
       .orderBy(asc(project.code));
   }),
 
+  managerOptions: companyProcedure.query(async ({ ctx }) => {
+    return db
+      .select({ id: user.id, name: user.name, email: user.email })
+      .from(user)
+      .where(
+        and(
+          eq(user.banned, false),
+          or(eq(user.companyId, ctx.companyId), eq(user.role, "admin")),
+        ),
+      )
+      .orderBy(asc(user.name));
+  }),
+
   get: companyProcedure.input(z.object({ id: z.string().min(1) })).query(async ({ ctx, input }) => {
     const [row] = await db
       .select()
@@ -157,8 +170,8 @@ export const projectRouter = router({
       throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
     }
 
-    const [openTasks, boq, manager] = await Promise.all([
-      openTasksByProject([row.id]),
+    const [openTickets, boq, manager] = await Promise.all([
+      openTicketsByProject([row.id]),
       boqMetricsByProject([row.id]),
       row.managerId
         ? db
@@ -169,7 +182,7 @@ export const projectRouter = router({
     ]);
 
     return {
-      ...decorate(row, openTasks.get(row.id) ?? 0, boq.get(row.id)),
+      ...decorate(row, openTickets.get(row.id) ?? 0, boq.get(row.id)),
       manager: manager[0] ?? null,
     };
   }),
@@ -202,7 +215,7 @@ export const projectRouter = router({
   /** Everything the dashboard needs, in one round trip. */
   summary: companyProcedure.query(async ({ ctx }) => {
     const inCompany = eq(project.companyId, ctx.companyId);
-    const [projectRows, [baselineTotal], [openTaskRow]] = await Promise.all([
+    const [projectRows, [baselineTotal], [openTicketRow]] = await Promise.all([
       db
         .select({ id: project.id, status: project.status })
         .from(project)
@@ -220,9 +233,9 @@ export const projectRouter = router({
         ),
       db
         .select({ value: count() })
-        .from(task)
-        .innerJoin(project, eq(task.projectId, project.id))
-        .where(and(inCompany, sql`${task.status} <> 'done'`)),
+        .from(ticket)
+        .innerJoin(project, eq(ticket.projectId, project.id))
+        .where(and(inCompany, sql`${ticket.status} <> 'closed'`)),
     ]);
 
     const boq = await boqMetricsByProject(projectRows.map((row) => row.id));
@@ -253,7 +266,7 @@ export const projectRouter = router({
       workCompletedValue,
       valueCompletionPercent:
         workCompletedValue === null ? null : percentOf(workCompletedValue, portfolioValue),
-      openTasks: openTaskRow?.value ?? 0,
+      openTickets: openTicketRow?.value ?? 0,
     };
   }),
 
@@ -342,7 +355,7 @@ export const projectRouter = router({
     }),
 
   /**
-   * Tasks and expenses cascade, but that is a lot of history to lose by
+   * Tickets and expenses cascade, but that is a lot of history to lose by
    * accident, so deleting a project with either requires an explicit confirm.
    * Equipment is only unassigned, never deleted — it outlives the site.
    */
@@ -359,18 +372,18 @@ export const projectRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
 
-      const [[expenses], [tasks]] = await Promise.all([
+      const [[expenses], [tickets]] = await Promise.all([
         db.select({ value: count() }).from(expense).where(eq(expense.projectId, input.id)),
-        db.select({ value: count() }).from(task).where(eq(task.projectId, input.id)),
+        db.select({ value: count() }).from(ticket).where(eq(ticket.projectId, input.id)),
       ]);
 
       const expenseCount = expenses?.value ?? 0;
-      const taskCount = tasks?.value ?? 0;
+      const ticketCount = tickets?.value ?? 0;
 
-      if (!input.force && (expenseCount > 0 || taskCount > 0)) {
+      if (!input.force && (expenseCount > 0 || ticketCount > 0)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `This project has ${taskCount} task(s) and ${expenseCount} expense(s), which will be deleted with it. Confirm to continue.`,
+          message: `This project has ${ticketCount} ticket(s) and ${expenseCount} expense(s), which will be deleted with it. Confirm to continue.`,
         });
       }
 
@@ -388,6 +401,6 @@ export const projectRouter = router({
         entityLabel: `${target.code} · ${target.name}`,
       });
 
-      return { success: true, deletedTasks: taskCount, deletedExpenses: expenseCount };
+      return { success: true, deletedTickets: ticketCount, deletedExpenses: expenseCount };
     }),
 });

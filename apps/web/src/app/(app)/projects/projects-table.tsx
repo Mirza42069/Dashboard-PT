@@ -173,7 +173,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                 <TableHead className="w-44">{t.projects.siteProgress}</TableHead>
                 <TableHead className="text-right">{t.projects.contract}</TableHead>
                 <TableHead>{t.projects.dueColumn}</TableHead>
-                <TableHead className="text-right">{t.projects.openTasksColumn}</TableHead>
+                <TableHead className="text-right">{t.projects.openTicketsColumn}</TableHead>
                 {isAdmin && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
               </TableRow>
             </TableHeader>
@@ -242,7 +242,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                     {row.contractValue === null ? "—" : money(row.contractValue)}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(row.endDate)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{row.openTasks}</TableCell>
+                  <TableCell className="text-right tabular-nums">{row.openTickets}</TableCell>
                   {isAdmin && (
                     <TableCell className="pr-4 text-right">
                       <DropdownMenu>

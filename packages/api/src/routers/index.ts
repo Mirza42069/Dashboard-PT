@@ -11,7 +11,7 @@ import { noteRouter } from "./note";
 import { progressRouter } from "./progress";
 import { projectRouter } from "./project";
 import { scheduleRouter } from "./schedule";
-import { taskRouter } from "./task";
+import { ticketRouter } from "./ticket";
 
 export const appRouter = router({
   healthCheck: publicProcedure.query(() => {
@@ -28,7 +28,7 @@ export const appRouter = router({
   admin: adminRouter,
   company: companyRouter,
   project: projectRouter,
-  task: taskRouter,
+  ticket: ticketRouter,
   material: materialRouter,
   equipment: equipmentRouter,
   expense: expenseRouter,

@@ -25,10 +25,10 @@ import {
   material,
   materialMovement,
   project,
-  task,
+  ticket,
   user,
 } from "@DashboardV2/db/schema";
-import type { ExpenseCategory, ProjectStatus, TaskStatus } from "@DashboardV2/db/schema";
+import type { ExpenseCategory, ProjectStatus } from "@DashboardV2/db/schema";
 import { and, eq, inArray } from "drizzle-orm";
 
 const DEFAULT_COMPANY_CODE = "SKN";
@@ -79,13 +79,11 @@ const PROJECT_SEEDS: {
   { suffix: "006", name: "Lakeside Apartments", client: "Lakeside Developments", location: "Lakeside", status: "completed", progress: 100, start: -520, end: -40 },
 ];
 
-const TASK_TITLES = [
-  "Site survey and setup", "Excavation and groundworks", "Foundation pour", "Steel frame erection",
-  "First-floor slab", "Roof structure", "External cladding", "Window installation",
-  "First-fix electrical", "First-fix plumbing", "Internal partitions", "Plastering",
-  "Second-fix electrical", "Flooring", "External drainage", "Landscaping",
-  "Fire safety inspection", "Snagging and handover",
-];
+const TICKET_SEEDS = [
+  ["Water ingress reported in basement", "Inspect the west wall and confirm the source of the leak."],
+  ["Damaged access gate", "The main access gate does not close securely after delivery traffic."],
+  ["Missing safety signage", "Replace the warning signs near the active work area."],
+] as const;
 
 const MATERIAL_SEEDS = [
   { suffix: "CEM", name: "Portland Cement 42.5N", unit: "bag", reorder: 200, cost: 9.5, opening: 640 },
@@ -217,25 +215,26 @@ async function main() {
     .returning({ id: project.id, code: project.code });
   console.log(`Inserted ${projects.length} projects`);
 
-  // --- Tasks --------------------------------------------------------------
-  const taskRows = projects.flatMap((row) => {
-    const count = between(5, 9);
-    return Array.from({ length: count }, (_, index) => {
-      const status: TaskStatus =
-        index < count * 0.4 ? "done" : index < count * 0.7 ? "in_progress" : pick(["todo", "blocked"]);
-      return {
-        projectId: row.id,
-        title: TASK_TITLES[(index * 3 + projects.indexOf(row)) % TASK_TITLES.length] as string,
-        status,
-        priority: pick(["low", "medium", "high"] as const),
-        assigneeId: admin.id,
-        dueDate: isoDate(between(-40, 90)),
-        isMilestone: index % 4 === 0,
-      };
-    });
+  // --- Tickets ------------------------------------------------------------
+  const ticketRows = projects.map((row, projectIndex) => {
+    const [title, description] = TICKET_SEEDS[projectIndex % TICKET_SEEDS.length]!;
+    return {
+      projectId: row.id,
+      title,
+      description,
+      issuerId: admin.id,
+      issuerName: "Demo administrator",
+      responsibleName: "Demo administrator",
+      responsibleContactNumber: "+62 812 0000 0000",
+      status: (projectIndex % 3 === 0
+        ? "open"
+        : projectIndex % 3 === 1
+          ? "in_progress"
+          : "resolved") as "open" | "in_progress" | "resolved" | "closed",
+    };
   });
-  await db.insert(task).values(taskRows);
-  console.log(`Inserted ${taskRows.length} tasks`);
+  await db.insert(ticket).values(ticketRows);
+  console.log(`Inserted ${ticketRows.length} tickets`);
 
   // --- Expenses -----------------------------------------------------------
   const expenseRows = projects.flatMap((row) => {

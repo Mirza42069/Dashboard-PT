@@ -61,9 +61,9 @@ export default function DashboardOverview() {
     },
     {
       icon: ListChecks,
-      label: t.dashboard.openTasks,
-      value: String(data.openTasks),
-      hint: t.dashboard.openTasksHint,
+      label: t.dashboard.openTickets,
+      value: String(data.openTickets),
+      hint: t.dashboard.openTicketsHint,
     },
   ];
 

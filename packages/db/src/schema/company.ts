@@ -9,7 +9,7 @@ import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
  * either one would create an import cycle.
  *
  * Every root entity belongs to exactly one company, and a user sees exactly one
- * company at a time. Child rows — tasks, expenses, notes, movements — carry no
+ * company at a time. Child rows — tickets, expenses, notes, movements — carry no
  * company of their own; they inherit it through their parent, which is the only
  * way it cannot drift out of sync.
  */

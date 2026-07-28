@@ -117,7 +117,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
           value={status}
           onValueChange={(value) => setStatus(value ?? ALL)}
         >
-          <SelectTrigger className="w-44" aria-label={t.tasks.statusColumn}>
+          <SelectTrigger className="w-44" aria-label={t.equipment.statusColumn}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -145,7 +145,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
               <TableRow>
                 <TableHead className="pl-4">{t.equipment.equipment}</TableHead>
                 <TableHead>{t.equipment.category}</TableHead>
-                <TableHead>{t.tasks.statusColumn}</TableHead>
+                <TableHead>{t.equipment.statusColumn}</TableHead>
                 <TableHead>{t.equipment.deployedTo}</TableHead>
                 <TableHead>{t.equipment.purchased}</TableHead>
                 {isAdmin && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
