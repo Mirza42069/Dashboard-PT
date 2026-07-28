@@ -1,11 +1,20 @@
 import { db } from "@DashboardV2/db";
-import { equipment, expense, PROJECT_STATUSES, project, task, user } from "@DashboardV2/db/schema";
+import {
+  PERIOD_TYPES,
+  PROJECT_STATUSES,
+  equipment,
+  expense,
+  project,
+  task,
+  user,
+} from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, ilike, inArray, or, sql, sum } from "drizzle-orm";
 import z from "zod";
 
 import { adminProcedure, protectedProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
+import { type BoqMetrics, boqMetricsByProject } from "../lib/boq-metrics";
 import { percentOf, toAmount, toNumericString } from "../lib/money";
 
 const statusSchema = z.enum(PROJECT_STATUSES);
@@ -27,6 +36,8 @@ const upsertSchema = z.object({
   contractValue: z.number().min(0).default(0),
   budget: z.number().min(0).default(0),
   progress: z.number().int().min(0).max(100).default(0),
+  periodType: z.enum(PERIOD_TYPES).default("weekly"),
+  scheduleStart: z.iso.date().optional(),
   managerId: z.string().min(1).optional(),
   notes: z.string().max(2000).optional(),
 });
@@ -57,7 +68,17 @@ async function openTasksByProject(projectIds: string[]) {
   return new Map(rows.map((row) => [row.projectId, row.open]));
 }
 
-function decorate(row: typeof project.$inferSelect, spent: number, openTasks: number) {
+/**
+ * `boq` is present only for projects with an active baseline. Everything else
+ * keeps reporting the progress figure the PM typed in, so adding the BoQ module
+ * changed nothing for projects that do not use it.
+ */
+function decorate(
+  row: typeof project.$inferSelect,
+  spent: number,
+  openTasks: number,
+  boq?: BoqMetrics,
+) {
   const budget = toAmount(row.budget);
   return {
     ...row,
@@ -68,6 +89,13 @@ function decorate(row: typeof project.$inferSelect, spent: number, openTasks: nu
     budgetUsedPercent: percentOf(spent, budget),
     isOverBudget: budget > 0 && spent > budget,
     openTasks,
+    /** The figure to show. Read this rather than `progress`. */
+    progressPercent: boq ? boq.progress : row.progress,
+    progressSource: boq ? ("boq" as const) : ("manual" as const),
+    plannedPercent: boq?.planned ?? null,
+    /** actual − planned. Negative is behind. Null when nothing is reported. */
+    deviation: boq?.deviation ?? null,
+    dataDate: boq?.dataDate ?? null,
   };
 }
 
@@ -106,14 +134,15 @@ export const projectRouter = router({
       ]);
 
       const ids = rows.map((row) => row.id);
-      const [spend, openTasks] = await Promise.all([
+      const [spend, openTasks, boq] = await Promise.all([
         spendByProject(ids),
         openTasksByProject(ids),
+        boqMetricsByProject(ids),
       ]);
 
       return {
         projects: rows.map((row) =>
-          decorate(row, spend.get(row.id) ?? 0, openTasks.get(row.id) ?? 0),
+          decorate(row, spend.get(row.id) ?? 0, openTasks.get(row.id) ?? 0, boq.get(row.id)),
         ),
         total: total?.value ?? 0,
       };
@@ -133,9 +162,10 @@ export const projectRouter = router({
       throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
     }
 
-    const [spend, openTasks, manager, spendByCategory] = await Promise.all([
+    const [spend, openTasks, boq, manager, spendByCategory] = await Promise.all([
       spendByProject([row.id]),
       openTasksByProject([row.id]),
+      boqMetricsByProject([row.id]),
       row.managerId
         ? db
             .select({ id: user.id, name: user.name, email: user.email })
@@ -150,7 +180,7 @@ export const projectRouter = router({
     ]);
 
     return {
-      ...decorate(row, spend.get(row.id) ?? 0, openTasks.get(row.id) ?? 0),
+      ...decorate(row, spend.get(row.id) ?? 0, openTasks.get(row.id) ?? 0, boq.get(row.id)),
       manager: manager[0] ?? null,
       spendByCategory: spendByCategory.map((entry) => ({
         category: entry.category,
@@ -158,6 +188,30 @@ export const projectRouter = router({
       })),
     };
   }),
+
+  /**
+   * Projects running behind their baseline, worst first. Only projects with an
+   * active BoQ and at least one reading can be behind — everything else has no
+   * plan to be measured against and is left out rather than shown as on track.
+   */
+  behindSchedule: protectedProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(20).default(5) }))
+    .query(async ({ input }) => {
+      const rows = await db
+        .select({ id: project.id, code: project.code, name: project.name, client: project.client })
+        .from(project);
+
+      const metrics = await boqMetricsByProject(rows.map((row) => row.id));
+
+      return rows
+        .flatMap((row) => {
+          const boq = metrics.get(row.id);
+          if (!boq || boq.deviation === null || boq.deviation >= 0) return [];
+          return [{ ...row, ...boq, deviation: boq.deviation }];
+        })
+        .sort((a, b) => a.deviation - b.deviation)
+        .slice(0, input.limit);
+    }),
 
   /** Everything the dashboard needs, in one round trip. */
   summary: protectedProcedure.query(async () => {

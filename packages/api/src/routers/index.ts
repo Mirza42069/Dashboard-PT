@@ -2,11 +2,14 @@ import { protectedProcedure, publicProcedure, router } from "../index";
 import { accountRouter } from "./account";
 import { activityRouter } from "./activity";
 import { adminRouter } from "./admin";
+import { boqRouter } from "./boq";
 import { equipmentRouter } from "./equipment";
 import { expenseRouter } from "./expense";
 import { materialRouter } from "./material";
 import { noteRouter } from "./note";
+import { progressRouter } from "./progress";
 import { projectRouter } from "./project";
+import { scheduleRouter } from "./schedule";
 import { taskRouter } from "./task";
 
 export const appRouter = router({
@@ -28,5 +31,8 @@ export const appRouter = router({
   equipment: equipmentRouter,
   expense: expenseRouter,
   note: noteRouter,
+  boq: boqRouter,
+  schedule: scheduleRouter,
+  progress: progressRouter,
 });
 export type AppRouter = typeof appRouter;

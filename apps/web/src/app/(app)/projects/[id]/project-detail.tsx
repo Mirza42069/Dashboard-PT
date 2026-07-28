@@ -32,6 +32,7 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 
+import { DeviationBadge } from "@/components/deviation-badge";
 import { BudgetMeter, Meter } from "@/components/meter";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
@@ -40,7 +41,10 @@ import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import AddExpenseDialog from "./add-expense-dialog";
+import BoqTab from "./boq-tab";
 import NotesTab from "./notes-tab";
+import ProgressTab from "./progress-tab";
+import ScheduleTab from "./schedule-tab";
 
 const TASK_STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
 
@@ -162,13 +166,29 @@ export default function ProjectDetail({
             <CardDescription>{t.projects.siteProgress}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-xl font-semibold tabular-nums">{project.progress}%</p>
-            <Meter value={project.progress} max={100} />
-            <p className="text-xs text-muted-foreground">
-              {doneRatio === null
-                ? t.projects.noTasksYet
-                : interpolate(t.projects.tasksDone, { percent: `${doneRatio}%` })}
+            <p className="text-xl font-semibold tabular-nums">
+              {project.progressPercent.toFixed(project.progressSource === "boq" ? 1 : 0)}%
             </p>
+            <Meter value={project.progressPercent} max={100} />
+            {/* With a baseline the figure is measured, so the deviation against
+                it is the useful caption; without one it is a typed estimate and
+                the task ratio is the only corroboration available. */}
+            {project.progressSource === "boq" ? (
+              <div className="space-y-0.5">
+                <DeviationBadge value={project.deviation} className="text-xs" />
+                <p className="text-xs text-muted-foreground">
+                  {project.dataDate
+                    ? interpolate(t.projects.asOf, { date: formatDate(project.dataDate) })
+                    : t.projects.progressFromBoq}
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {doneRatio === null
+                  ? t.projects.noTasksYet
+                  : interpolate(t.projects.tasksDone, { percent: `${doneRatio}%` })}
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -184,10 +204,25 @@ export default function ProjectDetail({
           <TabsTrigger value="tasks">
             {interpolate(t.projects.tabTasks, { count: tasks.length })}
           </TabsTrigger>
+          <TabsTrigger value="boq">{t.projects.tabBoq}</TabsTrigger>
+          <TabsTrigger value="schedule">{t.projects.tabSchedule}</TabsTrigger>
+          <TabsTrigger value="progress">{t.projects.tabProgress}</TabsTrigger>
           <TabsTrigger value="expenses">{t.projects.tabExpenses}</TabsTrigger>
           <TabsTrigger value="materials">{t.projects.tabMaterials}</TabsTrigger>
           <TabsTrigger value="notes">{t.notes.tab}</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="boq">
+          <BoqTab projectId={projectId} isAdmin={isAdmin} />
+        </TabsContent>
+
+        <TabsContent value="schedule">
+          <ScheduleTab projectId={projectId} isAdmin={isAdmin} />
+        </TabsContent>
+
+        <TabsContent value="progress">
+          <ProgressTab projectId={projectId} isAdmin={isAdmin} />
+        </TabsContent>
 
         <TabsContent value="tasks">
           <Card>

@@ -13,6 +13,7 @@ import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import ActivityFeed from "./activity-feed";
+import BehindSchedule from "./behind-schedule";
 
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
 
@@ -110,6 +111,10 @@ export default function DashboardOverview() {
           </CardContent>
         </Card>
 
+        <BehindSchedule />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
         <ActivityFeed />
       </div>
     </div>

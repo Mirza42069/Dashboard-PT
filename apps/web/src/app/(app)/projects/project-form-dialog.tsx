@@ -28,6 +28,7 @@ import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
+const PERIOD_TYPES = ["weekly", "biweekly", "monthly"] as const;
 
 const schema = z
   .object({
@@ -46,6 +47,8 @@ const schema = z
     contractValue: z.number().min(0),
     budget: z.number().min(0),
     progress: z.number().int().min(0).max(100),
+    periodType: z.enum(PERIOD_TYPES),
+    scheduleStart: z.string(),
     managerId: z.string(),
     notes: z.string().max(2000),
   })
@@ -66,6 +69,8 @@ export const EMPTY_PROJECT: ProjectFormValues = {
   contractValue: 0,
   budget: 0,
   progress: 0,
+  periodType: "weekly",
+  scheduleStart: "",
   managerId: "",
   notes: "",
 };
@@ -110,6 +115,8 @@ export default function ProjectFormDialog({
         contractValue: value.contractValue,
         budget: value.budget,
         progress: value.progress,
+        periodType: value.periodType,
+        scheduleStart: blankToUndefined(value.scheduleStart),
         managerId: blankToUndefined(value.managerId),
         notes: blankToUndefined(value.notes),
       };
@@ -231,6 +238,41 @@ export default function ProjectFormDialog({
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                )}
+              </form.Field>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <form.Field name="periodType">
+                {(field) => (
+                  <div className="space-y-2">
+                    <Label htmlFor={field.name}>{t.projects.periodType}</Label>
+                    <Select
+                      value={field.state.value}
+                      onValueChange={(value) =>
+                        field.handleChange((value ?? "weekly") as ProjectFormValues["periodType"])
+                      }
+                    >
+                      <SelectTrigger id={field.name} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="weekly">{t.projects.periodWeekly}</SelectItem>
+                        <SelectItem value="biweekly">{t.projects.periodBiweekly}</SelectItem>
+                        <SelectItem value="monthly">{t.projects.periodMonthly}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </form.Field>
+              <form.Field name="scheduleStart">
+                {(field) => (
+                  <div className="space-y-2">
+                    <Field label={t.projects.scheduleStart} field={field} type="date" />
+                    <p className="text-xs text-muted-foreground">
+                      {t.projects.scheduleStartHint}
+                    </p>
                   </div>
                 )}
               </form.Field>

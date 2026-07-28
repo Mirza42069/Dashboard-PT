@@ -42,6 +42,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { DeviationBadge } from "@/components/deviation-badge";
 import { Meter } from "@/components/meter";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
@@ -105,6 +106,8 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
       contractValue: row.contractValue,
       budget: row.budget,
       progress: row.progress,
+      periodType: row.periodType,
+      scheduleStart: row.scheduleStart ?? "",
       managerId: row.managerId ?? "",
       notes: row.notes ?? "",
     });
@@ -170,6 +173,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                 <TableHead>{t.projects.statusLabel}</TableHead>
                 <TableHead>{t.projects.client}</TableHead>
                 <TableHead className="w-56">{t.projects.budgetUsed}</TableHead>
+                <TableHead className="w-44">{t.projects.siteProgress}</TableHead>
                 <TableHead className="text-right">{t.projects.contract}</TableHead>
                 <TableHead>{t.projects.dueColumn}</TableHead>
                 <TableHead className="text-right">{t.projects.openTasksColumn}</TableHead>
@@ -180,7 +184,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
               {projectsQuery.isPending &&
                 Array.from({ length: 5 }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={isAdmin ? 8 : 7} className="pl-4">
+                    <TableCell colSpan={isAdmin ? 9 : 8} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -189,7 +193,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
               {!projectsQuery.isPending && projects.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={isAdmin ? 8 : 7}
+                    colSpan={isAdmin ? 9 : 8}
                     className="py-10 text-center text-muted-foreground"
                   >
                     {search || status !== ALL ? t.projects.noMatch : t.projects.empty}
@@ -218,6 +222,19 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                         <span className="ml-1 font-medium text-destructive">
                           {t.projects.over}
                         </span>
+                      )}
+                    </p>
+                  </TableCell>
+                  <TableCell>
+                    <Meter value={row.progressPercent} max={100} />
+                    <p className="mt-1 text-muted-foreground">
+                      {row.progressPercent.toFixed(row.progressSource === "boq" ? 1 : 0)}%
+                      {row.progressSource === "boq" ? (
+                        <span className="ml-1.5">
+                          <DeviationBadge value={row.deviation} />
+                        </span>
+                      ) : (
+                        <span className="ml-1.5">{t.projects.progressManual}</span>
                       )}
                     </p>
                   </TableCell>
