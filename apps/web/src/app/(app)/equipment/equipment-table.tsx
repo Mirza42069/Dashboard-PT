@@ -106,6 +106,10 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
 
   const rows = equipmentQuery.data?.equipment ?? [];
   const counts = equipmentQuery.data?.counts;
+  const statusItems = [
+    { value: ALL, label: t.common.all },
+    ...STATUSES.map((value) => ({ value, label: statusLabel("equipment", value) })),
+  ];
   const total = equipmentQuery.data?.total ?? 0;
   const hasNextPage = (page + 1) * PAGE_SIZE < total;
 
@@ -166,13 +170,14 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
           aria-label={t.common.search}
         />
         <Select
+          items={statusItems}
           value={status}
           onValueChange={(value) => {
             setStatus(value ?? ALL);
             setPage(0);
           }}
         >
-          <SelectTrigger className="w-44" aria-label={t.tasks.statusColumn}>
+          <SelectTrigger className="w-44" aria-label={t.equipment.statusColumn}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -248,7 +253,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                   {t.equipment.equipment}
                 </TableHead>
                 <TableHead>{t.equipment.category}</TableHead>
-                <TableHead>{t.tasks.statusColumn}</TableHead>
+                <TableHead>{t.equipment.statusColumn}</TableHead>
                 <TableHead>{t.equipment.deployedTo}</TableHead>
                 <TableHead className="pr-4">{t.equipment.purchased}</TableHead>
               </TableRow>
@@ -438,6 +443,13 @@ function BulkAssignDialog({
 }) {
   const t = useT();
   const [value, setValue] = useState<string>(UNASSIGNED);
+  const projectItems = [
+    { value: UNASSIGNED, label: t.equipment.yardUnassigned },
+    ...projects.map((option) => ({
+      value: option.id,
+      label: `${option.code} · ${option.name}`,
+    })),
+  ];
 
   return (
     <Dialog
@@ -452,7 +464,11 @@ function BulkAssignDialog({
         </DialogHeader>
         <div className="space-y-2">
           <Label>{t.equipment.site}</Label>
-          <Select value={value} onValueChange={(next) => setValue(next ?? UNASSIGNED)}>
+          <Select
+            items={projectItems}
+            value={value}
+            onValueChange={(next) => setValue(next ?? UNASSIGNED)}
+          >
             <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>

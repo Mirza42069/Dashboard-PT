@@ -10,13 +10,6 @@ import {
   CardTitle,
 } from "@DashboardV2/ui/components/card";
 import { Empty, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@DashboardV2/ui/components/select";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import {
   Table,
@@ -32,17 +25,18 @@ import { ArrowLeft, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 
-import { BudgetMeter, Meter } from "@/components/meter";
-import { StatusBadge, useStatusLabel } from "@/components/status-badge";
+import { DeviationBadge } from "@/components/deviation-badge";
+import { Meter } from "@/components/meter";
+import { StatusBadge } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
-import AddExpenseDialog from "./add-expense-dialog";
+import BaselineTab from "./baseline-tab";
 import NotesTab from "./notes-tab";
-
-const TASK_STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
+import ProgressTab from "./progress-tab";
+import TicketsTab from "./tickets-tab";
 
 export default function ProjectDetail({
   projectId,
@@ -53,28 +47,15 @@ export default function ProjectDetail({
 }) {
   const t = useT();
   const { money, percent, quantity, formatDate } = useFormat();
-  const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
 
   const projectQuery = useQuery(trpc.project.get.queryOptions({ id: projectId }));
-  const tasksQuery = useQuery(trpc.task.listByProject.queryOptions({ projectId }));
   const expensesQuery = useQuery(trpc.expense.listByProject.queryOptions({ projectId }));
   const movementsQuery = useQuery(trpc.material.listMovements.queryOptions({ projectId, limit: 50 }));
 
-  const setTaskStatus = useMutation(trpc.task.setStatus.mutationOptions());
   const deleteExpense = useMutation(trpc.expense.delete.mutationOptions());
 
   const project = projectQuery.data;
-
-  async function changeTaskStatus(id: string, status: (typeof TASK_STATUSES)[number]) {
-    try {
-      await setTaskStatus.mutateAsync({ id, status });
-      await queryClient.invalidateQueries(trpc.task.pathFilter());
-      await queryClient.invalidateQueries(trpc.project.pathFilter());
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t.tasks.updateFailed);
-    }
-  }
 
   if (projectQuery.isPending) {
     return <Skeleton className="h-64 w-full" />;
@@ -89,11 +70,6 @@ export default function ProjectDetail({
       </Empty>
     );
   }
-
-  const tasks = tasksQuery.data?.tasks ?? [];
-  const taskCounts = tasksQuery.data?.counts;
-  const doneRatio =
-    tasks.length > 0 ? Math.round(((taskCounts?.done ?? 0) / tasks.length) * 100) : null;
 
   return (
     <div className="space-y-4">
@@ -119,7 +95,6 @@ export default function ProjectDetail({
             {project.location && ` · ${project.location}`}
           </p>
         </div>
-        {isAdmin && <AddExpenseDialog projectId={projectId} />}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -128,32 +103,37 @@ export default function ProjectDetail({
             <CardDescription>{t.projects.contractValueTile}</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-xl font-semibold tabular-nums">{money(project.contractValue)}</p>
+            <p className="text-xl font-semibold tabular-nums">
+              {project.contractValue === null ? "—" : money(project.contractValue)}
+            </p>
           </CardContent>
         </Card>
         <Card size="sm">
           <CardHeader>
-            <CardDescription>{t.projects.spentOfBudgetTile}</CardDescription>
+            <CardDescription>{t.projects.workCompleted}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-xl font-semibold tabular-nums">{money(project.spent)}</p>
-            <BudgetMeter spent={project.spent} budget={project.budget} />
+            <p className="text-xl font-semibold tabular-nums">
+              {project.workCompletedValue === null ? "—" : money(project.workCompletedValue)}
+            </p>
+            {project.workCompletedValue !== null && project.contractValue !== null && (
+              <Meter
+                value={project.workCompletedValue}
+                max={project.contractValue}
+                label={percent(project.valueCompletionPercent)}
+              />
+            )}
           </CardContent>
         </Card>
         <Card size="sm">
           <CardHeader>
-            <CardDescription>{t.projects.remaining}</CardDescription>
+            <CardDescription>{t.projects.remainingContractValue}</CardDescription>
           </CardHeader>
           <CardContent>
-            <p
-              className={`text-xl font-semibold tabular-nums ${
-                project.remaining < 0 ? "text-destructive" : ""
-              }`}
-            >
-              {money(project.remaining)}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {project.isOverBudget ? t.projects.overBudgetNote : t.projects.againstBudgetNote}
+            <p className="text-xl font-semibold tabular-nums">
+              {project.remainingContractValue === null
+                ? "—"
+                : money(project.remainingContractValue)}
             </p>
           </CardContent>
         </Card>
@@ -162,13 +142,24 @@ export default function ProjectDetail({
             <CardDescription>{t.projects.siteProgress}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-xl font-semibold tabular-nums">{project.progress}%</p>
-            <Meter value={project.progress} max={100} />
-            <p className="text-xs text-muted-foreground">
-              {doneRatio === null
-                ? t.projects.noTasksYet
-                : interpolate(t.projects.tasksDone, { percent: `${doneRatio}%` })}
+            <p className="text-xl font-semibold tabular-nums">
+              {project.progressPercent.toFixed(project.progressSource === "boq" ? 1 : 0)}%
             </p>
+            <Meter value={project.progressPercent} max={100} />
+            {/* With a baseline the figure is measured; without one there is no
+                physical-progress source to report. */}
+            {project.progressSource === "boq" ? (
+              <div className="space-y-0.5">
+                <DeviationBadge value={project.deviation} className="text-xs" />
+                <p className="text-xs text-muted-foreground">
+                  {project.dataDate
+                    ? interpolate(t.projects.asOf, { date: formatDate(project.dataDate) })
+                    : t.projects.progressFromBoq}
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">{t.projects.noBaselineYet}</p>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -179,104 +170,37 @@ export default function ProjectDetail({
         <Detail label={t.projects.manager} value={project.manager?.name ?? t.common.unassigned} />
       </div>
 
-      <Tabs defaultValue="tasks">
+      <Tabs defaultValue="tickets">
         <TabsList>
-          <TabsTrigger value="tasks">
-            {interpolate(t.projects.tabTasks, { count: tasks.length })}
-          </TabsTrigger>
+          <TabsTrigger value="tickets">{t.projects.tabTickets}</TabsTrigger>
+          <TabsTrigger value="baseline">{t.projects.tabBaseline}</TabsTrigger>
+          <TabsTrigger value="progress">{t.projects.tabProgress}</TabsTrigger>
           <TabsTrigger value="expenses">{t.projects.tabExpenses}</TabsTrigger>
           <TabsTrigger value="materials">{t.projects.tabMaterials}</TabsTrigger>
           <TabsTrigger value="notes">{t.notes.tab}</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="tasks">
-          <Card>
-            <CardContent className="px-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="pl-4">{t.tasks.task}</TableHead>
-                    <TableHead>{t.tasks.priority}</TableHead>
-                    <TableHead>{t.tasks.assignee}</TableHead>
-                    <TableHead>{t.tasks.due}</TableHead>
-                    <TableHead className="pr-4 w-40">{t.tasks.statusColumn}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tasks.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
-                        {t.tasks.empty}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {tasks.map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell className="pl-4">
-                        <span className="font-medium">{row.title}</span>
-                        {row.isMilestone && (
-                          <Badge variant="secondary" className="ml-2">
-                            {t.tasks.milestone}
-                          </Badge>
-                        )}
-                        {row.description && (
-                          <p className="text-muted-foreground">{row.description}</p>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge kind="priority" value={row.priority} />
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {row.assigneeName ?? t.common.unassigned}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatDate(row.dueDate)}
-                      </TableCell>
-                      <TableCell className="pr-4">
-                        {/* Any signed-in user may move work along — the one
-                            intentional exception to admin-only writes. */}
-                        <Select
-                          value={row.status}
-                          onValueChange={(value) =>
-                            void changeTaskStatus(
-                              row.id,
-                              (value ?? row.status) as (typeof TASK_STATUSES)[number],
-                            )
-                          }
-                        >
-                          <SelectTrigger size="sm" className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {TASK_STATUSES.map((status) => (
-                              <SelectItem key={status} value={status}>
-                                {statusLabel("task", status)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+        <TabsContent value="baseline">
+          <BaselineTab projectId={projectId} isAdmin={isAdmin} />
+        </TabsContent>
+
+        <TabsContent value="progress">
+          <ProgressTab projectId={projectId} isAdmin={isAdmin} />
+        </TabsContent>
+
+        <TabsContent value="tickets">
+          <TicketsTab projectId={projectId} />
         </TabsContent>
 
         <TabsContent value="expenses">
           <Card>
             <CardHeader>
-              <CardTitle>{t.expenses.recordedSpend}</CardTitle>
+              <CardTitle>{t.expenses.recordedExpenses}</CardTitle>
               <CardDescription>
                 {interpolate(t.expenses.summary, {
                   total: money(expensesQuery.data?.total ?? 0),
                   count: expensesQuery.data?.expenses.length ?? 0,
                 })}
-                {project.budget > 0 &&
-                  ` · ${interpolate(t.expenses.ofBudget, {
-                    percent: percent(project.budgetUsedPercent),
-                  })}`}
               </CardDescription>
             </CardHeader>
             <CardContent className="px-0">
@@ -321,10 +245,9 @@ export default function ProjectDetail({
                             })}
                             onClick={async () => {
                               try {
-                                await deleteExpense.mutateAsync({ id: row.id });
-                                await queryClient.invalidateQueries(trpc.expense.pathFilter());
-                                await queryClient.invalidateQueries(trpc.project.pathFilter());
-                                toast.success(t.expenses.deleted);
+                                 await deleteExpense.mutateAsync({ id: row.id });
+                                 await queryClient.invalidateQueries(trpc.expense.pathFilter());
+                                 toast.success(t.expenses.deleted);
                               } catch (error) {
                                 toast.error(
                                   error instanceof Error ? error.message : t.expenses.deleteFailed,

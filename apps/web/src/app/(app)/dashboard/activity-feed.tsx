@@ -43,6 +43,8 @@ export default function ActivityFeed() {
     let detail = entry.detail ?? "";
     if (entry.entityType === "equipment" && entry.action === "status_changed" && detail) {
       detail = statusLabel("equipment", detail);
+    } else if (entry.entityType === "ticket" && entry.action === "status_changed" && detail) {
+      detail = statusLabel("ticket", detail);
     } else if (entry.entityType === "equipment" && entry.action === "assigned" && !detail) {
       detail = t.activity.returnedToYard;
     } else if (entry.entityType === "user" && entry.action === "role_changed") {

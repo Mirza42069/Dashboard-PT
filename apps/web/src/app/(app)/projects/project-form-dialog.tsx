@@ -41,16 +41,8 @@ const schema = z
     client: z.string().trim().max(200),
     location: z.string().trim().max(200),
     status: z.enum(PROJECT_STATUSES),
-    startDate: z.string(),
-    endDate: z.string(),
-    contractValue: z.number().min(0),
-    budget: z.number().min(0),
-    progress: z.number().int().min(0).max(100),
     managerId: z.string(),
     notes: z.string().max(2000),
-  })
-  .refine((value) => !value.startDate || !value.endDate || value.endDate >= value.startDate, {
-    path: ["endDate"],
   });
 
 export type ProjectFormValues = z.infer<typeof schema>;
@@ -61,11 +53,6 @@ export const EMPTY_PROJECT: ProjectFormValues = {
   client: "",
   location: "",
   status: "planning",
-  startDate: "",
-  endDate: "",
-  contractValue: 0,
-  budget: 0,
-  progress: 0,
   managerId: "",
   notes: "",
 };
@@ -91,7 +78,15 @@ export default function ProjectFormDialog({
   const t = useT();
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
-  const managers = useQuery(trpc.task.assignees.queryOptions());
+  const managers = useQuery(trpc.project.managerOptions.queryOptions());
+  const statusOptions = PROJECT_STATUSES.map((value) => ({
+    value,
+    label: statusLabel("project", value),
+  }));
+  const managerOptions = (managers.data ?? []).map((manager) => ({
+    value: manager.id,
+    label: manager.name,
+  }));
 
   const createProject = useMutation(trpc.project.create.mutationOptions());
   const updateProject = useMutation(trpc.project.update.mutationOptions());
@@ -105,11 +100,6 @@ export default function ProjectFormDialog({
         client: blankToUndefined(value.client),
         location: blankToUndefined(value.location),
         status: value.status,
-        startDate: blankToUndefined(value.startDate),
-        endDate: blankToUndefined(value.endDate),
-        contractValue: value.contractValue,
-        budget: value.budget,
-        progress: value.progress,
         managerId: blankToUndefined(value.managerId),
         notes: blankToUndefined(value.notes),
       };
@@ -156,6 +146,7 @@ export default function ProjectFormDialog({
                   <div className="space-y-2">
                     <Label htmlFor={field.name}>{t.projects.statusLabel}</Label>
                     <Select
+                      items={statusOptions}
                       value={field.state.value}
                       onValueChange={(value) =>
                         field.handleChange((value ?? "planning") as ProjectFormValues["status"])
@@ -165,9 +156,9 @@ export default function ProjectFormDialog({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {PROJECT_STATUSES.map((status) => (
-                          <SelectItem key={status} value={status}>
-                            {statusLabel("project", status)}
+                        {statusOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -190,51 +181,34 @@ export default function ProjectFormDialog({
               </form.Field>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <form.Field name="startDate">
-                {(field) => <Field label={t.projects.startDate} field={field} type="date" />}
-              </form.Field>
-              <form.Field name="endDate">
-                {(field) => <Field label={t.projects.endDate} field={field} type="date" />}
-              </form.Field>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <form.Field name="contractValue">
-                {(field) => <NumberField label={t.projects.contractValue} field={field} />}
-              </form.Field>
-              <form.Field name="budget">
-                {(field) => <NumberField label={t.projects.budget} field={field} />}
-              </form.Field>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <form.Field name="progress">
-                {(field) => <NumberField label={t.projects.progressPercent} field={field} max={100} />}
-              </form.Field>
-              <form.Field name="managerId">
-                {(field) => (
-                  <div className="space-y-2">
-                    <Label htmlFor={field.name}>{t.projects.manager}</Label>
-                    <Select
-                      value={field.state.value}
-                      onValueChange={(value) => field.handleChange(value ?? "")}
-                    >
-                      <SelectTrigger id={field.name} className="w-full">
-                        <SelectValue placeholder={t.common.unassigned} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(managers.data ?? []).map((manager) => (
-                          <SelectItem key={manager.id} value={manager.id}>
-                            {manager.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </form.Field>
-            </div>
+            <form.Field name="managerId">
+              {(field) => (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{t.projects.manager}</Label>
+                  <Select
+                    items={managerOptions}
+                    value={field.state.value}
+                    onValueChange={(value) => field.handleChange(value ?? "")}
+                  >
+                    <SelectTrigger id={field.name} className="w-full">
+                      <SelectValue>
+                        {(value) =>
+                          managerOptions.find((option) => option.value === value)?.label ??
+                          t.common.unassigned
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {managerOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </form.Field>
 
             <form.Field name="notes">
               {(field) => (
@@ -303,32 +277,6 @@ function Field({
         value={field.state.value}
         onBlur={field.handleBlur}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => field.handleChange(e.target.value)}
-      />
-      {field.state.meta.errors.map((error: { message?: string } | undefined) => (
-        <p key={error?.message} className="text-xs text-destructive">
-          {error?.message}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-function NumberField({ label, field, max }: { label: string; field: any; max?: number }) {
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={field.name}>{label}</Label>
-      <Input
-        id={field.name}
-        name={field.name}
-        type="number"
-        min={0}
-        max={max}
-        step="any"
-        value={String(field.state.value)}
-        onBlur={field.handleBlur}
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-          field.handleChange(e.target.value === "" ? 0 : Number(e.target.value))
-        }
       />
       {field.state.meta.errors.map((error: { message?: string } | undefined) => (
         <p key={error?.message} className="text-xs text-destructive">

@@ -37,6 +37,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
+import { DeviationBadge } from "@/components/deviation-badge";
 import { Meter } from "@/components/meter";
 import { QueryError } from "@/components/query-error";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
@@ -60,6 +61,10 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
   const { money, percent, formatDate } = useFormat();
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
+  const statusOptions = [
+    { value: ALL, label: t.common.all },
+    ...STATUSES.map((value) => ({ value, label: statusLabel("project", value) })),
+  ];
 
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<string>(ALL);
@@ -102,11 +107,6 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
       client: row.client ?? "",
       location: row.location ?? "",
       status: row.status,
-      startDate: row.startDate ?? "",
-      endDate: row.endDate ?? "",
-      contractValue: row.contractValue,
-      budget: row.budget,
-      progress: row.progress,
       managerId: row.managerId ?? "",
       notes: row.notes ?? "",
     });
@@ -117,7 +117,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
     const ids = selection.selectedIds;
     try {
       // force, for the same reason as the single-row path: the dialog already
-      // spells out that tasks and expenses go too.
+      // spells out that tickets and expenses go too.
       await deleteMany.mutateAsync({ ids, force: true });
       await queryClient.invalidateQueries(trpc.project.pathFilter());
       // Equipment is released by the delete, so its list is stale too.
@@ -143,6 +143,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
           aria-label={t.common.search}
         />
         <Select
+          items={statusOptions}
           value={status}
           onValueChange={(value) => {
             setStatus(value ?? ALL);
@@ -153,10 +154,9 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ALL}>{t.common.all}</SelectItem>
-            {STATUSES.map((value) => (
-              <SelectItem key={value} value={value}>
-                {statusLabel("project", value)}
+            {statusOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -196,10 +196,11 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                 <TableHead className={isAdmin ? undefined : "pl-4"}>{t.projects.project}</TableHead>
                 <TableHead>{t.projects.statusLabel}</TableHead>
                 <TableHead>{t.projects.client}</TableHead>
-                <TableHead className="w-56">{t.projects.budgetUsed}</TableHead>
+                <TableHead className="w-56">{t.projects.workCompleted}</TableHead>
+                <TableHead className="w-44">{t.projects.siteProgress}</TableHead>
                 <TableHead className="text-right">{t.projects.contract}</TableHead>
                 <TableHead>{t.projects.dueColumn}</TableHead>
-                <TableHead className="text-right">{t.projects.openTasksColumn}</TableHead>
+                <TableHead className="text-right">{t.projects.openTicketsColumn}</TableHead>
                 {isAdmin && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
               </TableRow>
             </TableHeader>
@@ -207,7 +208,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
               {projectsQuery.isPending &&
                 Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={isAdmin ? 9 : 7} className="pl-4">
+                    <TableCell colSpan={isAdmin ? 9 : 8} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -215,7 +216,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
 
               {projectsQuery.isError && (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 9 : 7} className="p-4">
+                  <TableCell colSpan={isAdmin ? 9 : 8} className="p-4">
                     <QueryError
                       error={projectsQuery.error}
                       onRetry={() => void projectsQuery.refetch()}
@@ -228,7 +229,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
               {!projectsQuery.isPending && !projectsQuery.isError && projects.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={isAdmin ? 9 : 7}
+                    colSpan={isAdmin ? 9 : 8}
                     className="py-10 text-center text-muted-foreground"
                   >
                     {debouncedSearch || status !== ALL ? t.projects.noMatch : t.projects.empty}
@@ -261,22 +262,38 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{row.client ?? "—"}</TableCell>
                   <TableCell>
-                    <Meter value={row.spent} max={row.budget} />
+                    {row.workCompletedValue === null || row.contractValue === null ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <>
+                        <Meter
+                          value={row.workCompletedValue}
+                          max={row.contractValue}
+                        />
+                        <p className="mt-1 text-muted-foreground">
+                          {money(row.workCompletedValue)} · {percent(row.valueCompletionPercent)}
+                        </p>
+                      </>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Meter value={row.progressPercent} max={100} />
                     <p className="mt-1 text-muted-foreground">
-                      {money(row.spent)}
-                      {row.budget > 0 && ` · ${percent(row.budgetUsedPercent)}`}
-                      {row.isOverBudget && (
-                        <span className="ml-1 font-medium text-destructive">
-                          {t.projects.over}
+                      {row.progressPercent.toFixed(row.progressSource === "boq" ? 1 : 0)}%
+                      {row.progressSource === "boq" ? (
+                        <span className="ml-1.5">
+                          <DeviationBadge value={row.deviation} />
                         </span>
+                      ) : (
+                        <span className="ml-1.5">{t.projects.progressManual}</span>
                       )}
                     </p>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {money(row.contractValue)}
+                    {row.contractValue === null ? "—" : money(row.contractValue)}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(row.endDate)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{row.openTasks}</TableCell>
+                  <TableCell className="text-right tabular-nums">{row.openTickets}</TableCell>
                   {isAdmin && (
                     <TableCell className="pr-4 text-right">
                       {/* Edit is the only per-row action left; deleting happens

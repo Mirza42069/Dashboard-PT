@@ -6,7 +6,17 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@DashboardV2/ui/lib/utils"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+type SelectProps<Value, Multiple extends boolean | undefined = false> =
+  SelectPrimitive.Root.Props<Value, Multiple> & {
+    /** Required so Select.Value renders a user-facing label instead of the raw value. */
+    items: NonNullable<SelectPrimitive.Root.Props<Value, Multiple>["items"]>
+  }
+
+function Select<Value, Multiple extends boolean | undefined = false>(
+  props: SelectProps<Value, Multiple>
+) {
+  return <SelectPrimitive.Root {...props} />
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (

@@ -9,7 +9,6 @@ import {
   Hammer,
   OctagonX,
   PauseCircle,
-  TriangleAlert,
   Wrench,
 } from "lucide-react";
 
@@ -37,22 +36,17 @@ const STYLES: Record<string, Record<string, Descriptor>> = {
     completed: { variant: "ghost", icon: CircleCheck },
     cancelled: { variant: "destructive", icon: OctagonX },
   },
-  task: {
-    todo: { variant: "outline", icon: CircleDashed },
+  ticket: {
+    open: { variant: "outline", icon: CircleDot },
     in_progress: { variant: "default", icon: CircleDot },
-    blocked: { variant: "destructive", icon: TriangleAlert },
-    done: { variant: "ghost", icon: CircleCheck },
+    resolved: { variant: "secondary", icon: CircleCheck },
+    closed: { variant: "ghost", icon: CircleSlash },
   },
   equipment: {
     available: { variant: "outline", icon: CircleCheck },
     in_use: { variant: "default", icon: Hammer },
     maintenance: { variant: "secondary", icon: Wrench },
     retired: { variant: "ghost", icon: CircleSlash },
-  },
-  priority: {
-    low: { variant: "ghost", icon: CircleDashed },
-    medium: { variant: "outline", icon: CircleDot },
-    high: { variant: "destructive", icon: TriangleAlert },
   },
 };
 

@@ -14,6 +14,7 @@ import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import ActivityFeed from "./activity-feed";
+import BehindSchedule from "./behind-schedule";
 
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
 
@@ -71,15 +72,19 @@ export default function DashboardOverview() {
     },
     {
       icon: Wallet,
-      label: t.dashboard.spentOfBudget,
-      value: percent(data.budgetUsedPercent),
-      hint: `${money(data.spent)} / ${money(data.budget)}`,
+      label: t.dashboard.workCompleted,
+      value:
+        data.workCompletedValue === null ? "—" : moneyCompact(data.workCompletedValue),
+      hint:
+        data.workCompletedValue === null
+          ? t.dashboard.noMeasuredWork
+          : `${money(data.workCompletedValue)} / ${money(data.portfolioValue)} · ${percent(data.valueCompletionPercent)}`,
     },
     {
       icon: ListChecks,
-      label: t.dashboard.openTasks,
-      value: String(data.openTasks),
-      hint: t.dashboard.openTasksHint,
+      label: t.dashboard.openTickets,
+      value: String(data.openTickets),
+      hint: t.dashboard.openTicketsHint,
     },
   ];
 
@@ -131,6 +136,10 @@ export default function DashboardOverview() {
           </CardContent>
         </Card>
 
+        <BehindSchedule />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
         <ActivityFeed />
       </div>
     </div>
