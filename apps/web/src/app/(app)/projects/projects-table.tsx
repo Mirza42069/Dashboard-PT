@@ -101,8 +101,6 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
       client: row.client ?? "",
       location: row.location ?? "",
       status: row.status,
-      contractValue: row.contractValue,
-      budget: row.budget,
       progress: row.progress,
       managerId: row.managerId ?? "",
       notes: row.notes ?? "",
@@ -168,7 +166,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                 <TableHead className="pl-4">{t.projects.project}</TableHead>
                 <TableHead>{t.projects.statusLabel}</TableHead>
                 <TableHead>{t.projects.client}</TableHead>
-                <TableHead className="w-56">{t.projects.budgetUsed}</TableHead>
+                <TableHead className="w-56">{t.projects.workCompleted}</TableHead>
                 <TableHead className="w-44">{t.projects.siteProgress}</TableHead>
                 <TableHead className="text-right">{t.projects.contract}</TableHead>
                 <TableHead>{t.projects.dueColumn}</TableHead>
@@ -210,16 +208,19 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{row.client ?? "—"}</TableCell>
                   <TableCell>
-                    <Meter value={row.spent} max={row.budget} />
-                    <p className="mt-1 text-muted-foreground">
-                      {money(row.spent)}
-                      {row.budget > 0 && ` · ${percent(row.budgetUsedPercent)}`}
-                      {row.isOverBudget && (
-                        <span className="ml-1 font-medium text-destructive">
-                          {t.projects.over}
-                        </span>
-                      )}
-                    </p>
+                    {row.workCompletedValue === null || row.contractValue === null ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <>
+                        <Meter
+                          value={row.workCompletedValue}
+                          max={row.contractValue}
+                        />
+                        <p className="mt-1 text-muted-foreground">
+                          {money(row.workCompletedValue)} · {percent(row.valueCompletionPercent)}
+                        </p>
+                      </>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Meter value={row.progressPercent} max={100} />
@@ -235,7 +236,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                     </p>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {money(row.contractValue)}
+                    {row.contractValue === null ? "—" : money(row.contractValue)}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(row.endDate)}</TableCell>
                   <TableCell className="text-right tabular-nums">{row.openTasks}</TableCell>

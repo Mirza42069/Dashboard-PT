@@ -67,18 +67,16 @@ const PROJECT_SEEDS: {
   client: string;
   location: string;
   status: ProjectStatus;
-  contract: number;
-  budget: number;
   progress: number;
   start: number;
   end: number;
 }[] = [
-  { suffix: "001", name: "Riverside Tower — Phase 1", client: "Meridian Holdings", location: "Riverside", status: "active", contract: 4_800_000, budget: 4_100_000, progress: 62, start: -180, end: 120 },
-  { suffix: "002", name: "Northgate Retail Park", client: "Northgate Estates", location: "Northgate", status: "active", contract: 2_350_000, budget: 1_980_000, progress: 41, start: -95, end: 160 },
-  { suffix: "003", name: "Harbour Road Bridge Repair", client: "City Transport Authority", location: "Harbour Road", status: "active", contract: 890_000, budget: 720_000, progress: 78, start: -140, end: 25 },
-  { suffix: "004", name: "Eastfield Warehouse", client: "Eastfield Logistics", location: "Eastfield", status: "on_hold", contract: 1_650_000, budget: 1_400_000, progress: 18, start: -60, end: 240 },
-  { suffix: "005", name: "Civic Centre Refurbishment", client: "Borough Council", location: "Civic Square", status: "planning", contract: 3_200_000, budget: 2_750_000, progress: 0, start: 30, end: 420 },
-  { suffix: "006", name: "Lakeside Apartments", client: "Lakeside Developments", location: "Lakeside", status: "completed", contract: 5_400_000, budget: 4_900_000, progress: 100, start: -520, end: -40 },
+  { suffix: "001", name: "Riverside Tower — Phase 1", client: "Meridian Holdings", location: "Riverside", status: "active", progress: 62, start: -180, end: 120 },
+  { suffix: "002", name: "Northgate Retail Park", client: "Northgate Estates", location: "Northgate", status: "active", progress: 41, start: -95, end: 160 },
+  { suffix: "003", name: "Harbour Road Bridge Repair", client: "City Transport Authority", location: "Harbour Road", status: "active", progress: 78, start: -140, end: 25 },
+  { suffix: "004", name: "Eastfield Warehouse", client: "Eastfield Logistics", location: "Eastfield", status: "on_hold", progress: 18, start: -60, end: 240 },
+  { suffix: "005", name: "Civic Centre Refurbishment", client: "Borough Council", location: "Civic Square", status: "planning", progress: 0, start: 30, end: 420 },
+  { suffix: "006", name: "Lakeside Apartments", client: "Lakeside Developments", location: "Lakeside", status: "completed", progress: 100, start: -520, end: -40 },
 ];
 
 const TASK_TITLES = [
@@ -209,8 +207,6 @@ async function main() {
     status: entry.status,
     startDate: isoDate(entry.start),
     endDate: isoDate(entry.end),
-    contractValue: entry.contract.toFixed(2),
-    budget: entry.budget.toFixed(2),
     progress: entry.progress,
     managerId: admin.id,
   }));
@@ -218,7 +214,7 @@ async function main() {
   const projects = await db
     .insert(project)
     .values(projectRows)
-    .returning({ id: project.id, code: project.code, budget: project.budget });
+    .returning({ id: project.id, code: project.code });
   console.log(`Inserted ${projects.length} projects`);
 
   // --- Tasks --------------------------------------------------------------
@@ -242,14 +238,9 @@ async function main() {
   console.log(`Inserted ${taskRows.length} tasks`);
 
   // --- Expenses -----------------------------------------------------------
-  // Riverside (001) is deliberately pushed over budget so the over-budget
-  // state and the dashboard attention list have something to show.
   const expenseRows = projects.flatMap((row) => {
-    const budget = Number(row.budget);
-    const targetRatio = row.code.endsWith("001") ? 1.08 : row.code.endsWith("003") ? 0.86 : 0.45;
-    const target = budget * targetRatio;
     const count = between(6, 11);
-    const each = target / count;
+    const each = between(40_000, 180_000);
 
     return Array.from({ length: count }, () => {
       const category = pick(EXPENSE_CATEGORIES);

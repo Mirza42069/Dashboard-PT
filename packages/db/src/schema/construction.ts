@@ -111,8 +111,6 @@ export const project = pgTable(
     status: text("status").$type<ProjectStatus>().default("planning").notNull(),
     startDate: date("start_date"),
     endDate: date("end_date"),
-    contractValue: numeric("contract_value", { precision: 14, scale: 2 }).default("0").notNull(),
-    budget: numeric("budget", { precision: 14, scale: 2 }).default("0").notNull(),
     /**
      * Site progress 0-100, entered by the PM rather than derived from tasks.
      * Used only as the fallback for projects with no active BoQ baseline — once

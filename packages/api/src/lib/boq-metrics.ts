@@ -56,6 +56,32 @@ const actualPercent = sql<string | null>`(
     and version.schedule_status = 'active'
 )`;
 
+/** Contract-rate value of measured work, calculated from each line rather than progress weights. */
+const workCompletedValue = sql<string | null>`(
+  select sum(coalesce(item.value, 0) * reading.pct_complete / 100.0)
+  from boq_version version
+  join boq_item item
+    on item.boq_version_id = version.id
+   and item.deleted_at is null
+   and not exists (
+     select 1 from boq_item child
+     where child.parent_id = item.id and child.deleted_at is null
+   )
+  join lateral (
+    select entry.pct_complete
+    from progress_entry entry
+    join reporting_period period on period.id = entry.period_id
+    where entry.boq_item_id = item.id
+      and (${outerDataDate} is null or period.end_date <= ${outerDataDate})
+      and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
+    order by period.end_date desc
+    limit 1
+  ) reading on true
+  where version.project_id = ${outerProjectId}
+    and version.status = 'active'
+    and version.schedule_status = 'active'
+)`;
+
 /** Everything the plan said should be finished by the data date. */
 const plannedPercent = sql<string | null>`(
   select sum(item.weight * cell.planned_pct / 100.0)
@@ -83,7 +109,20 @@ const hasBaseline = sql<boolean>`exists (
     and version.schedule_status = 'active'
 )`;
 
+/** Contract value belongs to the complete active baseline, never a draft revision. */
+const activeContractValue = sql<string | null>`(
+  select version.total_value
+  from boq_version version
+  where version.project_id = ${outerProjectId}
+    and version.status = 'active'
+    and version.schedule_status = 'active'
+  order by version.version_no desc
+  limit 1
+)`;
+
 export type BoqMetrics = {
+  contractValue: number;
+  workCompletedValue: number | null;
   /** Weighted actual completion, 0-100. */
   progress: number;
   /** Weighted planned completion at the data date, 0-100. */
@@ -109,6 +148,8 @@ export async function boqMetricsByProject(projectIds: string[]) {
       actual: actualPercent,
       planned: plannedPercent,
       hasBaseline,
+      contractValue: activeContractValue,
+      workCompletedValue,
     })
     .from(project)
     .where(inArray(project.id, projectIds));
@@ -122,6 +163,9 @@ export async function boqMetricsByProject(projectIds: string[]) {
     metrics.set(row.projectId, {
       progress,
       planned,
+      contractValue: toAmount(row.contractValue),
+      workCompletedValue:
+        row.workCompletedValue === null ? null : roundAmount(toAmount(row.workCompletedValue)),
       // No data date means nobody has reported yet. A deviation of "0" would
       // read as on-track; null renders as "—".
       deviation: row.dataDate === null ? null : roundAmount(progress - planned),

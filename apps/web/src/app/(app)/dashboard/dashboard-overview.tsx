@@ -51,9 +51,13 @@ export default function DashboardOverview() {
     },
     {
       icon: Wallet,
-      label: t.dashboard.spentOfBudget,
-      value: percent(data.budgetUsedPercent),
-      hint: `${money(data.spent)} / ${money(data.budget)}`,
+      label: t.dashboard.workCompleted,
+      value:
+        data.workCompletedValue === null ? "—" : moneyCompact(data.workCompletedValue),
+      hint:
+        data.workCompletedValue === null
+          ? t.dashboard.noMeasuredWork
+          : `${money(data.workCompletedValue)} / ${money(data.portfolioValue)} · ${percent(data.valueCompletionPercent)}`,
     },
     {
       icon: ListChecks,

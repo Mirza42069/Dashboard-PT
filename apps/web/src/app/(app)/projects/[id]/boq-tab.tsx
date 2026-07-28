@@ -143,7 +143,6 @@ export default function BoqTab({
   const hasDraft = versions.some((candidate) => candidate.status === "draft");
   const sections = buildSections(items);
   const weightTotal = totalLeafWeight(items);
-  const contractTotal = sections.reduce((total, section) => total + sectionAmount(section), 0);
   const weightsReady = Math.abs(weightTotal - 100) <= WEIGHT_TOLERANCE;
 
   /** Moves an item within its own group of siblings. */
@@ -180,10 +179,9 @@ export default function BoqTab({
               </CardTitle>
               <CardDescription>
                 {isDraft
-                  ? interpolate(
-                      weightsReady ? t.boq.weightsReady : t.boq.weightsOffTarget,
-                      { total: `${weightTotal.toFixed(2)}%` },
-                    )
+                  ? weightsReady
+                    ? t.boq.weightsReadyHint
+                    : t.boq.weightsIncompleteHint
                   : t.boq.lockedNote}
               </CardDescription>
             </div>
@@ -247,22 +245,6 @@ export default function BoqTab({
           </div>
         </CardHeader>
 
-        <CardContent className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <p className="text-xs text-muted-foreground">{t.boq.contractTotal}</p>
-            <p className="text-lg font-semibold tabular-nums">{money(contractTotal)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t.boq.weightTotal}</p>
-            <p
-              className={`text-lg font-semibold tabular-nums ${
-                isDraft && !weightsReady ? "text-destructive" : ""
-              }`}
-            >
-              {weightTotal.toFixed(2)}%
-            </p>
-          </div>
-        </CardContent>
       </Card>
 
       <Card>

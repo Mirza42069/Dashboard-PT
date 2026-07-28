@@ -33,7 +33,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 
 import { DeviationBadge } from "@/components/deviation-badge";
-import { BudgetMeter, Meter } from "@/components/meter";
+import { Meter } from "@/components/meter";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -131,32 +131,37 @@ export default function ProjectDetail({
             <CardDescription>{t.projects.contractValueTile}</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-xl font-semibold tabular-nums">{money(project.contractValue)}</p>
+            <p className="text-xl font-semibold tabular-nums">
+              {project.contractValue === null ? "—" : money(project.contractValue)}
+            </p>
           </CardContent>
         </Card>
         <Card size="sm">
           <CardHeader>
-            <CardDescription>{t.projects.spentOfBudgetTile}</CardDescription>
+            <CardDescription>{t.projects.workCompleted}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-xl font-semibold tabular-nums">{money(project.spent)}</p>
-            <BudgetMeter spent={project.spent} budget={project.budget} />
+            <p className="text-xl font-semibold tabular-nums">
+              {project.workCompletedValue === null ? "—" : money(project.workCompletedValue)}
+            </p>
+            {project.workCompletedValue !== null && project.contractValue !== null && (
+              <Meter
+                value={project.workCompletedValue}
+                max={project.contractValue}
+                label={percent(project.valueCompletionPercent)}
+              />
+            )}
           </CardContent>
         </Card>
         <Card size="sm">
           <CardHeader>
-            <CardDescription>{t.projects.remaining}</CardDescription>
+            <CardDescription>{t.projects.remainingContractValue}</CardDescription>
           </CardHeader>
           <CardContent>
-            <p
-              className={`text-xl font-semibold tabular-nums ${
-                project.remaining < 0 ? "text-destructive" : ""
-              }`}
-            >
-              {money(project.remaining)}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {project.isOverBudget ? t.projects.overBudgetNote : t.projects.againstBudgetNote}
+            <p className="text-xl font-semibold tabular-nums">
+              {project.remainingContractValue === null
+                ? "—"
+                : money(project.remainingContractValue)}
             </p>
           </CardContent>
         </Card>
@@ -296,16 +301,12 @@ export default function ProjectDetail({
         <TabsContent value="expenses">
           <Card>
             <CardHeader>
-              <CardTitle>{t.expenses.recordedSpend}</CardTitle>
+              <CardTitle>{t.expenses.recordedExpenses}</CardTitle>
               <CardDescription>
                 {interpolate(t.expenses.summary, {
                   total: money(expensesQuery.data?.total ?? 0),
                   count: expensesQuery.data?.expenses.length ?? 0,
                 })}
-                {project.budget > 0 &&
-                  ` · ${interpolate(t.expenses.ofBudget, {
-                    percent: percent(project.budgetUsedPercent),
-                  })}`}
               </CardDescription>
             </CardHeader>
             <CardContent className="px-0">
@@ -350,10 +351,9 @@ export default function ProjectDetail({
                             })}
                             onClick={async () => {
                               try {
-                                await deleteExpense.mutateAsync({ id: row.id });
-                                await queryClient.invalidateQueries(trpc.expense.pathFilter());
-                                await queryClient.invalidateQueries(trpc.project.pathFilter());
-                                toast.success(t.expenses.deleted);
+                                 await deleteExpense.mutateAsync({ id: row.id });
+                                 await queryClient.invalidateQueries(trpc.expense.pathFilter());
+                                 toast.success(t.expenses.deleted);
                               } catch (error) {
                                 toast.error(
                                   error instanceof Error ? error.message : t.expenses.deleteFailed,

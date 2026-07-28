@@ -41,8 +41,6 @@ const schema = z
     client: z.string().trim().max(200),
     location: z.string().trim().max(200),
     status: z.enum(PROJECT_STATUSES),
-    contractValue: z.number().min(0),
-    budget: z.number().min(0),
     progress: z.number().int().min(0).max(100),
     managerId: z.string(),
     notes: z.string().max(2000),
@@ -56,8 +54,6 @@ export const EMPTY_PROJECT: ProjectFormValues = {
   client: "",
   location: "",
   status: "planning",
-  contractValue: 0,
-  budget: 0,
   progress: 0,
   managerId: "",
   notes: "",
@@ -98,8 +94,6 @@ export default function ProjectFormDialog({
         client: blankToUndefined(value.client),
         location: blankToUndefined(value.location),
         status: value.status,
-        contractValue: value.contractValue,
-        budget: value.budget,
         progress: value.progress,
         managerId: blankToUndefined(value.managerId),
         notes: blankToUndefined(value.notes),
@@ -178,15 +172,6 @@ export default function ProjectFormDialog({
               </form.Field>
               <form.Field name="location">
                 {(field) => <Field label={t.projects.location} field={field} />}
-              </form.Field>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <form.Field name="contractValue">
-                {(field) => <NumberField label={t.projects.contractValue} field={field} />}
-              </form.Field>
-              <form.Field name="budget">
-                {(field) => <NumberField label={t.projects.budget} field={field} />}
               </form.Field>
             </div>
 

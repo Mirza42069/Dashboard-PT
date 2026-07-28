@@ -71,6 +71,20 @@
       "when": 1785219321394,
       "tag": "0009_third_blindfold",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785223392676,
+      "tag": "0010_perpetual_shockwave",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785226263349,
+      "tag": "0011_mute_maelstrom",
+      "breakpoints": true
     }
   ]
 }

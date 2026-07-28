@@ -2,6 +2,7 @@ import { db } from "@DashboardV2/db";
 import {
   PERIOD_TYPES,
   PROJECT_STATUSES,
+  boqVersion,
   equipment,
   expense,
   project,
@@ -15,7 +16,7 @@ import z from "zod";
 import { adminCompanyProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { type BoqMetrics, boqMetricsByProject } from "../lib/boq-metrics";
-import { percentOf, toAmount, toNumericString } from "../lib/money";
+import { percentOf, toAmount } from "../lib/money";
 import { assertUserAssignable } from "../lib/scope";
 
 const statusSchema = z.enum(PROJECT_STATUSES);
@@ -34,27 +35,12 @@ const upsertSchema = z.object({
   // Plain calendar dates end to end — see the note in the schema file.
   startDate: z.iso.date().optional(),
   endDate: z.iso.date().optional(),
-  contractValue: z.number().min(0).default(0),
-  budget: z.number().min(0).default(0),
   progress: z.number().int().min(0).max(100).default(0),
   periodType: z.enum(PERIOD_TYPES).default("weekly"),
   scheduleStart: z.iso.date().optional(),
   managerId: z.string().min(1).optional(),
   notes: z.string().max(2000).optional(),
 });
-
-/** Total recorded spend per project, keyed by project id. */
-async function spendByProject(projectIds: string[]) {
-  if (projectIds.length === 0) return new Map<string, number>();
-
-  const rows = await db
-    .select({ projectId: expense.projectId, total: sum(expense.amount) })
-    .from(expense)
-    .where(inArray(expense.projectId, projectIds))
-    .groupBy(expense.projectId);
-
-  return new Map(rows.map((row) => [row.projectId, toAmount(row.total)]));
-}
 
 /** Open (not done) task counts per project. */
 async function openTasksByProject(projectIds: string[]) {
@@ -76,19 +62,23 @@ async function openTasksByProject(projectIds: string[]) {
  */
 function decorate(
   row: typeof project.$inferSelect,
-  spent: number,
   openTasks: number,
   boq?: BoqMetrics,
 ) {
-  const budget = toAmount(row.budget);
+  const contractValue = boq?.contractValue ?? null;
+  const workCompletedValue = boq?.workCompletedValue ?? null;
   return {
     ...row,
-    contractValue: toAmount(row.contractValue),
-    budget,
-    spent,
-    remaining: budget - spent,
-    budgetUsedPercent: percentOf(spent, budget),
-    isOverBudget: budget > 0 && spent > budget,
+    contractValue,
+    workCompletedValue,
+    remainingContractValue:
+      contractValue === null || workCompletedValue === null
+        ? null
+        : contractValue - workCompletedValue,
+    valueCompletionPercent:
+      contractValue === null || workCompletedValue === null
+        ? null
+        : percentOf(workCompletedValue, contractValue),
     openTasks,
     /** The figure to show. Read this rather than `progress`. */
     progressPercent: boq ? boq.progress : row.progress,
@@ -136,15 +126,14 @@ export const projectRouter = router({
       ]);
 
       const ids = rows.map((row) => row.id);
-      const [spend, openTasks, boq] = await Promise.all([
-        spendByProject(ids),
+      const [openTasks, boq] = await Promise.all([
         openTasksByProject(ids),
         boqMetricsByProject(ids),
       ]);
 
       return {
         projects: rows.map((row) =>
-          decorate(row, spend.get(row.id) ?? 0, openTasks.get(row.id) ?? 0, boq.get(row.id)),
+          decorate(row, openTasks.get(row.id) ?? 0, boq.get(row.id)),
         ),
         total: total?.value ?? 0,
       };
@@ -168,8 +157,7 @@ export const projectRouter = router({
       throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
     }
 
-    const [spend, openTasks, boq, manager, spendByCategory] = await Promise.all([
-      spendByProject([row.id]),
+    const [openTasks, boq, manager] = await Promise.all([
       openTasksByProject([row.id]),
       boqMetricsByProject([row.id]),
       row.managerId
@@ -178,20 +166,11 @@ export const projectRouter = router({
             .from(user)
             .where(eq(user.id, row.managerId))
         : Promise.resolve([]),
-      db
-        .select({ category: expense.category, total: sum(expense.amount) })
-        .from(expense)
-        .where(eq(expense.projectId, row.id))
-        .groupBy(expense.category),
     ]);
 
     return {
-      ...decorate(row, spend.get(row.id) ?? 0, openTasks.get(row.id) ?? 0, boq.get(row.id)),
+      ...decorate(row, openTasks.get(row.id) ?? 0, boq.get(row.id)),
       manager: manager[0] ?? null,
-      spendByCategory: spendByCategory.map((entry) => ({
-        category: entry.category,
-        total: toAmount(entry.total),
-      })),
     };
   }),
 
@@ -223,26 +202,22 @@ export const projectRouter = router({
   /** Everything the dashboard needs, in one round trip. */
   summary: companyProcedure.query(async ({ ctx }) => {
     const inCompany = eq(project.companyId, ctx.companyId);
-    // expense and task carry no company of their own, so both join through
-    // project rather than filtering directly.
-    const [statusRows, [totals], [spentRow], [openTaskRow]] = await Promise.all([
+    const [projectRows, [baselineTotal], [openTaskRow]] = await Promise.all([
       db
-        .select({ status: project.status, value: count() })
-        .from(project)
-        .where(inCompany)
-        .groupBy(project.status),
-      db
-        .select({
-          contractValue: sum(project.contractValue),
-          budget: sum(project.budget),
-        })
+        .select({ id: project.id, status: project.status })
         .from(project)
         .where(inCompany),
       db
-        .select({ total: sum(expense.amount) })
-        .from(expense)
-        .innerJoin(project, eq(expense.projectId, project.id))
-        .where(inCompany),
+        .select({ total: sum(boqVersion.totalValue) })
+        .from(boqVersion)
+        .innerJoin(project, eq(project.id, boqVersion.projectId))
+        .where(
+          and(
+            inCompany,
+            eq(boqVersion.status, "active"),
+            eq(boqVersion.scheduleStatus, "active"),
+          ),
+        ),
       db
         .select({ value: count() })
         .from(task)
@@ -250,25 +225,34 @@ export const projectRouter = router({
         .where(and(inCompany, sql`${task.status} <> 'done'`)),
     ]);
 
+    const boq = await boqMetricsByProject(projectRows.map((row) => row.id));
+
     const byStatus = Object.fromEntries(
       PROJECT_STATUSES.map((status) => [
         status,
-        statusRows.find((row) => row.status === status)?.value ?? 0,
+        projectRows.filter((row) => row.status === status).length,
       ]),
     ) as Record<(typeof PROJECT_STATUSES)[number], number>;
 
-    const budget = toAmount(totals?.budget);
-    const spent = toAmount(spentRow?.total);
+    const measured = [...boq.values()].filter(
+      (metric): metric is BoqMetrics & { workCompletedValue: number } =>
+        metric.workCompletedValue !== null,
+    );
+    const workCompletedValue =
+      measured.length === 0
+        ? null
+        : measured.reduce((total, metric) => total + metric.workCompletedValue, 0);
+    const portfolioValue = toAmount(baselineTotal?.total);
 
     return {
       projects: {
         total: Object.values(byStatus).reduce((a, b) => a + b, 0),
         byStatus,
       },
-      portfolioValue: toAmount(totals?.contractValue),
-      budget,
-      spent,
-      budgetUsedPercent: percentOf(spent, budget),
+      portfolioValue,
+      workCompletedValue,
+      valueCompletionPercent:
+        workCompletedValue === null ? null : percentOf(workCompletedValue, portfolioValue),
       openTasks: openTaskRow?.value ?? 0,
     };
   }),
@@ -297,8 +281,6 @@ export const projectRouter = router({
         ...input,
         code,
         companyId: ctx.companyId,
-        contractValue: toNumericString(input.contractValue),
-        budget: toNumericString(input.budget),
       })
       .returning({ id: project.id });
 
@@ -317,7 +299,7 @@ export const projectRouter = router({
   update: adminCompanyProcedure
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const { id: projectId, contractValue, budget, code, ...rest } = input;
+      const { id: projectId, code, ...rest } = input;
 
       const [current] = await db
         .select()
@@ -353,8 +335,6 @@ export const projectRouter = router({
         .set({
           ...rest,
           ...(code ? { code: code.toUpperCase() } : {}),
-          ...(contractValue !== undefined ? { contractValue: toNumericString(contractValue) } : {}),
-          ...(budget !== undefined ? { budget: toNumericString(budget) } : {}),
         })
         .where(eq(project.id, projectId));
 

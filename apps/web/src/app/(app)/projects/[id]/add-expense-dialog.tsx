@@ -54,9 +54,7 @@ export default function AddExpenseDialog({ projectId }: { projectId: string }) {
     onSubmit: async ({ value, formApi }) => {
       try {
         await createExpense.mutateAsync({ projectId, ...value });
-        // Both the expense list and the project's budget roll-up change.
         await queryClient.invalidateQueries(trpc.expense.pathFilter());
-        await queryClient.invalidateQueries(trpc.project.pathFilter());
         setOpen(false);
         formApi.reset();
         toast.success(t.expenses.recorded);

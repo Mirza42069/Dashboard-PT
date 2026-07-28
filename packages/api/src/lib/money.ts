@@ -27,7 +27,7 @@ export function roundAmount(value: number): number {
 }
 
 /**
- * Percentage of budget consumed. Returns null when there is no budget to
+ * Percentage of a whole. Returns null when there is no positive whole to
  * compare against, so callers can render "—" instead of a misleading 0% or a
  * division by zero.
  */
