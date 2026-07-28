@@ -49,6 +49,7 @@ import z from "zod";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { todayIso } from "@/lib/format";
+import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
@@ -76,8 +77,15 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
   const [movementTarget, setMovementTarget] = useState<MaterialRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MaterialRow | null>(null);
 
+  const debouncedSearch = useDebounced(search);
+
   const materialsQuery = useQuery(
-    trpc.material.list.queryOptions({ search, lowStockOnly, limit: 100, offset: 0 }),
+    trpc.material.list.queryOptions({
+      search: debouncedSearch,
+      lowStockOnly,
+      limit: 100,
+      offset: 0,
+    }),
   );
   const projectOptions = useQuery(trpc.project.options.queryOptions());
   const deleteMaterial = useMutation(trpc.material.delete.mutationOptions());

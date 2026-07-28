@@ -45,12 +45,14 @@ import z from "zod";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 const STATUSES = ["available", "in_use", "maintenance", "retired"] as const;
 const ALL = "all";
 const UNASSIGNED = "unassigned";
+const PAGE_SIZE = 25;
 
 type EquipmentRow = {
   id: string;
@@ -67,22 +69,34 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<string>(ALL);
+  const [page, setPage] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [assignTarget, setAssignTarget] = useState<EquipmentRow | null>(null);
 
+  // The input stays bound to `search` so typing is responsive; only the settled
+  // value reaches the query key, which is what triggers the request.
+  const debouncedSearch = useDebounced(search);
+
   const equipmentQuery = useQuery(
     trpc.equipment.list.queryOptions({
-      search,
+      search: debouncedSearch,
       status: status === ALL ? undefined : (status as (typeof STATUSES)[number]),
-      limit: 100,
-      offset: 0,
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
     }),
   );
-  const projectOptions = useQuery(trpc.project.options.queryOptions());
+  // Only feeds the assign dialog, which is admin-only — a regular user would
+  // pay for a list of every project in the company and never see it.
+  const projectOptions = useQuery({
+    ...trpc.project.options.queryOptions(),
+    enabled: isAdmin,
+  });
 
   const setStatusMutation = useMutation(trpc.equipment.update.mutationOptions());
   const rows = equipmentQuery.data?.equipment ?? [];
   const counts = equipmentQuery.data?.counts;
+  const total = equipmentQuery.data?.total ?? 0;
+  const hasNextPage = (page + 1) * PAGE_SIZE < total;
 
   async function changeStatus(id: string, next: (typeof STATUSES)[number]) {
     try {
@@ -103,12 +117,21 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
       <div className="flex flex-wrap items-center gap-2">
         <Input
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(0);
+          }}
           placeholder={t.equipment.searchPlaceholder}
           className="w-full sm:max-w-xs"
           aria-label={t.common.search}
         />
-        <Select value={status} onValueChange={(value) => setStatus(value ?? ALL)}>
+        <Select
+          value={status}
+          onValueChange={(value) => {
+            setStatus(value ?? ALL);
+            setPage(0);
+          }}
+        >
           <SelectTrigger className="w-44" aria-label={t.tasks.statusColumn}>
             <SelectValue />
           </SelectTrigger>
@@ -235,6 +258,36 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
           </Table>
         </CardContent>
       </Card>
+
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {total === 0
+            ? t.equipment.noEquipment
+            : interpolate(t.equipment.showing, {
+                from: page * PAGE_SIZE + 1,
+                to: page * PAGE_SIZE + rows.length,
+                total,
+              })}
+        </p>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page === 0}
+            onClick={() => setPage((value) => Math.max(0, value - 1))}
+          >
+            {t.common.previous}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasNextPage}
+            onClick={() => setPage((value) => value + 1)}
+          >
+            {t.common.next}
+          </Button>
+        </div>
+      </div>
 
       {isAdmin && (
         <>

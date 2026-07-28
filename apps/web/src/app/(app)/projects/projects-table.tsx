@@ -46,6 +46,7 @@ import { Meter } from "@/components/meter";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
@@ -71,9 +72,11 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
   const [initialValues, setInitialValues] = useState<ProjectFormValues>(EMPTY_PROJECT);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
 
+  const debouncedSearch = useDebounced(search);
+
   const projectsQuery = useQuery(
     trpc.project.list.queryOptions({
-      search,
+      search: debouncedSearch,
       status: status === ALL ? undefined : (status as (typeof STATUSES)[number]),
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
@@ -192,7 +195,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                     colSpan={isAdmin ? 8 : 7}
                     className="py-10 text-center text-muted-foreground"
                   >
-                    {search || status !== ALL ? t.projects.noMatch : t.projects.empty}
+                    {debouncedSearch || status !== ALL ? t.projects.noMatch : t.projects.empty}
                   </TableCell>
                 </TableRow>
               )}

@@ -33,3 +33,4 @@
 - `bun run deploy`: Create a Vercel preview deployment
 - `bun run deploy:prod`: Deploy to Vercel production
 - `bun run deploy:check`: Dry-run a deploy to preview framework detection and included files without uploading
+

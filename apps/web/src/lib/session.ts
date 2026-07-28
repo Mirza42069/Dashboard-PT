@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 
 import { authClient } from "./auth-client";
 
@@ -7,8 +8,13 @@ import { authClient } from "./auth-client";
  * Resolves the real session against the API. middleware.ts only checks that a
  * cookie exists, so this is the authoritative check — every protected page must
  * call one of the helpers below rather than trusting the redirect at the edge.
+ *
+ * cache() dedupes for the life of one render. A protected route resolves the
+ * session at least twice — once in (app)/layout.tsx and again in the page — and
+ * each call is an outbound HTTPS request to the API service plus a database
+ * lookup, so without this the layout/page pair costs double for one answer.
  */
-export async function getSession() {
+export const getSession = cache(async () => {
   try {
     return await authClient.getSession({
       fetchOptions: {
@@ -20,7 +26,7 @@ export async function getSession() {
     // A revoked, expired or banned session resolves to "not signed in".
     return null;
   }
-}
+});
 
 type RequireSessionOptions = {
   /** Set on /change-password itself, which would otherwise redirect to itself. */

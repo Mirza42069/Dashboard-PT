@@ -287,6 +287,8 @@ export const en = {
     assignFailed: "Could not assign the equipment",
     updateFailed: "Could not update the equipment",
     marked: "Marked {status}",
+    showing: "Showing {from}–{to} of {total}",
+    noEquipment: "No equipment",
   },
   company: {
     title: "Companies",

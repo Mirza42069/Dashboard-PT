@@ -288,6 +288,8 @@ export const id = {
     assignFailed: "Tidak dapat menugaskan alat",
     updateFailed: "Tidak dapat memperbarui alat",
     marked: "Ditandai {status}",
+    showing: "Menampilkan {from}–{to} dari {total}",
+    noEquipment: "Tidak ada alat",
   },
   company: {
     title: "Perusahaan",
