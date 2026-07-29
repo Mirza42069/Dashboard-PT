@@ -26,7 +26,7 @@ export default async function NotFound() {
           <EmptyMedia variant="icon">
             <FileQuestionMark />
           </EmptyMedia>
-          <EmptyTitle>{t.common.notFoundTitle}</EmptyTitle>
+          <EmptyTitle as="h1">{t.common.notFoundTitle}</EmptyTitle>
           <EmptyDescription>{t.common.notFoundDescription}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>

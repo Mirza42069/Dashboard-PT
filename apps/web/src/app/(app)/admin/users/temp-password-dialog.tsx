@@ -11,7 +11,7 @@ import {
 } from "@DashboardV2/ui/components/dialog";
 import { Check, Copy } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -54,7 +54,7 @@ export default function TempPasswordDialog({
         }
       }}
     >
-      <DialogContent>
+      <DialogContent closeLabel={t.common.close}>
         <DialogHeader>
           <DialogTitle>
             {result?.isNewAccount ? t.users.tempTitleNew : t.users.tempTitleReset}

@@ -37,7 +37,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useDeferredValue, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";

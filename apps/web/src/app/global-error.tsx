@@ -52,7 +52,7 @@ export default function GlobalError({
               <EmptyMedia variant="icon">
                 <TriangleAlert />
               </EmptyMedia>
-              <EmptyTitle>{t.common.somethingWentWrong}</EmptyTitle>
+              <EmptyTitle as="h1">{t.common.somethingWentWrong}</EmptyTitle>
               <EmptyDescription>{t.common.errorDescription}</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>

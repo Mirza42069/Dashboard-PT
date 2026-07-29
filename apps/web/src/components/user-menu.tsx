@@ -48,7 +48,7 @@ export default function UserMenu({ user }: { user: ShellUser }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
-        <span className="flex size-5 items-center justify-center rounded-full bg-muted text-[0.625rem] font-medium">
+        <span className="flex size-5 items-center justify-center rounded-full bg-muted text-[0.6875rem] font-medium">
           {initials(user.name)}
         </span>
         <span className="hidden sm:inline">{user.name}</span>

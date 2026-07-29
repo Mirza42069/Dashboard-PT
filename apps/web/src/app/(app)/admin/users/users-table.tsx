@@ -43,7 +43,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";

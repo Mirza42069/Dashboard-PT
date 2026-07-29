@@ -29,7 +29,9 @@ export default async function ChangePasswordPage() {
       <div className="w-full max-w-sm space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>
+            {/* This page renders bare — no app chrome, no page header — so the
+                card title is the document's only heading and takes the h1. */}
+            <CardTitle as="h1">
               {forced ? dict.password.setTitle : dict.password.changeTitle}
             </CardTitle>
             <CardDescription>

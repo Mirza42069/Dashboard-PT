@@ -6,11 +6,13 @@ import { cn } from "@DashboardV2/ui/lib/utils";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { useRef } from "react";
 import z from "zod";
 
+import { FieldError, fieldError, focusFirstInvalid } from "@/components/field-error";
 import { PasswordInput } from "@/components/password-input";
 import { useT } from "@/i18n/provider";
+import { toast } from "@/lib/toast";
 import { trpc } from "@/utils/trpc";
 
 /**
@@ -21,6 +23,7 @@ import { trpc } from "@/utils/trpc";
 export default function ChangePasswordForm({ horizontal = false }: { horizontal?: boolean }) {
   const t = useT();
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
 
   const schema = z
     .object({
@@ -75,34 +78,35 @@ export default function ChangePasswordForm({ horizontal = false }: { horizontal?
 
   return (
     <form
+      ref={formRef}
       onSubmit={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        form.handleSubmit();
+        void form.handleSubmit().then(() => focusFirstInvalid(formRef.current));
       }}
       className="space-y-4"
+      noValidate
     >
       <div className={cn("gap-4", horizontal ? "grid sm:grid-cols-3" : "space-y-4")}>
         {fields.map(({ name, label, autoComplete }) => (
           <form.Field key={name} name={name}>
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>{label}</Label>
-                <PasswordInput
-                  id={field.name}
-                  name={field.name}
-                  autoComplete={autoComplete}
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-xs text-destructive">
-                    {error?.message}
-                  </p>
-                ))}
-              </div>
-            )}
+            {(field) => {
+              const error = fieldError(field.name, field.state.meta.errors);
+              return (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{label}</Label>
+                  <PasswordInput
+                    {...error.control}
+                    name={field.name}
+                    autoComplete={autoComplete}
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError {...error} />
+                </div>
+              );
+            }}
           </form.Field>
         ))}
       </div>

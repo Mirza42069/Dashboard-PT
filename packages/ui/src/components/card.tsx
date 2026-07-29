@@ -33,9 +33,26 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
+/**
+ * Renders an <h2> by default rather than a <div>.
+ *
+ * Card titles are the section headings of nearly every screen here, but as divs
+ * they were invisible to the document outline — the codebase had nine <h1>s and
+ * no other heading at all, so a screen-reader user landing on the dashboard
+ * could not jump between "Projects by status", "Behind schedule" and "Recent
+ * activity" at all.
+ *
+ * `as` exists for the cases where h2 is the wrong rank: a card nested inside a
+ * section that already has one takes `as="h3"`, and a card title that genuinely
+ * labels nothing (a bare value tile) can drop back to "div".
+ */
+function CardTitle({
+  className,
+  as: Comp = "h2",
+  ...props
+}: React.ComponentProps<"div"> & { as?: "h1" | "h2" | "h3" | "h4" | "div" }) {
   return (
-    <div
+    <Comp
       data-slot="card-title"
       className={cn(
         "text-sm font-medium group-data-[size=sm]/card:text-sm",

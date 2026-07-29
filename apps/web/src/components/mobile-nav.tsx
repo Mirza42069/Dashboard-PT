@@ -30,7 +30,7 @@ export default function MobileNav({ role }: { role: Role }) {
       >
         <Menu />
       </SheetTrigger>
-      <SheetContent side="left" className="w-64">
+      <SheetContent side="left" className="w-64" closeLabel={t.common.close}>
         <SheetHeader>
           <SheetTitle>{BRAND_NAME}</SheetTitle>
           <SheetDescription>{t.auth.tagline}</SheetDescription>

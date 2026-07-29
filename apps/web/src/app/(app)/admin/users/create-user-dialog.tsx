@@ -22,10 +22,11 @@ import {
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UserPlus } from "lucide-react";
-import { useState } from "react";
-import { toast } from "sonner";
+import { useRef, useState } from "react";
+import { toast } from "@/lib/toast";
 import z from "zod";
 
+import { FieldError, fieldError, focusFirstInvalid } from "@/components/field-error";
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
@@ -44,6 +45,7 @@ export default function CreateUserDialog({
   const [open, setOpen] = useState(false);
   const queryClient = useQueryClient();
   const isSuperAdmin = actorRole === "super_admin";
+  const formRef = useRef<HTMLFormElement>(null);
 
   const createUser = useMutation(trpc.admin.createUser.mutationOptions());
   // company.list is super-admin-only server-side; a company admin creates
@@ -117,58 +119,60 @@ export default function CreateUserDialog({
         <UserPlus />
         {t.users.newUser}
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent closeLabel={t.common.close}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            form.handleSubmit();
+            void form.handleSubmit().then(() => focusFirstInvalid(formRef.current));
           }}
           className="space-y-4"
+          noValidate
+          ref={formRef}
         >
           <DialogHeader>
             <DialogTitle>{t.users.createTitle}</DialogTitle>
           </DialogHeader>
 
           <form.Field name="name">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>{t.users.fullName}</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-xs text-destructive">
-                    {error?.message}
-                  </p>
-                ))}
-              </div>
-            )}
+            {(field) => {
+              const error = fieldError(field.name, field.state.meta.errors);
+              return (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{t.users.fullName}</Label>
+                  <Input
+                    {...error.control}
+                    name={field.name}
+                    autoComplete="name"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError {...error} />
+                </div>
+              );
+            }}
           </form.Field>
 
           <form.Field name="email">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>{t.users.workEmail}</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  type="email"
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-xs text-destructive">
-                    {error?.message}
-                  </p>
-                ))}
-              </div>
-            )}
+            {(field) => {
+              const error = fieldError(field.name, field.state.meta.errors);
+              return (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{t.users.workEmail}</Label>
+                  <Input
+                    {...error.control}
+                    name={field.name}
+                    type="email"
+                    autoComplete="email"
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError {...error} />
+                </div>
+              );
+            }}
           </form.Field>
 
           {/* A company admin can only ever create a User in their own
@@ -209,38 +213,37 @@ export default function CreateUserDialog({
               {(role) =>
                 role === "super_admin" ? null : (
                   <form.Field name="companyId">
-                    {(field) => (
-                      <div className="space-y-2">
-                        <Label htmlFor={field.name}>{t.company.label}</Label>
-                        <Select
-                          items={companyItems}
-                          value={field.state.value}
-                          onValueChange={(value) => field.handleChange(value ?? "")}
-                        >
-                          <SelectTrigger id={field.name} className="w-full">
-                            <SelectValue>
-                              {(value) =>
-                                companyItems.find((item) => item.value === value)?.label ??
-                                t.company.placeholder
-                              }
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {companyItems.map((item) => (
-                              <SelectItem key={item.value} value={item.value}>
-                                {item.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">{t.company.userHint}</p>
-                        {field.state.meta.errors.map((error) => (
-                          <p key={error?.message} className="text-xs text-destructive">
-                            {error?.message}
-                          </p>
-                        ))}
-                      </div>
-                    )}
+                    {(field) => {
+                      const error = fieldError(field.name, field.state.meta.errors);
+                      return (
+                        <div className="space-y-2">
+                          <Label htmlFor={field.name}>{t.company.label}</Label>
+                          <Select
+                            items={companyItems}
+                            value={field.state.value}
+                            onValueChange={(value) => field.handleChange(value ?? "")}
+                          >
+                            <SelectTrigger {...error.control} className="w-full">
+                              <SelectValue>
+                                {(value) =>
+                                  companyItems.find((item) => item.value === value)?.label ??
+                                  t.company.placeholder
+                                }
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {companyItems.map((item) => (
+                                <SelectItem key={item.value} value={item.value}>
+                                  {item.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">{t.company.userHint}</p>
+                          <FieldError {...error} />
+                        </div>
+                      );
+                    }}
                   </form.Field>
                 )
               }

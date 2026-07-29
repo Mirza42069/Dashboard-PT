@@ -43,4 +43,34 @@ export function interpolate(
   );
 }
 
+/** A count-dependent string. Both forms are required, even where they match. */
+export type PluralForms = { readonly one: string; readonly other: string };
+
+/**
+ * Picks the form matching `count`, then interpolates — `{count}` is always
+ * available without passing it.
+ *
+ *   plural(t.projects.bulkDeleted, 1)  -> "1 project deleted"
+ *   plural(t.projects.bulkDeleted, 4)  -> "4 projects deleted"
+ *
+ * Replaces the `"{count} project(s) deleted"` shape these keys used to have.
+ * "(s)" is not a plural rule, it is a way of not choosing one, and it does not
+ * survive translation: Indonesian marks plurality by reduplication or not at
+ * all, so `proyek(s)` is simply wrong there rather than merely graceless.
+ *
+ * Deliberately two forms and not full CLDR categories (zero/one/two/few/many).
+ * English and Indonesian between them need exactly these two, and a `one`/
+ * `other` pair is the shape Intl.PluralRules would hand back for both. If a
+ * language with richer rules is ever added, this is where it changes — one
+ * function, not sixty call sites.
+ */
+export function plural(
+  forms: PluralForms,
+  count: number,
+  vars: Record<string, string | number> = {},
+): string {
+  const form = count === 1 ? forms.one : forms.other;
+  return interpolate(form, { count, ...vars });
+}
+
 export type { Dictionary };

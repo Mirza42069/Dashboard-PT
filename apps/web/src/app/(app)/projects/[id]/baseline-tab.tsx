@@ -23,7 +23,7 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleAlert, Lock } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -322,7 +322,10 @@ function ReviewCheck({ ready, label, value }: { ready: boolean; label: string; v
   return (
     <div className="rounded-lg border p-3">
       <div className="flex items-center gap-2">
-        <Icon className={ready ? "size-4 text-emerald-600" : "size-4 text-destructive"} />
+        {/* text-success, not a raw text-emerald-600 — the only Tailwind palette
+            colour that had been left in the codebase, and the one green that
+            did not follow the theme into dark mode. */}
+        <Icon className={ready ? "size-4 text-success" : "size-4 text-destructive"} />
         <p className="text-sm font-medium">{label}</p>
       </div>
       <p className="mt-1 pl-6 text-xs text-muted-foreground">{value}</p>

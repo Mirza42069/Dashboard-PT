@@ -16,7 +16,7 @@ export function BrandMark({
       aria-hidden
       className={cn(
         "flex items-center justify-center bg-primary font-semibold text-primary-foreground",
-        size === "lg" ? "size-10 rounded-lg text-sm" : "size-6 rounded-md text-[0.625rem]",
+        size === "lg" ? "size-10 rounded-lg text-sm" : "size-6 rounded-md text-[0.6875rem]",
         className,
       )}
     >
