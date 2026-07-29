@@ -16,7 +16,7 @@ import { env } from "@DashboardV2/env/web";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ImagePlus, Send, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -310,7 +310,7 @@ export default function NotesTab({
           if (!open) setLightbox(null);
         }}
       >
-        <DialogContent className="sm:max-w-3xl">
+        <DialogContent className="sm:max-w-3xl" closeLabel={t.common.close}>
           <DialogTitle className="sr-only">{t.notes.viewPhoto}</DialogTitle>
           {lightbox && (
             <div className="relative aspect-video w-full">

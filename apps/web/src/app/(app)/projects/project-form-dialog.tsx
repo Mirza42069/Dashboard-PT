@@ -20,10 +20,11 @@ import {
 import { Textarea } from "@DashboardV2/ui/components/textarea";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import z from "zod";
 
 import { useStatusLabel } from "@/components/status-badge";
+import { FieldError, fieldError } from "@/components/field-error";
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
@@ -123,7 +124,7 @@ export default function ProjectFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg" closeLabel={t.common.close}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -266,11 +267,13 @@ function Field({
   type?: string;
   placeholder?: string;
 }) {
+  const error = fieldError(field.name, field.state.meta.errors);
+
   return (
     <div className="space-y-2">
       <Label htmlFor={field.name}>{label}</Label>
       <Input
-        id={field.name}
+        {...error.control}
         name={field.name}
         type={type}
         placeholder={placeholder}
@@ -278,11 +281,7 @@ function Field({
         onBlur={field.handleBlur}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => field.handleChange(e.target.value)}
       />
-      {field.state.meta.errors.map((error: { message?: string } | undefined) => (
-        <p key={error?.message} className="text-xs text-destructive">
-          {error?.message}
-        </p>
-      ))}
+      <FieldError {...error} />
     </div>
   );
 }

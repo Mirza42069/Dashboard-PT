@@ -3,7 +3,7 @@ import { env } from "@DashboardV2/env/web";
 import { QueryCache, QueryClient } from "@tanstack/react-query";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import { createTRPCOptionsProxy } from "@trpc/tanstack-react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { getServerUrl } from "@/lib/server-url";
 

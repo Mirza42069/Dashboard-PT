@@ -51,12 +51,14 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import z from "zod";
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { QueryError } from "@/components/query-error";
-import { interpolate } from "@/i18n";
+import { TableEmptyState } from "@/components/table-empty-state";
+import { interpolate, plural } from "@/i18n";
+import { FieldError, fieldError } from "@/components/field-error";
 import { useT } from "@/i18n/provider";
 import { todayIso } from "@/lib/format";
 import { summarizeSelection } from "@/lib/summarize-selection";
@@ -94,6 +96,18 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
 
   const debouncedSearch = useDebounced(search);
 
+  // Was `isAdmin ? 8 : 6`, but a non-admin sees seven columns — the full-width
+  // rows fell one short. Counted from `isAdmin` once, like the columns are.
+  const COLUMNS = isAdmin ? 8 : 7;
+
+  const filtered = debouncedSearch !== "" || lowStockOnly;
+
+  function clearFilters() {
+    setSearch("");
+    setLowStockOnly(false);
+    setPage(0);
+  }
+
   const materialsQuery = useQuery(
     trpc.material.list.queryOptions({
       search: debouncedSearch,
@@ -130,7 +144,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
     const ids = selection.selectedIds;
     await run(
       () => deleteMany.mutateAsync({ ids, force: true }),
-      interpolate(t.materials.bulkDeletedToast, { count: ids.length }),
+      plural(t.materials.bulkDeletedToast, ids.length),
     );
     selection.clear();
   }
@@ -215,7 +229,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
               {materialsQuery.isPending &&
                 Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={isAdmin ? 8 : 6} className="pl-4">
+                    <TableCell colSpan={COLUMNS} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -223,7 +237,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
 
               {materialsQuery.isError && (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 8 : 6} className="p-4">
+                  <TableCell colSpan={COLUMNS} className="p-4">
                     <QueryError
                       error={materialsQuery.error}
                       onRetry={() => void materialsQuery.refetch()}
@@ -235,11 +249,27 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
 
               {!materialsQuery.isPending && !materialsQuery.isError && materials.length === 0 && (
                 <TableRow>
-                  <TableCell
-                    colSpan={isAdmin ? 8 : 6}
-                    className="py-10 text-center text-muted-foreground"
-                  >
-                    {lowStockOnly ? t.materials.nothingLow : t.materials.empty}
+                  <TableCell colSpan={COLUMNS} className="p-0">
+                    <TableEmptyState
+                      filtered={filtered}
+                      onClearFilters={clearFilters}
+                      onCreate={isAdmin ? () => setCreateOpen(true) : undefined}
+                      createLabel={t.materials.newMaterial}
+                      title={
+                        lowStockOnly
+                          ? t.materials.nothingLow
+                          : filtered
+                            ? t.materials.noMatch
+                            : t.materials.empty
+                      }
+                      description={
+                        lowStockOnly
+                          ? t.materials.nothingLowHint
+                          : filtered
+                            ? t.materials.noMatchHint
+                            : t.materials.emptyHint
+                      }
+                    />
                   </TableCell>
                 </TableRow>
               )}
@@ -355,7 +385,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>
-                  {interpolate(t.common.bulkDeleteTitle, { count: selection.selectedCount })}
+                  {plural(t.common.bulkDeleteTitle, selection.selectedCount)}
                 </AlertDialogTitle>
                 <AlertDialogDescription className="space-y-2">
                   <span className="block">{t.materials.bulkDeleteDescription}</span>
@@ -457,7 +487,7 @@ function MaterialFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent closeLabel={t.common.close}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -589,7 +619,7 @@ function MovementDialog({
         if (!open) onClose();
       }}
     >
-      <DialogContent>
+      <DialogContent closeLabel={t.common.close}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -719,11 +749,13 @@ function TextField({
   type?: string;
   placeholder?: string;
 }) {
+  const error = fieldError(field.name, field.state.meta.errors);
+
   return (
     <div className="space-y-2">
       <Label htmlFor={field.name}>{label}</Label>
       <Input
-        id={field.name}
+        {...error.control}
         name={field.name}
         type={type}
         placeholder={placeholder}
@@ -731,21 +763,19 @@ function TextField({
         onBlur={field.handleBlur}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => field.handleChange(e.target.value)}
       />
-      {field.state.meta.errors.map((error: { message?: string } | undefined) => (
-        <p key={error?.message} className="text-xs text-destructive">
-          {error?.message}
-        </p>
-      ))}
+      <FieldError {...error} />
     </div>
   );
 }
 
 function NumField({ label, field }: { label: string; field: any }) {
+  const error = fieldError(field.name, field.state.meta.errors);
+
   return (
     <div className="space-y-2">
       <Label htmlFor={field.name}>{label}</Label>
       <Input
-        id={field.name}
+        {...error.control}
         name={field.name}
         type="number"
         min={0}
@@ -756,11 +786,7 @@ function NumField({ label, field }: { label: string; field: any }) {
           field.handleChange(e.target.value === "" ? 0 : Number(e.target.value))
         }
       />
-      {field.state.meta.errors.map((error: { message?: string } | undefined) => (
-        <p key={error?.message} className="text-xs text-destructive">
-          {error?.message}
-        </p>
-      ))}
+      <FieldError {...error} />
     </div>
   );
 }

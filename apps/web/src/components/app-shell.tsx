@@ -6,6 +6,7 @@ import { writeSidebarCookie } from "@/lib/sidebar";
 
 import AppSidebar from "./app-sidebar";
 import Header from "./header";
+import SkipLink from "./skip-link";
 
 export type ShellUser = { name: string; email: string; role: string };
 
@@ -35,10 +36,17 @@ export default function AppShell({
 
   return (
     <div className="flex h-svh">
+      {/* First in the DOM so it is the first thing Tab reaches. */}
+      <SkipLink />
       <AppSidebar isAdmin={isAdmin} collapsed={collapsed} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Header user={user} collapsed={collapsed} onToggleSidebar={toggle} />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        {/* tabIndex={-1} so the skip link can actually land focus here; without
+            it the browser scrolls to #main but focus stays on the link, and the
+            next Tab goes back into the sidebar. */}
+        <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto outline-none">
+          {children}
+        </main>
       </div>
     </div>
   );

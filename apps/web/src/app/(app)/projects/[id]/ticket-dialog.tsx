@@ -13,9 +13,10 @@ import { Label } from "@DashboardV2/ui/components/label";
 import { Textarea } from "@DashboardV2/ui/components/textarea";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import z from "zod";
 
+import { FieldError, fieldError } from "@/components/field-error";
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
@@ -85,7 +86,7 @@ export default function TicketDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg" closeLabel={t.common.close}>
         <form
           className="space-y-4"
           onSubmit={(event) => {
@@ -103,18 +104,7 @@ export default function TicketDialog({
           </form.Field>
           <form.Field name="description">
             {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>{t.tickets.description}</Label>
-                <Textarea
-                  id={field.name}
-                  name={field.name}
-                  rows={5}
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                />
-                <Errors errors={field.state.meta.errors} />
-              </div>
+              <DescriptionField field={field} label={t.tickets.description} />
             )}
           </form.Field>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -148,26 +138,41 @@ export default function TicketDialog({
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- TanStack Form field API */
 function TextField({ label, field, type = "text" }: { label: string; field: any; type?: string }) {
+  const error = fieldError(field.name, field.state.meta.errors);
+
   return (
     <div className="space-y-2">
       <Label htmlFor={field.name}>{label}</Label>
       <Input
-        id={field.name}
+        {...error.control}
         name={field.name}
         type={type}
         value={field.state.value}
         onBlur={field.handleBlur}
         onChange={(event) => field.handleChange(event.target.value)}
       />
-      <Errors errors={field.state.meta.errors} />
+      <FieldError {...error} />
     </div>
   );
 }
 
-function Errors({ errors }: { errors: ({ message?: string } | undefined)[] }) {
-  return errors.map((error) => (
-    <p key={error?.message} className="text-xs text-destructive">
-      {error?.message}
-    </p>
-  ));
+function DescriptionField({ label, field }: { label: string; field: any }) {
+  const error = fieldError(field.name, field.state.meta.errors);
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={field.name}>{label}</Label>
+      <Textarea
+        {...error.control}
+        name={field.name}
+        rows={5}
+        value={field.state.value}
+        onBlur={field.handleBlur}
+        onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) =>
+          field.handleChange(event.target.value)
+        }
+      />
+      <FieldError {...error} />
+    </div>
+  );
 }

@@ -54,11 +54,16 @@ function EmptyMedia({
   );
 }
 
-function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
+/** Defaults to <h2>; see CardTitle in card.tsx for why, and use `as` to re-rank. */
+function EmptyTitle({
+  className,
+  as: Comp = "h2",
+  ...props
+}: React.ComponentProps<"div"> & { as?: "h1" | "h2" | "h3" | "h4" | "div" }) {
   return (
-    <div
+    <Comp
       data-slot="empty-title"
-      className={cn("cn-font-heading text-sm font-medium tracking-tight", className)}
+      className={cn("cn-font-heading text-sm font-medium tracking-tight text-balance", className)}
       {...props}
     />
   );
@@ -66,10 +71,12 @@ function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
 
 function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
-    <div
+    // <p>, matching the prop type. It rendered a <div> while typed as a <p>,
+    // which also meant it could not be nested in a paragraph context.
+    <p
       data-slot="empty-description"
       className={cn(
-        "text-sm/relaxed text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+        "text-sm/relaxed text-pretty text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
         className,
       )}
       {...props}

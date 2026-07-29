@@ -20,9 +20,10 @@ import {
 } from "@DashboardV2/ui/components/select";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import z from "zod";
 
+import { FieldError, fieldError } from "@/components/field-error";
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
@@ -114,7 +115,7 @@ export default function BoqItemDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg" closeLabel={t.common.close}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -214,32 +215,32 @@ function TextField({
   field: any;
   placeholder?: string;
 }) {
+  const error = fieldError(field.name, field.state.meta.errors);
+
   return (
     <div className="space-y-2">
       <Label htmlFor={field.name}>{label}</Label>
       <Input
-        id={field.name}
+        {...error.control}
         name={field.name}
         placeholder={placeholder}
         value={field.state.value}
         onBlur={field.handleBlur}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => field.handleChange(e.target.value)}
       />
-      {field.state.meta.errors.map((error: { message?: string } | undefined) => (
-        <p key={error?.message} className="text-xs text-destructive">
-          {error?.message}
-        </p>
-      ))}
+      <FieldError {...error} />
     </div>
   );
 }
 
 function NumberField({ label, field }: { label: string; field: any }) {
+  const error = fieldError(field.name, field.state.meta.errors);
+
   return (
     <div className="space-y-2">
       <Label htmlFor={field.name}>{label}</Label>
       <Input
-        id={field.name}
+        {...error.control}
         name={field.name}
         type="number"
         min={0}
@@ -250,11 +251,7 @@ function NumberField({ label, field }: { label: string; field: any }) {
           field.handleChange(e.target.value === "" ? 0 : Number(e.target.value))
         }
       />
-      {field.state.meta.errors.map((error: { message?: string } | undefined) => (
-        <p key={error?.message} className="text-xs text-destructive">
-          {error?.message}
-        </p>
-      ))}
+      <FieldError {...error} />
     </div>
   );
 }

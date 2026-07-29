@@ -34,14 +34,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { DeviationBadge } from "@/components/deviation-badge";
 import { Meter } from "@/components/meter";
 import { QueryError } from "@/components/query-error";
+import { TableEmptyState } from "@/components/table-empty-state";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
-import { interpolate } from "@/i18n";
+import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { summarizeSelection } from "@/lib/summarize-selection";
 import { useDebounced } from "@/lib/use-debounced";
@@ -75,6 +76,23 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   const debouncedSearch = useDebounced(search);
+
+  // Counted once, from the same `isAdmin` that decides whether the columns
+  // render. It was written out by hand at each of the three full-width rows
+  // below as `isAdmin ? 9 : 8` — but an admin sees ten columns, not nine, so
+  // the skeleton, error and empty rows all stopped one short and left a stray
+  // cell at the end of the row.
+  const COLUMNS = isAdmin ? 10 : 8;
+
+  // What the empty state needs to know: is this list empty because nothing
+  // exists, or because the filters hid it?
+  const filtered = debouncedSearch !== "" || status !== ALL;
+
+  function clearFilters() {
+    setSearch("");
+    setStatus(ALL);
+    setPage(0);
+  }
 
   const projectsQuery = useQuery(
     trpc.project.list.queryOptions({
@@ -122,7 +140,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
       await queryClient.invalidateQueries(trpc.project.pathFilter());
       // Equipment is released by the delete, so its list is stale too.
       await queryClient.invalidateQueries(trpc.equipment.pathFilter());
-      toast.success(interpolate(t.projects.bulkDeletedToast, { count: ids.length }));
+      toast.success(plural(t.projects.bulkDeletedToast, ids.length));
       selection.clear();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.projects.deleteFailed);
@@ -208,7 +226,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
               {projectsQuery.isPending &&
                 Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={isAdmin ? 9 : 8} className="pl-4">
+                    <TableCell colSpan={COLUMNS} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -216,7 +234,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
 
               {projectsQuery.isError && (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 9 : 8} className="p-4">
+                  <TableCell colSpan={COLUMNS} className="p-4">
                     <QueryError
                       error={projectsQuery.error}
                       onRetry={() => void projectsQuery.refetch()}
@@ -228,11 +246,15 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
 
               {!projectsQuery.isPending && !projectsQuery.isError && projects.length === 0 && (
                 <TableRow>
-                  <TableCell
-                    colSpan={isAdmin ? 9 : 8}
-                    className="py-10 text-center text-muted-foreground"
-                  >
-                    {debouncedSearch || status !== ALL ? t.projects.noMatch : t.projects.empty}
+                  <TableCell colSpan={COLUMNS} className="p-0">
+                    <TableEmptyState
+                      filtered={filtered}
+                      onClearFilters={clearFilters}
+                      onCreate={isAdmin ? openCreate : undefined}
+                      createLabel={t.projects.newProject}
+                      title={filtered ? t.projects.noMatch : t.projects.empty}
+                      description={filtered ? t.projects.noMatchHint : t.projects.emptyHint}
+                    />
                   </TableCell>
                 </TableRow>
               )}
@@ -360,7 +382,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {interpolate(t.common.bulkDeleteTitle, { count: selection.selectedCount })}
+              {plural(t.common.bulkDeleteTitle, selection.selectedCount)}
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
               <span className="block">{t.projects.bulkDeleteDescription}</span>

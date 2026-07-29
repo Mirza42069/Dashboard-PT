@@ -14,11 +14,12 @@ import { Label } from "@DashboardV2/ui/components/label";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { useEffect, useState } from "react";
-import { toast } from "sonner";
+import { useEffect, useRef, useState } from "react";
 import z from "zod";
 
+import { FieldError, fieldError, focusFirstInvalid } from "@/components/field-error";
 import { useT } from "@/i18n/provider";
+import { toast } from "@/lib/toast";
 import { trpc } from "@/utils/trpc";
 
 export type CompanyDraft = { id: string; name: string; code: string };
@@ -38,6 +39,7 @@ export default function CompanyFormDialog({
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const createCompany = useMutation(trpc.company.create.mutationOptions());
   const updateCompany = useMutation(trpc.company.update.mutationOptions());
@@ -69,7 +71,7 @@ export default function CompanyFormDialog({
         await onSaved();
         close(false);
         formApi.reset();
-        toast.success(draft ? t.company.updated : t.company.created2);
+        toast.success(draft ? t.company.updated : t.company.createdToast);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : t.common.somethingWentWrong);
       }
@@ -89,58 +91,69 @@ export default function CompanyFormDialog({
         <Plus />
         {t.company.newCompany}
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent closeLabel={t.common.close}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            form.handleSubmit();
+            void form.handleSubmit().then(() => focusFirstInvalid(formRef.current));
           }}
           className="space-y-4"
+          noValidate
+          ref={formRef}
         >
           <DialogHeader>
             <DialogTitle>{draft ? t.company.editTitle : t.company.createTitle}</DialogTitle>
           </DialogHeader>
 
           <form.Field name="name">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>{t.company.name}</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-xs text-destructive">
-                    {error?.message}
-                  </p>
-                ))}
-              </div>
-            )}
+            {(field) => {
+              const error = fieldError(field.name, field.state.meta.errors);
+              return (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{t.company.name}</Label>
+                  <Input
+                    {...error.control}
+                    name={field.name}
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <FieldError {...error} />
+                </div>
+              );
+            }}
           </form.Field>
 
           <form.Field name="code">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>{t.company.code}</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value.toUpperCase())}
-                />
-                <p className="text-xs text-muted-foreground">{t.company.codeHint}</p>
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-xs text-destructive">
-                    {error?.message}
+            {(field) => {
+              // The hint is part of the description too: it explains the format
+              // before the mistake, so it should be announced with the field
+              // rather than only after validation fails.
+              const error = fieldError(field.name, field.state.meta.errors);
+              const hintId = `${field.name}-hint`;
+              return (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{t.company.code}</Label>
+                  <Input
+                    {...error.control}
+                    aria-describedby={
+                      error.control["aria-describedby"]
+                        ? `${hintId} ${error.control["aria-describedby"]}`
+                        : hintId
+                    }
+                    name={field.name}
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value.toUpperCase())}
+                  />
+                  <p id={hintId} className="text-xs text-muted-foreground">
+                    {t.company.codeHint}
                   </p>
-                ))}
-              </div>
-            )}
+                  <FieldError {...error} />
+                </div>
+              );
+            }}
           </form.Field>
 
           <DialogFooter>

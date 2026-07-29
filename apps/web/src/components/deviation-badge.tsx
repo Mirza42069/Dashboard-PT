@@ -41,7 +41,11 @@ export function DeviationBadge({
         className={cn(
           "font-medium tabular-nums",
           isBehind && "text-destructive",
-          isAhead && "text-[var(--chart-3)]",
+          // --success, not --chart-3. The chart ramp encodes magnitude, so
+          // borrowing a step from it to mean "good" said something it does not
+          // mean — and --chart-3 sits at L 0.55, which fails contrast as text on
+          // the dark card.
+          isAhead && "text-success",
         )}
       >
         {formatDeviation(value)}

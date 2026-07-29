@@ -23,7 +23,7 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarRange, Save } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";

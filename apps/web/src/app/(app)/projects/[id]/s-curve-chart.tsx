@@ -53,7 +53,7 @@ export default function SCurveChart({ data }: { data: CurvePoint[] }) {
             dataKey="label"
             tickLine={false}
             axisLine={false}
-            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+            tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
             minTickGap={12}
           />
           <YAxis
@@ -61,7 +61,7 @@ export default function SCurveChart({ data }: { data: CurvePoint[] }) {
             tickFormatter={(value: number) => `${value}%`}
             tickLine={false}
             axisLine={false}
-            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+            tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
             width={48}
           />
           <Tooltip

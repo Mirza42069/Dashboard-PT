@@ -56,7 +56,7 @@ function Tile({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0 space-y-1">
-      <p className="text-[0.625rem] font-medium tracking-widest text-muted-foreground uppercase">
+      <p className="text-[0.6875rem] font-medium tracking-widest text-muted-foreground uppercase">
         {label}
       </p>
       <div className="truncate text-sm font-medium">{children}</div>

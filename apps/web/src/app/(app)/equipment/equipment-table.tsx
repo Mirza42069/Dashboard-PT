@@ -49,13 +49,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MapPin, Pencil, Plus, Trash2, Wrench } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import z from "zod";
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { QueryError } from "@/components/query-error";
+import { TableEmptyState } from "@/components/table-empty-state";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
-import { interpolate } from "@/i18n";
+import { interpolate, plural } from "@/i18n";
+import { FieldError, fieldError } from "@/components/field-error";
 import { useT } from "@/i18n/provider";
 import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
@@ -84,6 +86,16 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
   // The input stays bound to `search` so typing is responsive; only the settled
   // value reaches the query key, which is what triggers the request.
   const debouncedSearch = useDebounced(search);
+
+  const COLUMNS = isAdmin ? 6 : 5;
+
+  const filtered = debouncedSearch !== "" || status !== ALL;
+
+  function clearFilters() {
+    setSearch("");
+    setStatus(ALL);
+    setPage(0);
+  }
 
   const equipmentQuery = useQuery(
     trpc.equipment.list.queryOptions({
@@ -133,7 +145,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
     const ids = selection.selectedIds;
     await run(
       () => statusMany.mutateAsync({ ids, status: next }),
-      interpolate(t.equipment.statusChangedToast, { count: ids.length }),
+      plural(t.equipment.statusChangedToast, ids.length),
     );
     selection.clear();
   }
@@ -142,7 +154,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
     const ids = selection.selectedIds;
     await run(
       () => assignMany.mutateAsync({ ids, projectId }),
-      interpolate(t.equipment.assignedToast, { count: ids.length }),
+      plural(t.equipment.assignedToast, ids.length),
     );
     selection.clear();
   }
@@ -151,7 +163,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
     const ids = selection.selectedIds;
     await run(
       () => deleteMany.mutateAsync({ ids }),
-      interpolate(t.equipment.bulkDeletedToast, { count: ids.length }),
+      plural(t.equipment.bulkDeletedToast, ids.length),
     );
     selection.clear();
   }
@@ -264,7 +276,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                 // the height the page will actually occupy.
                 Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={isAdmin ? 6 : 5} className="pl-4">
+                    <TableCell colSpan={COLUMNS} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -275,7 +287,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                   filters to fix a network error. */}
               {equipmentQuery.isError && (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 6 : 5} className="p-4">
+                  <TableCell colSpan={COLUMNS} className="p-4">
                     <QueryError
                       error={equipmentQuery.error}
                       onRetry={() => void equipmentQuery.refetch()}
@@ -287,11 +299,19 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
 
               {!equipmentQuery.isPending && !equipmentQuery.isError && rows.length === 0 && (
                 <TableRow>
-                  <TableCell
-                    colSpan={isAdmin ? 6 : 5}
-                    className="py-10 text-center text-muted-foreground"
-                  >
-                    {t.equipment.noMatch}
+                  <TableCell colSpan={COLUMNS} className="p-0">
+                    {/* This row previously said "No equipment matches those
+                        filters" unconditionally — including on a brand new
+                        account with no filters set, which sent people off to
+                        adjust filters that were not there. */}
+                    <TableEmptyState
+                      filtered={filtered}
+                      onClearFilters={clearFilters}
+                      onCreate={isAdmin ? () => setCreateOpen(true) : undefined}
+                      createLabel={t.equipment.newEquipment}
+                      title={filtered ? t.equipment.noMatch : t.equipment.empty}
+                      description={filtered ? t.equipment.noMatchHint : t.equipment.emptyHint}
+                    />
                   </TableCell>
                 </TableRow>
               )}
@@ -393,7 +413,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>
-                  {interpolate(t.common.bulkDeleteTitle, { count: selection.selectedCount })}
+                  {plural(t.common.bulkDeleteTitle, selection.selectedCount)}
                 </AlertDialogTitle>
                 <AlertDialogDescription className="space-y-2">
                   <span className="block">{t.equipment.bulkDeleteDescription}</span>
@@ -458,7 +478,7 @@ function BulkAssignDialog({
         if (!next) onClose();
       }}
     >
-      <DialogContent>
+      <DialogContent closeLabel={t.common.close}>
         <DialogHeader>
           <DialogTitle>{t.equipment.assignSelected}</DialogTitle>
         </DialogHeader>
@@ -579,7 +599,7 @@ function EquipmentFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent closeLabel={t.common.close}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -647,11 +667,13 @@ function TextField({
   type?: string;
   placeholder?: string;
 }) {
+  const error = fieldError(field.name, field.state.meta.errors);
+
   return (
     <div className="space-y-2">
       <Label htmlFor={field.name}>{label}</Label>
       <Input
-        id={field.name}
+        {...error.control}
         name={field.name}
         type={type}
         placeholder={placeholder}
@@ -659,11 +681,7 @@ function TextField({
         onBlur={field.handleBlur}
         onChange={(e: React.ChangeEvent<HTMLInputElement>) => field.handleChange(e.target.value)}
       />
-      {field.state.meta.errors.map((error: { message?: string } | undefined) => (
-        <p key={error?.message} className="text-xs text-destructive">
-          {error?.message}
-        </p>
-      ))}
+      <FieldError {...error} />
     </div>
   );
 }

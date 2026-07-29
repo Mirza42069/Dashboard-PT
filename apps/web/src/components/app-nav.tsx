@@ -116,7 +116,7 @@ export default function AppNav({
           <p
             aria-hidden={collapsed}
             className={cn(
-              "overflow-hidden px-2 text-[0.625rem] font-medium tracking-widest whitespace-nowrap text-muted-foreground uppercase transition-[height,opacity,transform]",
+              "overflow-hidden px-2 text-[0.6875rem] font-medium tracking-widest whitespace-nowrap text-muted-foreground uppercase transition-[height,opacity,transform]",
               MOTION,
               // Drifting left as it collapses ties the heading to the rail's
               // direction of travel instead of just dimming in place.

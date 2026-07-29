@@ -5,16 +5,19 @@ import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
 import { useForm } from "@tanstack/react-form";
 import { useRouter, useSearchParams } from "next/navigation";
-import { toast } from "sonner";
+import { useRef } from "react";
 import z from "zod";
 
+import { FieldError, fieldError, focusFirstInvalid } from "@/components/field-error";
 import { PasswordInput } from "@/components/password-input";
 import { useT } from "@/i18n/provider";
 import { authClient } from "@/lib/auth-client";
+import { toast } from "@/lib/toast";
 
 export default function SignInForm() {
   const t = useT();
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
   const searchParams = useSearchParams();
   // proxy.ts stores the page you were trying to reach here.
   const next = searchParams.get("next");
@@ -62,12 +65,16 @@ export default function SignInForm() {
 
   return (
     <form
+      ref={formRef}
       onSubmit={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        form.handleSubmit();
+        // Validation is async, so the aria-invalid attributes this reads do not
+        // exist until React has re-rendered with the results.
+        void form.handleSubmit().then(() => focusFirstInvalid(formRef.current));
       }}
       className="space-y-4"
+      noValidate
     >
       <div className="space-y-1">
         <h1 className="text-sm font-medium">{t.auth.signIn}</h1>
@@ -75,54 +82,59 @@ export default function SignInForm() {
       </div>
 
       <form.Field name="email">
-        {(field) => (
-          <div className="space-y-2">
-            <Label htmlFor={field.name}>{t.auth.email}</Label>
-            <Input
-              id={field.name}
-              name={field.name}
-              type="email"
-              autoComplete="username"
-              autoFocus
-              value={field.state.value}
-              onBlur={field.handleBlur}
-              onChange={(e) => field.handleChange(e.target.value)}
-            />
-            {field.state.meta.errors.map((error) => (
-              <p key={error?.message} className="text-xs text-destructive">
-                {error?.message}
-              </p>
-            ))}
-          </div>
-        )}
+        {(field) => {
+          const error = fieldError(field.name, field.state.meta.errors);
+          return (
+            <div className="space-y-2">
+              <Label htmlFor={field.name}>{t.auth.email}</Label>
+              <Input
+                {...error.control}
+                name={field.name}
+                type="email"
+                autoComplete="username"
+                autoFocus
+                value={field.state.value}
+                onBlur={field.handleBlur}
+                onChange={(e) => field.handleChange(e.target.value)}
+              />
+              <FieldError {...error} />
+            </div>
+          );
+        }}
       </form.Field>
 
       <form.Field name="password">
-        {(field) => (
-          <div className="space-y-2">
-            <Label htmlFor={field.name}>{t.auth.password}</Label>
-            <PasswordInput
-              id={field.name}
-              name={field.name}
-              autoComplete="current-password"
-              value={field.state.value}
-              onBlur={field.handleBlur}
-              onChange={(e) => field.handleChange(e.target.value)}
-            />
-            {field.state.meta.errors.map((error) => (
-              <p key={error?.message} className="text-xs text-destructive">
-                {error?.message}
-              </p>
-            ))}
-          </div>
-        )}
+        {(field) => {
+          const error = fieldError(field.name, field.state.meta.errors);
+          return (
+            <div className="space-y-2">
+              <Label htmlFor={field.name}>{t.auth.password}</Label>
+              <PasswordInput
+                {...error.control}
+                name={field.name}
+                autoComplete="current-password"
+                value={field.state.value}
+                onBlur={field.handleBlur}
+                onChange={(e) => field.handleChange(e.target.value)}
+              />
+              <FieldError {...error} />
+            </div>
+          );
+        }}
       </form.Field>
 
-      <form.Subscribe
-        selector={(state) => ({ canSubmit: state.canSubmit, isSubmitting: state.isSubmitting })}
-      >
-        {({ canSubmit, isSubmitting }) => (
-          <Button type="submit" size="lg" className="w-full" disabled={!canSubmit || isSubmitting}>
+      {/*
+        Disabled only while the request is in flight, not on `!canSubmit`.
+        Validation here runs `onSubmit` only, so after one failed attempt
+        canSubmit stays false until the form revalidates — and the only thing
+        that revalidates it is a submit, which the disabled button prevents.
+        Correcting the email left the user pressing a dead control with no
+        explanation. Keeping submit live also matches how the errors now
+        announce: press, hear what is wrong, fix it, press again.
+      */}
+      <form.Subscribe selector={(state) => state.isSubmitting}>
+        {(isSubmitting) => (
+          <Button type="submit" size="lg" className="w-full" disabled={isSubmitting}>
             {isSubmitting ? t.auth.signingIn : t.auth.signIn}
           </Button>
         )}
