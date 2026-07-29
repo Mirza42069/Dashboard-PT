@@ -65,13 +65,21 @@ const SECTIONS: NavSection[] = [
 const MOTION = "duration-[320ms] ease-[cubic-bezier(0.16,1,0.3,1)]";
 
 /**
- * Per-row delay for the label cascade, applied on expand only. Four rows at most
- * (overview + one operations + two admin), so the last label starts at 105ms,
- * while the rail is still widening, and settles at 105 + 320 = 425ms — after the
- * rail has stopped. That overhang is the point: the labels read as settling into
- * a rail that has already arrived, rather than racing it to the same frame.
+ * Total span of the label cascade on expand — the first label leaves at 0ms and
+ * the last at 175ms, whatever the row count. The last one is therefore still
+ * moving while the rail widens and settles at 175 + 320 = 495ms, after the rail
+ * has stopped. That overhang is the point: the labels read as settling into a
+ * rail that has already arrived, rather than racing it to the same frame.
+ *
+ * Deliberately a span and not a per-row step. A per-row constant makes the whole
+ * gesture a function of how many rows happen to be visible, so it drifts every
+ * time the nav changes: at 35ms/row this cascade ran 175ms with six rows, fell
+ * to 105ms when Materials and Equipment were removed, and collapses to a single
+ * 35ms step for a role that only sees Dashboard and Projects — by which point
+ * there is no cascade left, just labels arriving together. Pinning the span
+ * keeps the tuned shape and makes it independent of the item list.
  */
-const STAGGER_MS = 35;
+const CASCADE_MS = 175;
 
 export default function AppNav({
   role,
@@ -180,7 +188,12 @@ export default function AppNav({
                     // Cascade on the way out only. Expanding is the gesture worth
                     // decorating; on collapse the labels need to be gone before
                     // the rail reaches them, or they clip against the edge.
-                    transitionDelay: collapsed ? "0ms" : `${order * STAGGER_MS}ms`,
+                    // Spread across CASCADE_MS rather than stepped per row, so
+                    // the gesture keeps its shape at any row count. Guarded
+                    // because a single-row rail has no interval to divide.
+                    transitionDelay: collapsed
+                      ? "0ms"
+                      : `${Math.round((order / Math.max(1, rows - 1)) * CASCADE_MS)}ms`,
                   }}
                   className={cn(
                     "overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform]",
@@ -203,7 +216,7 @@ export default function AppNav({
             return (
               <Tooltip key={href} disabled={!collapsed}>
                 <TooltipTrigger render={link} />
-                <TooltipContent side="right">{label}</TooltipContent>
+                <TooltipContent side="inline-end">{label}</TooltipContent>
               </Tooltip>
             );
           })}

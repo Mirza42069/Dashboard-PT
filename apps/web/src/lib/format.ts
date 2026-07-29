@@ -14,7 +14,6 @@
  * is memoized per locale, so formatter instances are created once.
  */
 
-export const CURRENCY = "IDR";
 export const CURRENCY_PREFIX = "Rp";
 
 /** Grouping/decimal marks for money are pinned to Indonesian, never the UI locale. */
@@ -95,20 +94,4 @@ function createFormatters(intlLocale: string) {
       });
     },
   };
-}
-
-/** Whole days until a date; negative means overdue. Null when undated. */
-export function daysUntil(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const target = new Date(`${value}T00:00:00Z`).getTime();
-  if (Number.isNaN(target)) return null;
-  const today = new Date();
-  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-  return Math.round((target - todayUtc) / 86_400_000);
-}
-
-/** Today as "YYYY-MM-DD" — the default for date inputs. */
-export function todayIso() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }

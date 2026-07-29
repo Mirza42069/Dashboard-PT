@@ -374,7 +374,6 @@ export const id = {
   },
   company: {
     title: "Perusahaan",
-    subtitle: "Setiap perusahaan hanya melihat proyeknya sendiri.",
     label: "Perusahaan",
     placeholder: "Pilih perusahaan",
     switcherLabel: "Perusahaan aktif",
@@ -390,6 +389,14 @@ export const id = {
     editTitle: "Ubah nama perusahaan",
     edit: "Ubah perusahaan",
     delete: "Hapus perusahaan",
+    deleteBlockedLast: "Harus ada minimal satu perusahaan, jadi yang terakhir tidak bisa dihapus.",
+    deleteBlockedProjects: "Masih memiliki {projects}. Pindahkan atau hapus dulu.",
+    deleteBlockedUsers: "Masih memiliki {users}. Pindahkan atau hapus dulu.",
+    deleteBlockedBoth: "Masih memiliki {projects} dan {users}. Pindahkan atau hapus dulu.",
+    // Indonesian doesn't inflect for number, so both forms match — the
+    // Dictionary contract still requires two. Same as elsewhere in this file.
+    projectCount: { one: "1 proyek", other: "{count} proyek" },
+    userCount: { one: "1 pengguna", other: "{count} pengguna" },
     deleteTitle: "Hapus perusahaan ini?",
     deleteConfirm: "{name} akan dihapus. Tindakan ini tidak dapat dibatalkan.",
     createdToast: "Perusahaan dibuat",

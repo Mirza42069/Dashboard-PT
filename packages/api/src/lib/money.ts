@@ -16,11 +16,6 @@ export function toAmount(value: string | number | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-/** number -> the string form Drizzle wants for a numeric column. */
-export function toNumericString(value: number): string {
-  return value.toFixed(2);
-}
-
 /** Rounds to 2dp without the floating-point drift of a naive toFixed chain. */
 export function roundAmount(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;

@@ -197,9 +197,3 @@ export async function assertCompanyExists(companyId: string) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
   }
 }
-
-/** The company a given user is pinned to, for admin-facing user listings. */
-export async function getUserCompanyId(userId: string) {
-  const [row] = await db.select({ companyId: user.companyId }).from(user).where(eq(user.id, userId));
-  return row?.companyId ?? null;
-}

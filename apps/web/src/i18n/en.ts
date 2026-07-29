@@ -370,7 +370,6 @@ export const en = {
   },
   company: {
     title: "Companies",
-    subtitle: "Each company sees only its own projects.",
     label: "Company",
     placeholder: "Select a company",
     switcherLabel: "Active company",
@@ -386,6 +385,15 @@ export const en = {
     editTitle: "Rename company",
     edit: "Edit company",
     delete: "Delete company",
+    deleteBlockedLast: "There has to be at least one company, so the last one can't be deleted.",
+    // One complete sentence per case rather than a list stitched together in
+    // code: the conjunction and the order of the two counts are the locale's
+    // business, not the caller's.
+    deleteBlockedProjects: "Still owns {projects}. Move or delete those first.",
+    deleteBlockedUsers: "Still owns {users}. Move or delete those first.",
+    deleteBlockedBoth: "Still owns {projects} and {users}. Move or delete those first.",
+    projectCount: { one: "1 project", other: "{count} projects" },
+    userCount: { one: "1 user", other: "{count} users" },
     deleteTitle: "Delete this company?",
     deleteConfirm: "{name} will be removed. This cannot be undone.",
     createdToast: "Company created",

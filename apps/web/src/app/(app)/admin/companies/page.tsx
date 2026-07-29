@@ -17,12 +17,7 @@ export default async function AdminCompaniesPage() {
 
   return (
     <div className="space-y-4 p-4 md:p-6">
-      {/* The subtitle stays — it explains tenant isolation, which the sidebar
-          label does not, so it is not duplication. */}
-      <div className="space-y-1">
-        <h1 className="sr-only">{dict.company.title}</h1>
-        <p className="text-sm text-muted-foreground">{dict.company.subtitle}</p>
-      </div>
+      <h1 className="sr-only">{dict.company.title}</h1>
 
       <CompaniesTable />
     </div>

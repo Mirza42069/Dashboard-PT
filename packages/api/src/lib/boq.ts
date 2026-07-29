@@ -248,15 +248,3 @@ export function computePctComplete(input: {
 
   return Math.min(100, Math.max(0, raw));
 }
-
-/**
- * A row is only a *reading* if one of the cumulative columns holds a value.
- * Clearing a cell leaves the row behind with both null, and that is not the
- * same as reporting zero — see the progressEntry docblock.
- */
-export function isRealReading(entry: {
-  cumulativeQuantity: number | null;
-  cumulativePercent: number | null;
-}): boolean {
-  return entry.cumulativeQuantity !== null || entry.cumulativePercent !== null;
-}
