@@ -4,9 +4,9 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, count, eq, ilike, inArray, or } from "drizzle-orm";
 import z from "zod";
 
-import { adminCompanyProcedure, companyProcedure, router } from "../index";
+import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
-import { assertProjectInScope } from "../lib/scope";
+import { assertProjectAccess } from "../lib/scope";
 
 const statusSchema = z.enum(EQUIPMENT_STATUSES);
 
@@ -26,7 +26,7 @@ const upsertSchema = z.object({
 });
 
 export const equipmentRouter = router({
-  list: companyProcedure
+  list: companyPermissionProcedure("equipment:read")
     .input(
       z.object({
         search: z.string().trim().max(200).default(""),
@@ -85,7 +85,7 @@ export const equipmentRouter = router({
       };
     }),
 
-  create: adminCompanyProcedure.input(upsertSchema).mutation(async ({ ctx, input }) => {
+  create: companyPermissionProcedure("equipment:manage").input(upsertSchema).mutation(async ({ ctx, input }) => {
     const code = input.code.toUpperCase();
     const [existing] = await db
       .select({ id: equipment.id })
@@ -95,7 +95,7 @@ export const equipmentRouter = router({
       throw new TRPCError({ code: "CONFLICT", message: `Equipment code ${code} is already in use` });
     }
     if (input.projectId) {
-      await assertProjectInScope(ctx.companyId, input.projectId);
+      await assertProjectAccess(ctx, input.projectId);
     }
 
     const [created] = await db
@@ -115,7 +115,7 @@ export const equipmentRouter = router({
     return { id: created?.id };
   }),
 
-  update: adminCompanyProcedure
+  update: companyPermissionProcedure("equipment:manage")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { id: equipmentId, code, ...rest } = input;
@@ -128,7 +128,7 @@ export const equipmentRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Equipment not found" });
       }
       if (rest.projectId) {
-        await assertProjectInScope(ctx.companyId, rest.projectId);
+        await assertProjectAccess(ctx, rest.projectId);
       }
       if (code && code.toUpperCase() !== current.code) {
         const [clash] = await db
@@ -177,7 +177,7 @@ export const equipmentRouter = router({
    * something recalled is available again. Keeping these in one procedure stops
    * the two fields drifting out of agreement.
    */
-  assign: adminCompanyProcedure
+  assign: companyPermissionProcedure("equipment:manage")
     .input(
       z.object({
         id: z.string().min(1),
@@ -230,7 +230,7 @@ export const equipmentRouter = router({
       return { success: true };
     }),
 
-  delete: adminCompanyProcedure
+  delete: companyPermissionProcedure("equipment:manage")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const [target] = await db
@@ -261,7 +261,7 @@ export const equipmentRouter = router({
    * FORBIDDEN, which would confirm the row exists. Labels are read before the
    * write because the audit trail needs them and a deleted row has none.
    */
-  deleteMany: adminCompanyProcedure
+  deleteMany: companyPermissionProcedure("equipment:manage")
     .input(z.object({ ids: z.array(z.string().min(1)).min(1).max(100) }))
     .mutation(async ({ ctx, input }) => {
       const targets = await db
@@ -291,7 +291,7 @@ export const equipmentRouter = router({
       return { success: true, count: targets.length };
     }),
 
-  updateStatusMany: adminCompanyProcedure
+  updateStatusMany: companyPermissionProcedure("equipment:manage")
     .input(
       z.object({
         ids: z.array(z.string().min(1)).min(1).max(100),
@@ -340,7 +340,7 @@ export const equipmentRouter = router({
       return { success: true, count: targets.length };
     }),
 
-  assignMany: adminCompanyProcedure
+  assignMany: companyPermissionProcedure("equipment:manage")
     .input(
       z.object({
         ids: z.array(z.string().min(1)).min(1).max(100),

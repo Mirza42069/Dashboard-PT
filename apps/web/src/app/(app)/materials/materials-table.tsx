@@ -82,7 +82,7 @@ type MaterialRow = {
   isLowStock: boolean;
 };
 
-export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
+export default function MaterialsTable({ canManage }: { canManage: boolean }) {
   const t = useT();
   const { money, quantity } = useFormat();
   const queryClient = useQueryClient();
@@ -96,9 +96,10 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
 
   const debouncedSearch = useDebounced(search);
 
-  // Was `isAdmin ? 8 : 6`, but a non-admin sees seven columns — the full-width
-  // rows fell one short. Counted from `isAdmin` once, like the columns are.
-  const COLUMNS = isAdmin ? 8 : 7;
+  // Was `canManage ? 8 : 6`, but a non-manager sees seven columns — the
+  // full-width rows fell one short. Counted from `canManage` once, like the
+  // columns are.
+  const COLUMNS = canManage ? 8 : 7;
 
   const filtered = debouncedSearch !== "" || lowStockOnly;
 
@@ -174,7 +175,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
           {t.materials.lowStock}
           {lowStockCount > 0 && !lowStockOnly ? ` (${lowStockCount})` : ""}
         </Button>
-        {isAdmin && (
+        {canManage && (
           <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
             <Plus />
             {t.materials.newMaterial}
@@ -182,7 +183,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
           {/* Editing is inherently single-row, so it appears only once the
               selection names exactly one thing to edit. */}
@@ -204,7 +205,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
           <Table>
             <TableHeader>
               <TableRow>
-                {isAdmin && (
+                {canManage && (
                   <TableHead className="w-10 pl-4">
                     <Checkbox
                       checked={selection.allSelected}
@@ -214,7 +215,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                     />
                   </TableHead>
                 )}
-                <TableHead className={isAdmin ? undefined : "pl-4"}>
+                <TableHead className={canManage ? undefined : "pl-4"}>
                   {t.materials.material}
                 </TableHead>
                 <TableHead>{t.materials.sku}</TableHead>
@@ -222,7 +223,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                 <TableHead className="text-right">{t.materials.reorderAt}</TableHead>
                 <TableHead className="text-right">{t.materials.unitCost}</TableHead>
                 <TableHead className="text-right">{t.materials.stockValue}</TableHead>
-                {isAdmin && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
+                {canManage && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -253,7 +254,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                     <TableEmptyState
                       filtered={filtered}
                       onClearFilters={clearFilters}
-                      onCreate={isAdmin ? () => setCreateOpen(true) : undefined}
+                      onCreate={canManage ? () => setCreateOpen(true) : undefined}
                       createLabel={t.materials.newMaterial}
                       title={
                         lowStockOnly
@@ -279,7 +280,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                   key={row.id}
                   data-state={selection.isSelected(row.id) ? "selected" : undefined}
                 >
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pl-4">
                       <Checkbox
                         checked={selection.isSelected(row.id)}
@@ -288,7 +289,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                       />
                     </TableCell>
                   )}
-                  <TableCell className={isAdmin ? "font-medium" : "pl-4 font-medium"}>
+                  <TableCell className={canManage ? "font-medium" : "pl-4 font-medium"}>
                     {row.name}
                     {row.isLowStock && (
                       <Badge variant="destructive" className="ml-2">
@@ -306,7 +307,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{money(row.unitCost)}</TableCell>
                   <TableCell className="text-right tabular-nums">{money(row.stockValue)}</TableCell>
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pr-4">
                       <div className="flex items-center justify-end">
                         <Button variant="outline" size="sm" onClick={() => setMovementTarget(row)}>
@@ -352,7 +353,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
         </div>
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <>
           <MaterialFormDialog
             open={createOpen}

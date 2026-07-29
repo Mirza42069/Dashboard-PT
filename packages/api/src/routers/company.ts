@@ -6,7 +6,8 @@ import { TRPCError } from "@trpc/server";
 import { asc, count, eq } from "drizzle-orm";
 import z from "zod";
 
-import { adminProcedure, protectedProcedure, router } from "../index";
+import { permissionProcedure, protectedProcedure, router } from "../index";
+import { roleOf } from "../lib/permissions";
 import { resolveCompanyIdForSession } from "../lib/scope";
 
 const upsertSchema = z.object({
@@ -26,7 +27,7 @@ export const companyRouter = router({
    * users only ever see their own — the list is not a directory of tenants.
    */
   options: protectedProcedure.query(async ({ ctx }) => {
-    const isAdmin = ctx.session.user.role === "admin";
+    const canSwitch = roleOf(ctx.session.user) === "super_admin";
     const rows = await db
       .select({ id: company.id, name: company.name, code: company.code })
       .from(company)
@@ -34,13 +35,13 @@ export const companyRouter = router({
 
     const activeId = await resolveCompanyIdForSession(ctx.session.user, ctx.headers);
     return {
-      companies: isAdmin ? rows : rows.filter((row) => row.id === activeId),
+      companies: canSwitch ? rows : rows.filter((row) => row.id === activeId),
       activeId,
-      canSwitch: isAdmin,
+      canSwitch,
     };
   }),
 
-  list: adminProcedure.query(async () => {
+  list: permissionProcedure("company:manage").query(async () => {
     const rows = await db
       .select({
         id: company.id,
@@ -76,7 +77,7 @@ export const companyRouter = router({
     };
   }),
 
-  create: adminProcedure.input(upsertSchema).mutation(async ({ input }) => {
+  create: permissionProcedure("company:manage").input(upsertSchema).mutation(async ({ input }) => {
     const code = input.code.toUpperCase();
     const [existing] = await db.select({ id: company.id }).from(company).where(eq(company.code, code));
     if (existing) {
@@ -91,7 +92,7 @@ export const companyRouter = router({
     return { id: created?.id };
   }),
 
-  update: adminProcedure
+  update: permissionProcedure("company:manage")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ input }) => {
       const { id, name, code } = input;
@@ -123,45 +124,50 @@ export const companyRouter = router({
    * enforce this at the database too; checking here is what turns a constraint
    * violation into a sentence the admin can act on.
    */
-  delete: adminProcedure.input(z.object({ id: z.string().min(1) })).mutation(async ({ input }) => {
-    const [current] = await db.select({ id: company.id }).from(company).where(eq(company.id, input.id));
-    if (!current) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
-    }
+  delete: permissionProcedure("company:manage")
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      const [current] = await db
+        .select({ id: company.id })
+        .from(company)
+        .where(eq(company.id, input.id));
+      if (!current) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
+      }
 
-    const [[projects], [materials], [equipments], [users]] = await Promise.all([
-      db.select({ value: count() }).from(project).where(eq(project.companyId, input.id)),
-      db.select({ value: count() }).from(material).where(eq(material.companyId, input.id)),
-      db.select({ value: count() }).from(equipment).where(eq(equipment.companyId, input.id)),
-      db.select({ value: count() }).from(user).where(eq(user.companyId, input.id)),
-    ]);
+      const [[projects], [materials], [equipments], [users]] = await Promise.all([
+        db.select({ value: count() }).from(project).where(eq(project.companyId, input.id)),
+        db.select({ value: count() }).from(material).where(eq(material.companyId, input.id)),
+        db.select({ value: count() }).from(equipment).where(eq(equipment.companyId, input.id)),
+        db.select({ value: count() }).from(user).where(eq(user.companyId, input.id)),
+      ]);
 
-    const owned =
-      (projects?.value ?? 0) +
-      (materials?.value ?? 0) +
-      (equipments?.value ?? 0) +
-      (users?.value ?? 0);
-    if (owned > 0) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message:
-          `This company still owns ${projects?.value ?? 0} project(s), ` +
-          `${materials?.value ?? 0} material(s), ${equipments?.value ?? 0} equipment item(s) ` +
-          `and ${users?.value ?? 0} user(s). Move or delete them first.`,
-      });
-    }
+      const owned =
+        (projects?.value ?? 0) +
+        (materials?.value ?? 0) +
+        (equipments?.value ?? 0) +
+        (users?.value ?? 0);
+      if (owned > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            `This company still owns ${projects?.value ?? 0} project(s), ` +
+            `${materials?.value ?? 0} material(s), ${equipments?.value ?? 0} equipment item(s) ` +
+            `and ${users?.value ?? 0} user(s). Move or delete them first.`,
+        });
+      }
 
-    // Last company standing: deleting it would leave every request unable to
-    // resolve a scope, locking the whole dashboard.
-    const [{ value: total } = { value: 0 }] = await db.select({ value: count() }).from(company);
-    if (total <= 1) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Cannot delete the only remaining company",
-      });
-    }
+      // Last company standing: deleting it would leave every request unable to
+      // resolve a scope, locking the whole dashboard.
+      const [{ value: total } = { value: 0 }] = await db.select({ value: count() }).from(company);
+      if (total <= 1) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cannot delete the only remaining company",
+        });
+      }
 
-    await db.delete(company).where(eq(company.id, input.id));
-    return { success: true };
-  }),
+      await db.delete(company).where(eq(company.id, input.id));
+      return { success: true };
+    }),
 });

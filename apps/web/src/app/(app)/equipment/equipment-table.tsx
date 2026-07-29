@@ -70,7 +70,7 @@ const ALL = "all";
 const UNASSIGNED = "unassigned";
 const PAGE_SIZE = 25;
 
-export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
+export default function EquipmentTable({ canManage }: { canManage: boolean }) {
   const t = useT();
   const { formatDate } = useFormat();
   const statusLabel = useStatusLabel();
@@ -87,7 +87,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
   // value reaches the query key, which is what triggers the request.
   const debouncedSearch = useDebounced(search);
 
-  const COLUMNS = isAdmin ? 6 : 5;
+  const COLUMNS = canManage ? 6 : 5;
 
   const filtered = debouncedSearch !== "" || status !== ALL;
 
@@ -109,7 +109,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
   // pay for a list of every project in the company and never see it.
   const projectOptions = useQuery({
     ...trpc.project.options.queryOptions(),
-    enabled: isAdmin,
+    enabled: canManage,
   });
 
   const deleteMany = useMutation(trpc.equipment.deleteMany.mutationOptions());
@@ -202,7 +202,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
             ))}
           </SelectContent>
         </Select>
-        {isAdmin && (
+        {canManage && (
           <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
             <Plus />
             {t.equipment.newEquipment}
@@ -210,7 +210,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
           {/* Editing is inherently single-row, so it appears only once the
               selection names exactly one thing to edit. */}
@@ -251,7 +251,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
           <Table>
             <TableHeader>
               <TableRow>
-                {isAdmin && (
+                {canManage && (
                   <TableHead className="w-10 pl-4">
                     <Checkbox
                       checked={selection.allSelected}
@@ -261,7 +261,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                     />
                   </TableHead>
                 )}
-                <TableHead className={isAdmin ? undefined : "pl-4"}>
+                <TableHead className={canManage ? undefined : "pl-4"}>
                   {t.equipment.equipment}
                 </TableHead>
                 <TableHead>{t.equipment.category}</TableHead>
@@ -307,7 +307,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                     <TableEmptyState
                       filtered={filtered}
                       onClearFilters={clearFilters}
-                      onCreate={isAdmin ? () => setCreateOpen(true) : undefined}
+                      onCreate={canManage ? () => setCreateOpen(true) : undefined}
                       createLabel={t.equipment.newEquipment}
                       title={filtered ? t.equipment.noMatch : t.equipment.empty}
                       description={filtered ? t.equipment.noMatchHint : t.equipment.emptyHint}
@@ -321,7 +321,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                   key={row.id}
                   data-state={selection.isSelected(row.id) ? "selected" : undefined}
                 >
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pl-4">
                       <Checkbox
                         checked={selection.isSelected(row.id)}
@@ -330,7 +330,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                       />
                     </TableCell>
                   )}
-                  <TableCell className={isAdmin ? undefined : "pl-4"}>
+                  <TableCell className={canManage ? undefined : "pl-4"}>
                     <span className="font-medium">{row.name}</span>
                     <p className="font-mono text-muted-foreground">{row.code}</p>
                   </TableCell>
@@ -391,7 +391,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
         </div>
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <>
           <EquipmentFormDialog open={createOpen} onOpenChange={setCreateOpen} />
           <EquipmentFormDialog

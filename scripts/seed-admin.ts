@@ -1,11 +1,13 @@
 /**
- * Bootstraps the first admin account.
+ * Bootstraps the first super admin account.
  *
  * Public sign-up is disabled (see packages/auth/src/index.ts), so there is no
  * way to create the very first account through the app — this script is the
  * only door in. It builds its own auth instance with sign-up temporarily
  * enabled, creates the user through the supported API so the password is
- * hashed the same way better-auth expects, then promotes it to admin.
+ * hashed the same way better-auth expects, then promotes it to super_admin —
+ * the only role the UI itself cannot mint from nothing, since every other
+ * role is created by an existing admin.
  *
  * Run with: bun run db:seed-admin
  * Reads ADMIN_EMAIL / ADMIN_PASSWORD / ADMIN_NAME from apps/server/.env.
@@ -63,15 +65,15 @@ async function main() {
     await seedAuth.api.signUpEmail({ body: { email, password, name } });
     console.log(`Created account ${email}`);
   } else {
-    console.log(`Account ${email} already exists — re-asserting admin role`);
+    console.log(`Account ${email} already exists — re-asserting super admin role`);
   }
 
   await db
     .update(user)
-    .set({ role: "admin", mustChangePassword: false, emailVerified: true })
+    .set({ role: "super_admin", mustChangePassword: false, emailVerified: true, companyId: null })
     .where(eq(user.email, email));
 
-  console.log(`${email} is an admin. Sign in at http://localhost:3001/login`);
+  console.log(`${email} is a super admin. Sign in at http://localhost:3001/login`);
 }
 
 main().catch((error) => {

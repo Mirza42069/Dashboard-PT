@@ -3,10 +3,10 @@ import { activityLog } from "@DashboardV2/db/schema";
 import { count, desc, eq } from "drizzle-orm";
 import z from "zod";
 
-import { companyProcedure, router } from "../index";
+import { companyPermissionProcedure, router } from "../index";
 
 export const activityRouter = router({
-  list: companyProcedure
+  list: companyPermissionProcedure("activity:read")
     .input(
       z.object({
         limit: z.number().int().min(1).max(100).default(10),

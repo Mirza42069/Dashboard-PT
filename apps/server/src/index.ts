@@ -1,12 +1,13 @@
 import { createContext } from "@DashboardV2/api/context";
+import { roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
 import { auth } from "@DashboardV2/auth";
 import { resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
 import { db } from "@DashboardV2/db";
-import { notePhoto, project, projectNote } from "@DashboardV2/db/schema";
+import { notePhoto, project, projectMember, projectNote } from "@DashboardV2/db/schema";
 import { env } from "@DashboardV2/env/server";
 import { trpcServer } from "@hono/trpc-server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, exists, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
@@ -23,6 +24,23 @@ app.use(
     credentials: true,
   }),
 );
+
+/**
+ * The admin plugin's raw HTTP surface is cross-tenant by construction (it
+ * knows nothing of companyId). Every in-app user-management flow goes through
+ * tRPC instead, which scopes per-tenant before calling auth.api.* server-side
+ * — and a server-side auth.api.* call never passes back through this Hono
+ * middleware. So nothing legitimate reaches this path except a super admin
+ * poking the raw API directly; everyone else gets a 404, same as a
+ * cross-tenant id anywhere else in this app.
+ */
+app.use("/api/auth/admin/*", async (c, next) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (roleOf(session?.user ?? {}) !== "super_admin") {
+    return c.json({ error: "Not found" }, 404);
+  }
+  await next();
+});
 
 app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
@@ -78,7 +96,9 @@ app.post("/notes/:noteId/photos", async (c) => {
     return c.json({ error: "Photo exceeds the 4 MB upload limit" }, 413);
   }
 
-  // Same company rule as tRPC — a note in another tenant must read as absent.
+  // Same company (and, for role=user, project-membership) rule as tRPC — a
+  // note in another tenant, or in a project this account isn't assigned to,
+  // must read as absent.
   const scope = await resolveCompany(session.user, c.req.raw.headers);
   if ("error" in scope) {
     return c.json({ error: scope.error }, scope.status);
@@ -89,7 +109,25 @@ app.post("/notes/:noteId/photos", async (c) => {
     .select({ id: projectNote.id })
     .from(projectNote)
     .innerJoin(project, eq(projectNote.projectId, project.id))
-    .where(and(eq(projectNote.id, noteId), eq(project.companyId, companyId)));
+    .where(
+      and(
+        eq(projectNote.id, noteId),
+        eq(project.companyId, companyId),
+        roleOf(session.user) === "user"
+          ? exists(
+              db
+                .select({ one: sql`1` })
+                .from(projectMember)
+                .where(
+                  and(
+                    eq(projectMember.projectId, project.id),
+                    eq(projectMember.userId, session.user.id),
+                  ),
+                ),
+            )
+          : undefined,
+      ),
+    );
   if (!note) {
     return c.json({ error: "Note not found" }, 404);
   }
@@ -141,7 +179,25 @@ app.get("/photos/:id", async (c) => {
     .from(notePhoto)
     .innerJoin(projectNote, eq(notePhoto.noteId, projectNote.id))
     .innerJoin(project, eq(projectNote.projectId, project.id))
-    .where(and(eq(notePhoto.id, c.req.param("id")), eq(project.companyId, companyId)));
+    .where(
+      and(
+        eq(notePhoto.id, c.req.param("id")),
+        eq(project.companyId, companyId),
+        roleOf(session.user) === "user"
+          ? exists(
+              db
+                .select({ one: sql`1` })
+                .from(projectMember)
+                .where(
+                  and(
+                    eq(projectMember.projectId, project.id),
+                    eq(projectMember.userId, session.user.id),
+                  ),
+                ),
+            )
+          : undefined,
+      ),
+    );
   if (!photo) {
     return c.json({ error: "Photo not found" }, 404);
   }

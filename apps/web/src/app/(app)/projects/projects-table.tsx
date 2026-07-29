@@ -57,7 +57,7 @@ const STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as 
 const ALL = "all";
 
 
-export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
+export default function ProjectsTable({ canManage }: { canManage: boolean }) {
   const t = useT();
   const { money, percent, formatDate } = useFormat();
   const statusLabel = useStatusLabel();
@@ -77,12 +77,12 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
 
   const debouncedSearch = useDebounced(search);
 
-  // Counted once, from the same `isAdmin` that decides whether the columns
+  // Counted once, from the same `canManage` that decides whether the columns
   // render. It was written out by hand at each of the three full-width rows
-  // below as `isAdmin ? 9 : 8` — but an admin sees ten columns, not nine, so
+  // below as `canManage ? 9 : 8` — but a manager sees ten columns, not nine, so
   // the skeleton, error and empty rows all stopped one short and left a stray
   // cell at the end of the row.
-  const COLUMNS = isAdmin ? 10 : 8;
+  const COLUMNS = canManage ? 10 : 8;
 
   // What the empty state needs to know: is this list empty because nothing
   // exists, or because the filters hid it?
@@ -179,7 +179,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
             ))}
           </SelectContent>
         </Select>
-        {isAdmin && (
+        {canManage && (
           <Button size="sm" className="ml-auto" onClick={openCreate}>
             <Plus />
             {t.projects.newProject}
@@ -187,7 +187,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
           <Button variant="outline" size="sm" onClick={() => setBulkDeleteOpen(true)}>
             <Trash2 />
@@ -201,7 +201,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
           <Table>
             <TableHeader>
               <TableRow>
-                {isAdmin && (
+                {canManage && (
                   <TableHead className="w-10 pl-4">
                     <Checkbox
                       checked={selection.allSelected}
@@ -211,7 +211,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                     />
                   </TableHead>
                 )}
-                <TableHead className={isAdmin ? undefined : "pl-4"}>{t.projects.project}</TableHead>
+                <TableHead className={canManage ? undefined : "pl-4"}>{t.projects.project}</TableHead>
                 <TableHead>{t.projects.statusLabel}</TableHead>
                 <TableHead>{t.projects.client}</TableHead>
                 <TableHead className="w-56">{t.projects.workCompleted}</TableHead>
@@ -219,7 +219,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                 <TableHead className="text-right">{t.projects.contract}</TableHead>
                 <TableHead>{t.projects.dueColumn}</TableHead>
                 <TableHead className="text-right">{t.projects.openTicketsColumn}</TableHead>
-                {isAdmin && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
+                {canManage && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -250,7 +250,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                     <TableEmptyState
                       filtered={filtered}
                       onClearFilters={clearFilters}
-                      onCreate={isAdmin ? openCreate : undefined}
+                      onCreate={canManage ? openCreate : undefined}
                       createLabel={t.projects.newProject}
                       title={filtered ? t.projects.noMatch : t.projects.empty}
                       description={filtered ? t.projects.noMatchHint : t.projects.emptyHint}
@@ -264,7 +264,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                   key={row.id}
                   data-state={selection.isSelected(row.id) ? "selected" : undefined}
                 >
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pl-4">
                       <Checkbox
                         checked={selection.isSelected(row.id)}
@@ -273,7 +273,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                       />
                     </TableCell>
                   )}
-                  <TableCell className={isAdmin ? undefined : "pl-4"}>
+                  <TableCell className={canManage ? undefined : "pl-4"}>
                     <Link href={`/projects/${row.id}`} className="font-medium hover:underline">
                       {row.name}
                     </Link>
@@ -316,7 +316,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(row.endDate)}</TableCell>
                   <TableCell className="text-right tabular-nums">{row.openTickets}</TableCell>
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pr-4 text-right">
                       {/* Edit is the only per-row action left; deleting happens
                           through the selection checkboxes. */}
@@ -367,7 +367,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
         </div>
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <ProjectFormDialog
           // Remount on target change so the form picks up fresh defaultValues.
           key={editingId ?? "new"}

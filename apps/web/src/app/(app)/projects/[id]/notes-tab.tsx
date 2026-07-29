@@ -42,10 +42,10 @@ type Pending = { file: File; previewUrl: string };
 
 export default function NotesTab({
   projectId,
-  isAdmin,
+  canEdit,
 }: {
   projectId: string;
-  isAdmin: boolean;
+  canEdit: boolean;
 }) {
   const t = useT();
   const { formatDateTime } = useFormat();
@@ -235,7 +235,7 @@ export default function NotesTab({
                 <p className="font-medium">{note.authorName}</p>
                 <p className="text-xs text-muted-foreground">{formatDateTime(note.createdAt)}</p>
               </div>
-              {isAdmin && (
+              {canEdit && (
                 <Button
                   variant="ghost"
                   size="icon-sm"

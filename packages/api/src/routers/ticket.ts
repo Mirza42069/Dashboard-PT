@@ -4,9 +4,10 @@ import { TRPCError } from "@trpc/server";
 import { and, count, desc, eq, ilike, or } from "drizzle-orm";
 import z from "zod";
 
-import { companyProcedure, router } from "../index";
+import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
-import { assertProjectInScope } from "../lib/scope";
+import { roleOf } from "../lib/permissions";
+import { assertMember, assertProjectAccess, type ProjectScopeCtx } from "../lib/scope";
 
 const statusSchema = z.enum(TICKET_STATUSES);
 const contactSchema = z
@@ -23,20 +24,23 @@ const fieldsSchema = z.object({
   responsibleContactNumber: contactSchema,
 });
 
-async function ticketInScope(companyId: string, ticketId: string) {
+async function ticketInScope(ctx: ProjectScopeCtx, ticketId: string) {
   const [row] = await db
-    .select({ ticket, projectCode: project.code, projectName: project.name })
+    .select({ ticket, projectId: project.id, projectCode: project.code, projectName: project.name })
     .from(ticket)
     .innerJoin(project, eq(ticket.projectId, project.id))
-    .where(and(eq(ticket.id, ticketId), eq(project.companyId, companyId)));
+    .where(and(eq(ticket.id, ticketId), eq(project.companyId, ctx.companyId)));
   if (!row) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Ticket not found" });
+  }
+  if (roleOf(ctx.session.user) === "user") {
+    await assertMember(row.projectId, ctx.session.user.id, "Ticket not found");
   }
   return row;
 }
 
 export const ticketRouter = router({
-  listByProject: companyProcedure
+  listByProject: companyPermissionProcedure("project:read")
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -45,7 +49,7 @@ export const ticketRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      await assertProjectInScope(ctx.companyId, input.projectId);
+      await assertProjectAccess(ctx, input.projectId);
       const filters = [
         eq(ticket.projectId, input.projectId),
         input.status ? eq(ticket.status, input.status) : undefined,
@@ -83,10 +87,10 @@ export const ticketRouter = router({
       };
     }),
 
-  create: companyProcedure
+  create: companyPermissionProcedure("project:write")
     .input(fieldsSchema.extend({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await assertProjectInScope(ctx.companyId, input.projectId);
+      await assertProjectAccess(ctx, input.projectId);
       const [target] = await db
         .select({ code: project.code, name: project.name })
         .from(project)
@@ -113,11 +117,11 @@ export const ticketRouter = router({
       return { id: created.id };
     }),
 
-  update: companyProcedure
+  update: companyPermissionProcedure("project:write")
     .input(fieldsSchema.extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { id, ...fields } = input;
-      const current = await ticketInScope(ctx.companyId, id);
+      const current = await ticketInScope(ctx, id);
       await db.update(ticket).set(fields).where(eq(ticket.id, id));
       await recordActivity(ctx, {
         action: "updated",
@@ -129,10 +133,10 @@ export const ticketRouter = router({
       return { success: true };
     }),
 
-  setStatus: companyProcedure
+  setStatus: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1), status: statusSchema }))
     .mutation(async ({ ctx, input }) => {
-      const current = await ticketInScope(ctx.companyId, input.id);
+      const current = await ticketInScope(ctx, input.id);
       await db.update(ticket).set({ status: input.status }).where(eq(ticket.id, input.id));
       await recordActivity(ctx, {
         action: "status_changed",
@@ -144,10 +148,10 @@ export const ticketRouter = router({
       return { success: true };
     }),
 
-  delete: companyProcedure
+  delete: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const current = await ticketInScope(ctx.companyId, input.id);
+      const current = await ticketInScope(ctx, input.id);
       await db.delete(ticket).where(eq(ticket.id, input.id));
       await recordActivity(ctx, {
         action: "deleted",

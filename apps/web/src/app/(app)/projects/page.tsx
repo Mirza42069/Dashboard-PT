@@ -1,3 +1,4 @@
+import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import type { Metadata } from "next";
 
 import { BRAND_NAME } from "@/components/brand";
@@ -19,7 +20,7 @@ export default async function ProjectsPage() {
     <div className="space-y-4 p-4 md:p-6">
       <h1 className="sr-only">{dict.projects.title}</h1>
 
-      <ProjectsTable isAdmin={session.user.role === "admin"} />
+      <ProjectsTable canManage={hasPermission(roleOf(session.user), "project:create")} />
     </div>
   );
 }

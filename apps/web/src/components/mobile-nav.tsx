@@ -9,6 +9,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@DashboardV2/ui/components/sheet";
+import type { Role } from "@DashboardV2/api/lib/permissions";
 import { Menu } from "lucide-react";
 import { useState } from "react";
 
@@ -17,7 +18,7 @@ import { useT } from "@/i18n/provider";
 import AppNav from "./app-nav";
 import { BRAND_NAME } from "./brand";
 
-export default function MobileNav({ isAdmin }: { isAdmin: boolean }) {
+export default function MobileNav({ role }: { role: Role }) {
   const t = useT();
   const [open, setOpen] = useState(false);
 
@@ -35,7 +36,7 @@ export default function MobileNav({ isAdmin }: { isAdmin: boolean }) {
           <SheetDescription>{t.auth.tagline}</SheetDescription>
         </SheetHeader>
         <div className="px-3 pb-4">
-          <AppNav isAdmin={isAdmin} onNavigate={() => setOpen(false)} />
+          <AppNav role={role} onNavigate={() => setOpen(false)} />
         </div>
       </SheetContent>
     </Sheet>

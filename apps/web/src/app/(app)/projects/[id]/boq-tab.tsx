@@ -60,13 +60,13 @@ type DialogTarget = {
 
 export default function BoqTab({
   projectId,
-  isAdmin,
+  canEdit,
   targetVersionId,
   setupMode = false,
   onContinue,
 }: {
   projectId: string;
-  isAdmin: boolean;
+  canEdit: boolean;
   targetVersionId?: string;
   setupMode?: boolean;
   onContinue?: () => void;
@@ -132,7 +132,7 @@ export default function BoqTab({
               <EmptyTitle>{t.boq.title}</EmptyTitle>
               <EmptyDescription>{t.boq.createDraftHint}</EmptyDescription>
             </EmptyHeader>
-            {isAdmin && (
+            {canEdit && (
               <Button
                 onClick={() => void run(() => createDraft.mutateAsync({ projectId }), t.boq.saved)}
                 disabled={createDraft.isPending}
@@ -149,7 +149,7 @@ export default function BoqTab({
 
   const versionId = version.id;
   const isDraft = version.status === "draft";
-  const canEdit = isAdmin && isDraft;
+  const editable = canEdit && isDraft;
   const hasDraft = versions.some((candidate) => candidate.status === "draft");
   const sections = buildSections(items);
   const weightTotal = totalLeafWeight(items);
@@ -215,7 +215,7 @@ export default function BoqTab({
                   </SelectContent>
                 </Select>
               )}
-              {!setupMode && isAdmin && version.status === "active" && !hasDraft && (
+              {!setupMode && canEdit && version.status === "active" && !hasDraft && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -229,7 +229,7 @@ export default function BoqTab({
                   {t.boq.revise}
                 </Button>
               )}
-              {canEdit && (
+              {editable && (
                 <>
                 <Button
                   variant="outline"
@@ -270,14 +270,14 @@ export default function BoqTab({
                 <TableHead className="w-32 text-right">{t.boq.unitRate}</TableHead>
                 <TableHead className="w-36 text-right">{t.boq.amount}</TableHead>
                 <TableHead className="w-20 text-right">{t.boq.weight}</TableHead>
-                {canEdit && <TableHead className="pr-4 w-32" />}
+                {editable && <TableHead className="pr-4 w-32" />}
               </TableRow>
             </TableHeader>
             <TableBody>
               {sections.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={canEdit ? 8 : 7}
+                    colSpan={editable ? 8 : 7}
                     className="py-10 text-center text-muted-foreground"
                   >
                     {t.boq.empty}
@@ -314,7 +314,7 @@ export default function BoqTab({
                       <TableCell className="text-right tabular-nums">
                         {sectionWeight(section).toFixed(2)}%
                       </TableCell>
-                      {canEdit && (
+                      {editable && (
                         <TableCell className="pr-4">
                           <div className="flex justify-end gap-0.5">
                             <Button
@@ -398,7 +398,7 @@ export default function BoqTab({
                         <TableCell className="text-right tabular-nums">
                           {leaf.weight.toFixed(2)}%
                         </TableCell>
-                        {canEdit && (
+                        {editable && (
                           <TableCell className="pr-4">
                             <div className="flex justify-end gap-0.5">
                               <Button
@@ -452,7 +452,7 @@ export default function BoqTab({
         </CardContent>
       </Card>
 
-      {canEdit && (
+      {editable && (
         <Button
           variant="outline"
           size="sm"

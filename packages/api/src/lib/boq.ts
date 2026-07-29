@@ -1,9 +1,11 @@
 import { db } from "@DashboardV2/db";
 import { boqItem, boqVersion, project } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { toAmount } from "./money";
+import { roleOf } from "./permissions";
+import { assertMember, type ProjectScopeCtx } from "./scope";
 
 /**
  * Shared BoQ machinery.
@@ -44,26 +46,29 @@ export function leafPredicate(alias: string) {
 }
 
 /**
- * Company scoping for the BoQ tree.
+ * Company + project-membership scoping for the BoQ tree.
  *
  * A version, item or period names its project only indirectly, so every lookup
- * joins back to `project` and filters on the company. Threading `companyId`
- * through these helpers rather than checking it at each call site means a new
- * procedure cannot forget it — there is no way to reach a version without
- * passing one.
+ * joins back to `project` and filters on the company (and, for role=user, on
+ * project_member). Threading `ctx` through these helpers rather than checking
+ * it at each call site means a new procedure cannot forget it — there is no
+ * way to reach a version without passing one.
  *
- * Out-of-company ids read as NOT_FOUND, never FORBIDDEN, matching lib/scope.ts:
+ * Out-of-scope ids read as NOT_FOUND, never FORBIDDEN, matching lib/scope.ts:
  * a "forbidden" would confirm to one tenant that another tenant's row exists.
  */
-export async function getVersion(companyId: string, versionId: string) {
+export async function getVersion(ctx: ProjectScopeCtx, versionId: string) {
   const [row] = await db
-    .select({ version: boqVersion })
+    .select({ version: boqVersion, companyId: project.companyId, projectId: project.id })
     .from(boqVersion)
     .innerJoin(project, eq(project.id, boqVersion.projectId))
-    .where(and(eq(boqVersion.id, versionId), eq(project.companyId, companyId)));
+    .where(eq(boqVersion.id, versionId));
 
-  if (!row) {
+  if (!row || row.companyId !== ctx.companyId) {
     throw new TRPCError({ code: "NOT_FOUND", message: "BoQ version not found" });
+  }
+  if (roleOf(ctx.session.user) === "user") {
+    await assertMember(row.projectId, ctx.session.user.id, "BoQ version not found");
   }
   return row.version;
 }
@@ -73,8 +78,8 @@ export async function getVersion(companyId: string, versionId: string) {
  * progress figures are measured against — letting them move afterwards would
  * silently rewrite every deviation already reported.
  */
-export async function requireDraft(companyId: string, versionId: string) {
-  const version = await getVersion(companyId, versionId);
+export async function requireDraft(ctx: ProjectScopeCtx, versionId: string) {
+  const version = await getVersion(ctx, versionId);
   if (version.status !== "draft") {
     throw new TRPCError({
       code: "CONFLICT",
@@ -85,16 +90,24 @@ export async function requireDraft(companyId: string, versionId: string) {
 }
 
 /** Same gate, entered from an item rather than its version. */
-export async function requireDraftForItem(companyId: string, itemId: string) {
+export async function requireDraftForItem(ctx: ProjectScopeCtx, itemId: string) {
   const [row] = await db
-    .select({ item: boqItem, versionStatus: boqVersion.status })
+    .select({
+      item: boqItem,
+      versionStatus: boqVersion.status,
+      companyId: project.companyId,
+      projectId: project.id,
+    })
     .from(boqItem)
     .innerJoin(boqVersion, eq(boqVersion.id, boqItem.boqVersionId))
     .innerJoin(project, eq(project.id, boqVersion.projectId))
-    .where(and(eq(boqItem.id, itemId), eq(project.companyId, companyId)));
+    .where(eq(boqItem.id, itemId));
 
-  if (!row || row.item.deletedAt !== null) {
+  if (!row || row.item.deletedAt !== null || row.companyId !== ctx.companyId) {
     throw new TRPCError({ code: "NOT_FOUND", message: "BoQ item not found" });
+  }
+  if (roleOf(ctx.session.user) === "user") {
+    await assertMember(row.projectId, ctx.session.user.id, "BoQ item not found");
   }
   if (row.versionStatus !== "draft") {
     throw new TRPCError({

@@ -1,6 +1,7 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 
 import type { Context } from "./context";
+import { hasPermission, roleOf, type Permission } from "./lib/permissions";
 
 export const t = initTRPC.context<Context>().create();
 
@@ -24,17 +25,6 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   });
 });
 
-export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  if (ctx.session.user.role !== "admin") {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Admin access required",
-      cause: "Insufficient role",
-    });
-  }
-  return next({ ctx });
-});
-
 /**
  * Adds the active company to the context.
  *
@@ -53,13 +43,32 @@ export const companyProcedure = protectedProcedure.use(async ({ ctx, next }) => 
   return next({ ctx: { ...ctx, companyId } });
 });
 
-export const adminCompanyProcedure = companyProcedure.use(({ ctx, next }) => {
-  if (ctx.session.user.role !== "admin") {
+function assertPermission(permission: Permission, user: { role?: string | null }) {
+  if (!hasPermission(roleOf(user), permission)) {
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: "Admin access required",
-      cause: "Insufficient role",
+      message: "Insufficient role",
+      cause: "Missing permission",
     });
   }
-  return next({ ctx });
-});
+}
+
+/**
+ * The permission a request needs is declared once, at the call site — see
+ * packages/api/src/lib/permissions.ts for the role→permission map this checks
+ * against. Cross-tenant ops (company CRUD, global user listing) use this;
+ * anything reading or writing tenant data uses companyPermissionProcedure
+ * instead, below.
+ */
+export const permissionProcedure = (permission: Permission) =>
+  protectedProcedure.use(({ ctx, next }) => {
+    assertPermission(permission, ctx.session.user);
+    return next({ ctx });
+  });
+
+/** Permission check + ctx.companyId — the workhorse for tenant-scoped data. */
+export const companyPermissionProcedure = (permission: Permission) =>
+  companyProcedure.use(({ ctx, next }) => {
+    assertPermission(permission, ctx.session.user);
+    return next({ ctx });
+  });

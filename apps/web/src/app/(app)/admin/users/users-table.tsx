@@ -1,5 +1,6 @@
 "use client";
 
+import { roleOf, type Role } from "@DashboardV2/api/lib/permissions";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -57,7 +58,13 @@ const PAGE_SIZE = 25;
 
 type PendingDelete = { id: string; name: string; email: string };
 
-export default function UsersTable({ currentUserId }: { currentUserId: string }) {
+export default function UsersTable({
+  currentUserId,
+  actorRole,
+}: {
+  currentUserId: string;
+  actorRole: Role;
+}) {
   const t = useT();
   const { formatDateTime } = useFormat();
   const queryClient = useQueryClient();
@@ -77,7 +84,12 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
       offset: page * PAGE_SIZE,
     }),
   );
-  const companiesQuery = useQuery(trpc.company.list.queryOptions());
+  // company.list is super-admin-only server-side; a company admin never
+  // moves anyone, so there is nothing to fetch for them.
+  const companiesQuery = useQuery({
+    ...trpc.company.list.queryOptions(),
+    enabled: actorRole === "super_admin",
+  });
   const companies = companiesQuery.data?.companies ?? [];
 
   async function refresh() {
@@ -118,7 +130,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
           className="w-full sm:max-w-xs"
           aria-label={t.common.search}
         />
-        <CreateUserDialog onCreated={setTempPassword} />
+        <CreateUserDialog actorRole={actorRole} onCreated={setTempPassword} />
       </div>
 
       <Card>
@@ -157,7 +169,14 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
 
               {users.map((user) => {
                 const isSelf = user.id === currentUserId;
-                const isAdmin = user.role === "admin";
+                const role = roleOf(user);
+                const isSuperAdmin = role === "super_admin";
+                const isRowAdmin = role === "admin";
+                // A super admin can act on anyone; a company admin only on
+                // their own company's Users — mirrors assertTargetManageable
+                // server-side. The only non-manageable row an admin actor
+                // ever sees is a fellow admin of the same company.
+                const manageable = actorRole === "super_admin" || role === "user";
 
                 return (
                   <TableRow key={user.id}>
@@ -169,12 +188,17 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                     </TableCell>
                     <TableCell className="text-muted-foreground">{user.email}</TableCell>
                     <TableCell>
-                      <Badge variant={isAdmin ? "default" : "outline"}>
-                        {isAdmin ? t.users.roleAdmin : t.users.roleUser}
+                      <Badge variant={isSuperAdmin ? "default" : isRowAdmin ? "secondary" : "outline"}>
+                        {isSuperAdmin
+                          ? t.users.roleSuperAdmin
+                          : isRowAdmin
+                            ? t.users.roleAdmin
+                            : t.users.roleUser}
                       </Badge>
                     </TableCell>
-                    {/* Admins are unpinned by design — they pick an active
-                        company from the header instead of belonging to one. */}
+                    {/* Super admins are unpinned by design — they pick an
+                        active company from the header instead of belonging
+                        to one. */}
                     <TableCell className="text-muted-foreground">
                       {user.companyName ?? t.common.none}
                     </TableCell>
@@ -203,6 +227,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-52 bg-card">
                           <DropdownMenuItem
+                            disabled={!manageable}
                             onClick={() =>
                               run(async () => {
                                 const data = await resetPassword.mutateAsync({ userId: user.id });
@@ -218,24 +243,29 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                             {t.users.resetPassword}
                           </DropdownMenuItem>
 
-                          <DropdownMenuItem
-                            onClick={() =>
-                              run(
-                                () =>
-                                  setRole.mutateAsync({
-                                    userId: user.id,
-                                    role: isAdmin ? "user" : "admin",
-                                  }),
-                                isAdmin ? t.users.demotedToast : t.users.promotedToast,
-                              )
-                            }
-                          >
-                            {isAdmin ? <ShieldMinus /> : <ShieldPlus />}
-                            {isAdmin ? t.users.demote : t.users.promote}
-                          </DropdownMenuItem>
+                          {/* Promote/demote cycles user <-> admin only — a
+                              super admin is created via setRole from a
+                              different flow and never shown this toggle. */}
+                          {actorRole === "super_admin" && !isSuperAdmin && (
+                            <DropdownMenuItem
+                              onClick={() =>
+                                run(
+                                  () =>
+                                    setRole.mutateAsync({
+                                      userId: user.id,
+                                      role: isRowAdmin ? "user" : "admin",
+                                    }),
+                                  isRowAdmin ? t.users.demotedToast : t.users.promotedToast,
+                                )
+                              }
+                            >
+                              {isRowAdmin ? <ShieldMinus /> : <ShieldPlus />}
+                              {isRowAdmin ? t.users.demote : t.users.promote}
+                            </DropdownMenuItem>
+                          )}
 
-                          {/* Admins have no company to move; they pick one. */}
-                          {!isAdmin && (
+                          {/* Super admins have no company to move; they pick one. */}
+                          {actorRole === "super_admin" && !isSuperAdmin && (
                             <DropdownMenuItem
                               onClick={() =>
                                 setCompanyTarget({ id: user.id, name: user.name })
@@ -252,7 +282,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
                               lifecycle name: sign-in is refused with the
                               contact-your-admin message until resumed. */}
                           <DropdownMenuItem
-                            disabled={isSelf}
+                            disabled={isSelf || !manageable}
                             onClick={() =>
                               run(
                                 () =>
@@ -273,7 +303,7 @@ export default function UsersTable({ currentUserId }: { currentUserId: string })
 
                           <DropdownMenuItem
                             variant="destructive"
-                            disabled={isSelf}
+                            disabled={isSelf || !manageable}
                             onClick={() =>
                               setPendingDelete({
                                 id: user.id,

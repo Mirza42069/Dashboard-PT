@@ -1,5 +1,6 @@
 "use client";
 
+import { roleOf } from "@DashboardV2/api/lib/permissions";
 import { Badge } from "@DashboardV2/ui/components/badge";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@DashboardV2/ui/components/card";
@@ -110,10 +111,12 @@ export function ProfileSection({
   className?: string;
 }) {
   const t = useT();
-  const isAdmin = role === "admin";
+  const normalizedRole = roleOf({ role });
+  const isSuperAdmin = normalizedRole === "super_admin";
+  const isRowAdmin = normalizedRole === "admin";
 
-  // The company the account is acting as — their own, or for an admin whichever
-  // one the header switcher currently points at.
+  // The company the account is acting as — their own, or for a super admin
+  // whichever one the header switcher currently points at.
   const options = useQuery(trpc.company.options.queryOptions());
   const companyName = options.data?.companies.find(
     (item) => item.id === options.data?.activeId,
@@ -138,8 +141,8 @@ export function ProfileSection({
           <span className="truncate">{email}</span>
         </Field>
         <Field label={t.settings.role}>
-          <Badge variant={isAdmin ? "default" : "outline"}>
-            {isAdmin ? t.users.roleAdmin : t.users.roleUser}
+          <Badge variant={isSuperAdmin ? "default" : isRowAdmin ? "secondary" : "outline"}>
+            {isSuperAdmin ? t.users.roleSuperAdmin : isRowAdmin ? t.users.roleAdmin : t.users.roleUser}
           </Badge>
         </Field>
         <Field label={t.company.label}>

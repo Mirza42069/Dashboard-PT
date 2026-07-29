@@ -37,13 +37,13 @@ const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
 
 export default function ScheduleTab({
   projectId,
-  isAdmin,
+  canEdit,
   targetVersionId,
   setupMode = false,
   onReview,
 }: {
   projectId: string;
-  isAdmin: boolean;
+  canEdit: boolean;
   targetVersionId?: string;
   setupMode?: boolean;
   onReview?: () => void;
@@ -84,7 +84,7 @@ export default function ScheduleTab({
 
   const versionId = version.id;
   const isDraft = version.scheduleStatus === "draft";
-  const canEdit = isAdmin && isDraft && (version.status === "draft" || version.status === "active");
+  const editable = canEdit && isDraft && (version.status === "draft" || version.status === "active");
   const settings = setupMode ? (
     <ScheduleSettings
       key={`${report?.project.startDate}-${report?.project.endDate}-${report?.project.scheduleStart}-${report?.project.periodType}`}
@@ -94,7 +94,7 @@ export default function ScheduleTab({
       endDate={report?.project.endDate ?? ""}
       scheduleStart={report?.project.scheduleStart ?? ""}
       periodType={report?.project.periodType ?? "weekly"}
-      editable={canEdit && version.sourceVersionId === null}
+      editable={editable && version.sourceVersionId === null}
       periodsExist={periods.length > 0}
     />
   ) : null;
@@ -110,7 +110,7 @@ export default function ScheduleTab({
                 <EmptyTitle>{t.schedule.noPeriods}</EmptyTitle>
                 <EmptyDescription>{t.schedule.noPeriodsHint}</EmptyDescription>
               </EmptyHeader>
-              {!setupMode && isAdmin && (
+              {!setupMode && canEdit && (
                 <Button
                   disabled={generatePeriods.isPending}
                   onClick={async () => {
@@ -198,10 +198,10 @@ export default function ScheduleTab({
               </Badge>
             </CardTitle>
             <CardDescription>
-              {canEdit ? t.schedule.description : t.schedule.lockedNote}
+              {editable ? t.schedule.description : t.schedule.lockedNote}
             </CardDescription>
           </div>
-          {canEdit && (
+          {editable && (
             <div className="flex flex-wrap gap-2">
               {drafts.size > 0 && (
                 <>
@@ -274,7 +274,7 @@ export default function ScheduleTab({
                       const value = cells.get(cellKey(row.leaf.id, period.id)) ?? 0;
                       return (
                         <td key={period.id} className="px-1 py-1">
-                          {canEdit ? (
+                          {editable ? (
                             <Input
                               type="number"
                               min={0}

@@ -1,5 +1,6 @@
 "use client";
 
+import type { Role } from "@DashboardV2/api/lib/permissions";
 import { Button } from "@DashboardV2/ui/components/button";
 import {
   Dialog,
@@ -31,22 +32,32 @@ import { trpc } from "@/utils/trpc";
 
 import type { TempPasswordResult } from "./temp-password-dialog";
 
+type CreateRole = "super_admin" | "admin" | "user";
+
 export default function CreateUserDialog({
+  actorRole,
   onCreated,
 }: {
+  actorRole: Role;
   onCreated: (result: TempPasswordResult) => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const queryClient = useQueryClient();
+  const isSuperAdmin = actorRole === "super_admin";
   const formRef = useRef<HTMLFormElement>(null);
 
   const createUser = useMutation(trpc.admin.createUser.mutationOptions());
-  const companies = useQuery(trpc.company.list.queryOptions());
-  const roleItems = [
-    { value: "user", label: t.users.roleUser },
-    { value: "admin", label: t.users.roleAdmin },
-  ];
+  // company.list is super-admin-only server-side; a company admin creates
+  // Users in their own company only, so there is nothing to pick from.
+  const companies = useQuery({ ...trpc.company.list.queryOptions(), enabled: isSuperAdmin });
+  const roleItems = isSuperAdmin
+    ? [
+        { value: "user", label: t.users.roleUser },
+        { value: "admin", label: t.users.roleAdmin },
+        { value: "super_admin", label: t.users.roleSuperAdmin },
+      ]
+    : [{ value: "user", label: t.users.roleUser }];
   const companyItems =
     companies.data?.companies.map((company) => ({
       value: company.id,
@@ -57,12 +68,13 @@ export default function CreateUserDialog({
     .object({
       name: z.string().trim().min(1, t.users.nameRequired).max(120),
       email: z.email(t.auth.invalidEmail),
-      role: z.enum(["admin", "user"]),
+      role: z.enum(["super_admin", "admin", "user"]),
       companyId: z.string(),
     })
-    // Admins are unpinned and pick an active company instead; a regular
-    // account with no company cannot resolve a scope and is locked out.
-    .refine((value) => value.role === "admin" || value.companyId !== "", {
+    // Super admins are unpinned and pick an active company instead; an admin
+    // or a regular account with no company cannot resolve a scope and is
+    // locked out.
+    .refine((value) => value.role === "super_admin" || value.companyId !== "", {
       message: t.company.required,
       path: ["companyId"],
     });
@@ -71,7 +83,7 @@ export default function CreateUserDialog({
     defaultValues: {
       name: "",
       email: "",
-      role: "user" as "admin" | "user",
+      role: "user" as CreateRole,
       companyId: "",
     },
     onSubmit: async ({ value, formApi }) => {
@@ -163,72 +175,80 @@ export default function CreateUserDialog({
             }}
           </form.Field>
 
-          <form.Field name="role">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>{t.users.role}</Label>
-                <Select
-                  items={roleItems}
-                  value={field.state.value}
-                  onValueChange={(value) => field.handleChange((value ?? "user") as "admin" | "user")}
-                >
-                  <SelectTrigger id={field.name} className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {roleItems.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">{t.users.roleHint}</p>
-              </div>
-            )}
-          </form.Field>
+          {/* A company admin can only ever create a User in their own
+              company — the server forces both, so the form has nothing to
+              ask here beyond name and email. */}
+          {isSuperAdmin && (
+            <form.Field name="role">
+              {(field) => (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{t.users.role}</Label>
+                  <Select
+                    items={roleItems}
+                    value={field.state.value}
+                    onValueChange={(value) => field.handleChange((value ?? "user") as CreateRole)}
+                  >
+                    <SelectTrigger id={field.name} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roleItems.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{t.users.roleHint}</p>
+                </div>
+              )}
+            </form.Field>
+          )}
 
-          {/* Only meaningful for a regular account — admins see every company
-              through the switcher, so pinning them to one would be misleading. */}
-          <form.Subscribe selector={(state) => state.values.role}>
-            {(role) =>
-              role === "admin" ? null : (
-                <form.Field name="companyId">
-                  {(field) => {
-                    const error = fieldError(field.name, field.state.meta.errors);
-                    return (
-                      <div className="space-y-2">
-                        <Label htmlFor={field.name}>{t.company.label}</Label>
-                        <Select
-                          items={companyItems}
-                          value={field.state.value}
-                          onValueChange={(value) => field.handleChange(value ?? "")}
-                        >
-                          <SelectTrigger {...error.control} className="w-full">
-                            <SelectValue>
-                              {(value) =>
-                                companyItems.find((item) => item.value === value)?.label ??
-                                t.company.placeholder
-                              }
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {companyItems.map((item) => (
-                              <SelectItem key={item.value} value={item.value}>
-                                {item.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">{t.company.userHint}</p>
-                        <FieldError {...error} />
-                      </div>
-                    );
-                  }}
-                </form.Field>
-              )
-            }
-          </form.Subscribe>
+          {/* Only meaningful for a pinned account — a super admin sees every
+              company through the switcher, so pinning them to one would be
+              misleading. */}
+          {isSuperAdmin && (
+            <form.Subscribe selector={(state) => state.values.role}>
+              {(role) =>
+                role === "super_admin" ? null : (
+                  <form.Field name="companyId">
+                    {(field) => {
+                      const error = fieldError(field.name, field.state.meta.errors);
+                      return (
+                        <div className="space-y-2">
+                          <Label htmlFor={field.name}>{t.company.label}</Label>
+                          <Select
+                            items={companyItems}
+                            value={field.state.value}
+                            onValueChange={(value) => field.handleChange(value ?? "")}
+                          >
+                            <SelectTrigger {...error.control} className="w-full">
+                              <SelectValue>
+                                {(value) =>
+                                  companyItems.find((item) => item.value === value)?.label ??
+                                  t.company.placeholder
+                                }
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {companyItems.map((item) => (
+                                <SelectItem key={item.value} value={item.value}>
+                                  {item.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">{t.company.userHint}</p>
+                          <FieldError {...error} />
+                        </div>
+                      );
+                    }}
+                  </form.Field>
+                )
+              }
+            </form.Subscribe>
+          )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

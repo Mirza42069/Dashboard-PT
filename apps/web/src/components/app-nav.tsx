@@ -1,5 +1,6 @@
 "use client";
 
+import { hasPermission, type Permission, type Role } from "@DashboardV2/api/lib/permissions";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
 import { Boxes, Building2, HardHat, LayoutDashboard, Truck, Users } from "lucide-react";
@@ -14,18 +15,19 @@ type NavItem = {
   href: Route;
   labelKey: keyof Dictionary["nav"];
   icon: typeof LayoutDashboard;
+  /** Omitted entirely means every role sees it. */
+  permission?: Permission;
 };
 
 type NavSection = {
   headingKey: keyof Dictionary["nav"];
-  adminOnly: boolean;
   items: NavItem[];
 };
 
 /**
- * `adminOnly` hides a section from the sidebar; it is not the access control.
- * The pages themselves call requireAdmin() and the procedures use
- * adminProcedure — hiding here is only so people don't see dead links.
+ * `permission` hides an item from the sidebar; it is not the access control.
+ * The pages themselves call requirePermission() and the procedures declare
+ * the same permission — hiding here is only so people don't see dead links.
  *
  * Settings deliberately lives in the account menu, not here: it configures the
  * person, not the business.
@@ -33,24 +35,21 @@ type NavSection = {
 const SECTIONS: NavSection[] = [
   {
     headingKey: "overview",
-    adminOnly: false,
     items: [{ href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard }],
   },
   {
     headingKey: "operations",
-    adminOnly: false,
     items: [
       { href: "/projects", labelKey: "projects", icon: HardHat },
-      { href: "/materials", labelKey: "materials", icon: Boxes },
-      { href: "/equipment", labelKey: "equipment", icon: Truck },
+      { href: "/materials", labelKey: "materials", icon: Boxes, permission: "material:read" },
+      { href: "/equipment", labelKey: "equipment", icon: Truck, permission: "equipment:read" },
     ],
   },
   {
     headingKey: "administration",
-    adminOnly: true,
     items: [
-      { href: "/admin/users", labelKey: "users", icon: Users },
-      { href: "/admin/companies", labelKey: "companies", icon: Building2 },
+      { href: "/admin/users", labelKey: "users", icon: Users, permission: "user:manage" },
+      { href: "/admin/companies", labelKey: "companies", icon: Building2, permission: "company:manage" },
     ],
   },
 ];
@@ -79,18 +78,21 @@ const MOTION = "duration-[320ms] ease-[cubic-bezier(0.16,1,0.3,1)]";
 const STAGGER_MS = 35;
 
 export default function AppNav({
-  isAdmin,
+  role,
   collapsed = false,
   onNavigate,
 }: {
-  isAdmin: boolean;
+  role: Role;
   collapsed?: boolean;
   onNavigate?: () => void;
 }) {
   const t = useT();
   const pathname = usePathname();
 
-  const sections = SECTIONS.filter((section) => !section.adminOnly || isAdmin);
+  const sections = SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => !item.permission || hasPermission(role, item.permission)),
+  })).filter((section) => section.items.length > 0);
 
   // Running row number across sections, so the cascade runs down the whole rail
   // rather than restarting at each heading.

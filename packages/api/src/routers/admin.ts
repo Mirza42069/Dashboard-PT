@@ -3,11 +3,12 @@ import { db } from "@DashboardV2/db";
 import { user } from "@DashboardV2/db/schema/auth";
 import { company } from "@DashboardV2/db/schema/company";
 import { TRPCError } from "@trpc/server";
-import { count, desc, eq, ilike, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, or } from "drizzle-orm";
 import z from "zod";
 
-import { adminCompanyProcedure, adminProcedure, router } from "../index";
+import { companyPermissionProcedure, permissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
+import { roleOf } from "../lib/permissions";
 import { assertCompanyExists } from "../lib/scope";
 
 /**
@@ -25,31 +26,55 @@ function generateTempPassword() {
   ).join("");
 }
 
-const roleSchema = z.enum(["admin", "user"]);
+const roleSchema = z.enum(["super_admin", "admin", "user"]);
 const userIdSchema = z.object({ userId: z.string().min(1) });
 
-async function countAdmins() {
-  const [row] = await db.select({ value: count() }).from(user).where(eq(user.role, "admin"));
+async function countSuperAdmins() {
+  const [row] = await db.select({ value: count() }).from(user).where(eq(user.role, "super_admin"));
   return row?.value ?? 0;
 }
 
 /**
  * Refuses any change that would leave the dashboard with no way back in.
+ * "Last way back in" is global, not per-tenant — a company without its own
+ * admin is still fully manageable by any super_admin, so there is no
+ * per-tenant lockout to protect against, only a total one.
  */
-async function assertNotLastAdmin(userId: string, action: string) {
+async function assertNotLastSuperAdmin(userId: string, action: string) {
   const [target] = await db.select({ role: user.role }).from(user).where(eq(user.id, userId));
 
   if (!target) {
     throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
   }
-  if (target.role !== "admin") {
+  if (target.role !== "super_admin") {
     return;
   }
-  if ((await countAdmins()) <= 1) {
+  if ((await countSuperAdmins()) <= 1) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Cannot ${action} the last remaining admin`,
+      message: `Cannot ${action} the last remaining super admin`,
     });
+  }
+}
+
+/**
+ * A company Admin may only act on their own company's User accounts — not
+ * fellow admins, not accounts in another tenant. A Super Admin acts on anyone
+ * (subject to the other guards above). NOT_FOUND rather than FORBIDDEN on a
+ * mismatch, matching the rest of the app's anti-leak convention.
+ */
+async function assertTargetManageable(
+  ctx: { companyId: string; session: { user: { role?: string | null } } },
+  targetUserId: string,
+) {
+  if (roleOf(ctx.session.user) === "super_admin") return;
+
+  const [target] = await db
+    .select({ role: user.role, companyId: user.companyId })
+    .from(user)
+    .where(eq(user.id, targetUserId));
+  if (!target || target.role !== "user" || target.companyId !== ctx.companyId) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
   }
 }
 
@@ -72,9 +97,10 @@ function assertNotSelf(actorId: string, targetId: string, action: string) {
  * Which company an account-management event belongs to in the audit trail.
  *
  * The subject's own company, so "disabled Rina" shows up for the company Rina
- * works for. Admins are unpinned, so events about them fall back to whichever
- * company the acting admin is currently viewing — never null, because the feed
- * filters by equality and a null row would be written and never seen again.
+ * works for. Super admins are unpinned, so events about them fall back to
+ * whichever company the acting super admin is currently viewing — never
+ * null, because the feed filters by equality and a null row would be written
+ * and never seen again.
  */
 async function auditCompanyFor(targetUserId: string, fallback: string): Promise<string> {
   const [target] = await db
@@ -85,7 +111,7 @@ async function auditCompanyFor(targetUserId: string, fallback: string): Promise<
 }
 
 export const adminRouter = router({
-  listUsers: adminProcedure
+  listUsers: companyPermissionProcedure("user:manage")
     .input(
       z.object({
         search: z.string().trim().max(200).default(""),
@@ -93,10 +119,16 @@ export const adminRouter = router({
         offset: z.number().int().min(0).default(0),
       }),
     )
-    .query(async ({ input }) => {
-      const filter = input.search
-        ? or(ilike(user.name, `%${input.search}%`), ilike(user.email, `%${input.search}%`))
-        : undefined;
+    .query(async ({ ctx, input }) => {
+      // Super admin: the cross-tenant directory. Admin: own company only —
+      // this naturally includes fellow admins of the same company (visible,
+      // not manageable) and excludes every super_admin (companyId is null).
+      const isSuperAdmin = roleOf(ctx.session.user) === "super_admin";
+      const filters = [
+        input.search ? or(ilike(user.name, `%${input.search}%`), ilike(user.email, `%${input.search}%`)) : undefined,
+        isSuperAdmin ? undefined : eq(user.companyId, ctx.companyId),
+      ].filter(Boolean);
+      const where = filters.length > 0 ? and(...filters) : undefined;
 
       const [rows, [total]] = await Promise.all([
         db
@@ -109,16 +141,16 @@ export const adminRouter = router({
             mustChangePassword: user.mustChangePassword,
             createdAt: user.createdAt,
             companyId: user.companyId,
-            // Null for admins, who are not pinned to a company.
+            // Null for super admins, who are not pinned to a company.
             companyName: company.name,
           })
           .from(user)
           .leftJoin(company, eq(company.id, user.companyId))
-          .where(filter)
+          .where(where)
           .orderBy(desc(user.createdAt))
           .limit(input.limit)
           .offset(input.offset),
-        db.select({ value: count() }).from(user).where(filter),
+        db.select({ value: count() }).from(user).where(where),
       ]);
 
       return { users: rows, total: total?.value ?? 0 };
@@ -128,17 +160,13 @@ export const adminRouter = router({
    * Creates the account and returns the generated password ONCE. It is never
    * stored in plaintext and never logged — if the admin loses it, they reset it.
    */
-  createUser: adminCompanyProcedure
+  createUser: companyPermissionProcedure("user:manage")
     .input(
       z.object({
         name: z.string().trim().min(1, "Name is required").max(120),
         email: z.email("Invalid email address"),
         role: roleSchema.default("user"),
-        /**
-         * Required for a regular account — it decides everything they can see.
-         * Admins are left unpinned and choose an active company instead, so a
-         * companyId sent alongside role "admin" is ignored rather than refused.
-         */
+        /** Required for admin and user accounts — null (ignored) for super_admin, who is unpinned. */
         companyId: z.string().min(1).optional(),
       }),
     )
@@ -150,12 +178,34 @@ export const adminRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "An account with that email exists" });
       }
 
-      const companyId = input.role === "admin" ? null : input.companyId;
-      if (input.role !== "admin") {
-        if (!companyId) {
+      const actorIsSuperAdmin = roleOf(ctx.session.user) === "super_admin";
+      let role = input.role;
+      let companyId: string | null;
+
+      if (!actorIsSuperAdmin) {
+        // Company admin: may only create Users, only in their own company.
+        if (input.role !== "user") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only a Super Admin can create admin or super admin accounts",
+          });
+        }
+        if (input.companyId && input.companyId !== ctx.companyId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "You can only create users in your own company",
+          });
+        }
+        role = "user";
+        companyId = ctx.companyId;
+      } else if (input.role === "super_admin") {
+        companyId = null;
+      } else {
+        if (!input.companyId) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Pick a company for this account" });
         }
-        await assertCompanyExists(companyId);
+        await assertCompanyExists(input.companyId);
+        companyId = input.companyId;
       }
 
       const temporaryPassword = generateTempPassword();
@@ -166,7 +216,7 @@ export const adminRouter = router({
           email,
           password: temporaryPassword,
           name: input.name,
-          role: input.role,
+          role,
         },
       });
 
@@ -195,63 +245,73 @@ export const adminRouter = router({
         entityType: "user",
         entityId: created.user.id,
         entityLabel: `${input.name} · ${email}`,
-        detail: input.role,
+        detail: role,
       });
 
       return { user: created.user, temporaryPassword };
     }),
 
-  resetPassword: adminProcedure.input(userIdSchema).mutation(async ({ ctx, input }) => {
-    const temporaryPassword = generateTempPassword();
+  resetPassword: companyPermissionProcedure("user:manage")
+    .input(userIdSchema)
+    .mutation(async ({ ctx, input }) => {
+      await assertTargetManageable(ctx, input.userId);
 
-    await auth.api.setUserPassword({
-      headers: ctx.headers,
-      body: { userId: input.userId, newPassword: temporaryPassword },
-    });
-    // setUserPassword does not touch additional fields, so re-arm the flag here.
-    await db
-      .update(user)
-      .set({ mustChangePassword: true })
-      .where(eq(user.id, input.userId));
+      const temporaryPassword = generateTempPassword();
 
-    return { temporaryPassword };
-  }),
+      await auth.api.setUserPassword({
+        headers: ctx.headers,
+        body: { userId: input.userId, newPassword: temporaryPassword },
+      });
+      // setUserPassword does not touch additional fields, so re-arm the flag here.
+      await db
+        .update(user)
+        .set({ mustChangePassword: true })
+        .where(eq(user.id, input.userId));
 
-  /** Moves an account to another company. Admins stay unpinned. */
-  setCompany: adminProcedure
+      return { temporaryPassword };
+    }),
+
+  /** Moves an account to another company. Super admins stay unpinned. */
+  setCompany: permissionProcedure("user:setCompany")
     .input(userIdSchema.extend({ companyId: z.string().min(1) }))
     .mutation(async ({ input }) => {
       await assertCompanyExists(input.companyId);
       const [target] = await db
-        .select({ id: user.id })
+        .select({ id: user.id, role: user.role })
         .from(user)
         .where(eq(user.id, input.userId));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+      }
+      if (target.role === "super_admin") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Super admins are not pinned to a company",
+        });
       }
 
       await db.update(user).set({ companyId: input.companyId }).where(eq(user.id, input.userId));
       return { success: true };
     }),
 
-  setRole: adminCompanyProcedure
+  setRole: companyPermissionProcedure("user:setRole")
     .input(userIdSchema.extend({ role: roleSchema, companyId: z.string().min(1).optional() }))
     .mutation(async ({ ctx, input }) => {
-      if (input.role !== "admin") {
-        await assertNotLastAdmin(input.userId, "demote");
+      if (input.role !== "super_admin") {
+        await assertNotLastSuperAdmin(input.userId, "demote");
       }
 
-      // A regular account with no company resolves to "No company assigned" on
-      // every request — i.e. a locked-out user. Demotion must therefore land on
-      // some company: the one the account already had, an explicit choice, or —
-      // for an admin, who is unpinned by definition and so has neither — the
-      // company the acting admin is currently viewing. Without that last
-      // fallback, demoting any admin is impossible.
+      // A pinned account with no company resolves to "No company assigned" on
+      // every request — i.e. a locked-out account. Any role but super_admin
+      // must therefore land on some company: the one the account already had,
+      // an explicit choice, or — for a super_admin, who is unpinned by
+      // definition and so has neither — the company the acting super admin is
+      // currently viewing. Without that last fallback, demoting any super
+      // admin is impossible.
       const label = await userLabel(input.userId);
       let companyId: string | null = null;
-      if (input.role !== "admin") {
-        companyId =
-          input.companyId ?? (await auditCompanyFor(input.userId, ctx.companyId));
+      if (input.role !== "super_admin") {
+        companyId = input.companyId ?? (await auditCompanyFor(input.userId, ctx.companyId));
         await assertCompanyExists(companyId);
       }
 
@@ -260,7 +320,7 @@ export const adminRouter = router({
         body: { userId: input.userId, role: input.role },
       });
 
-      // Promoting to admin unpins the account; demoting pins it.
+      // Promoting to super_admin unpins the account; any other role keeps or assigns one.
       await db.update(user).set({ companyId }).where(eq(user.id, input.userId));
 
       await recordActivity({ session: ctx.session, companyId: companyId ?? ctx.companyId }, {
@@ -274,14 +334,15 @@ export const adminRouter = router({
       return { success: true };
     }),
 
-  setBanned: adminCompanyProcedure
+  setBanned: companyPermissionProcedure("user:manage")
     .input(userIdSchema.extend({ banned: z.boolean(), reason: z.string().max(500).optional() }))
     .mutation(async ({ ctx, input }) => {
+      await assertTargetManageable(ctx, input.userId);
       const auditCompanyId = await auditCompanyFor(input.userId, ctx.companyId);
 
       if (input.banned) {
         assertNotSelf(ctx.session.user.id, input.userId, "disable");
-        await assertNotLastAdmin(input.userId, "disable");
+        await assertNotLastSuperAdmin(input.userId, "disable");
 
         await auth.api.banUser({
           headers: ctx.headers,
@@ -305,27 +366,30 @@ export const adminRouter = router({
       return { success: true };
     }),
 
-  deleteUser: adminCompanyProcedure.input(userIdSchema).mutation(async ({ ctx, input }) => {
-    assertNotSelf(ctx.session.user.id, input.userId, "delete");
-    await assertNotLastAdmin(input.userId, "delete");
+  deleteUser: companyPermissionProcedure("user:manage")
+    .input(userIdSchema)
+    .mutation(async ({ ctx, input }) => {
+      await assertTargetManageable(ctx, input.userId);
+      assertNotSelf(ctx.session.user.id, input.userId, "delete");
+      await assertNotLastSuperAdmin(input.userId, "delete");
 
-    // Read the label and company before removal — afterwards there is nothing
-    // left to name the row with, or to file it under.
-    const label = await userLabel(input.userId);
-    const auditCompanyId = await auditCompanyFor(input.userId, ctx.companyId);
+      // Read the label and company before removal — afterwards there is nothing
+      // left to name the row with, or to file it under.
+      const label = await userLabel(input.userId);
+      const auditCompanyId = await auditCompanyFor(input.userId, ctx.companyId);
 
-    await auth.api.removeUser({
-      headers: ctx.headers,
-      body: { userId: input.userId },
-    });
+      await auth.api.removeUser({
+        headers: ctx.headers,
+        body: { userId: input.userId },
+      });
 
-    await recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
-      action: "deleted",
-      entityType: "user",
-      entityId: input.userId,
-      entityLabel: label,
-    });
+      await recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
+        action: "deleted",
+        entityType: "user",
+        entityId: input.userId,
+        entityLabel: label,
+      });
 
-    return { success: true };
-  }),
+      return { success: true };
+    }),
 });

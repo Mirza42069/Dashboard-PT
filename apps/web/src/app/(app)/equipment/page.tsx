@@ -1,8 +1,9 @@
+import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import type { Metadata } from "next";
 
 import { BRAND_NAME } from "@/components/brand";
 import { getDictionary, getLocale } from "@/i18n";
-import { requireSession } from "@/lib/session";
+import { requirePermission } from "@/lib/session";
 
 import EquipmentTable from "./equipment-table";
 
@@ -12,14 +13,16 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function EquipmentPage() {
-  const session = await requireSession();
+  // Nav hides this link from Users, but the URL is still typeable — gate the
+  // page itself, not just the link.
+  const session = await requirePermission("equipment:read");
   const dict = getDictionary(await getLocale());
 
   return (
     <div className="space-y-4 p-4 md:p-6">
       <h1 className="sr-only">{dict.equipment.title}</h1>
 
-      <EquipmentTable isAdmin={session.user.role === "admin"} />
+      <EquipmentTable canManage={hasPermission(roleOf(session.user), "equipment:manage")} />
     </div>
   );
 }

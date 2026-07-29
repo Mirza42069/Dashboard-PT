@@ -18,7 +18,7 @@ import BehindSchedule from "./behind-schedule";
 
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
 
-export default function DashboardOverview() {
+export default function DashboardOverview({ showActivity }: { showActivity: boolean }) {
   const t = useT();
   const { money, moneyCompact, percent } = useFormat();
   const summary = useQuery(trpc.project.summary.queryOptions());
@@ -139,9 +139,11 @@ export default function DashboardOverview() {
         <BehindSchedule />
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-2">
-        <ActivityFeed />
-      </div>
+      {showActivity && (
+        <div className="grid gap-3 lg:grid-cols-2">
+          <ActivityFeed />
+        </div>
+      )}
     </div>
   );
 }

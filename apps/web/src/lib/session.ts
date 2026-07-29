@@ -1,3 +1,4 @@
+import { hasPermission, type Permission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
@@ -47,10 +48,11 @@ export async function requireSession(options: RequireSessionOptions = {}) {
   return session;
 }
 
-export async function requireAdmin() {
+/** Redirects home unless the signed-in account holds `permission`. */
+export async function requirePermission(permission: Permission) {
   const session = await requireSession();
 
-  if (session.user.role !== "admin") {
+  if (!hasPermission(roleOf(session.user), permission)) {
     redirect("/dashboard");
   }
 

@@ -7,6 +7,7 @@ import {
   integer,
   numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -134,6 +135,30 @@ export const project = pgTable(
     index("project_managerId_idx").on(table.managerId),
     index("project_companyId_idx").on(table.companyId),
     unique("project_companyId_code_key").on(table.companyId, table.code),
+  ],
+);
+
+/**
+ * Which `user` (role=user) accounts may see and act on a given project. Roots
+ * (project/material/equipment) are scoped by company alone; a project also
+ * needs this row-level layer because a company's Users only see the subset
+ * of projects an admin has assigned them to.
+ */
+export const projectMember = pgTable(
+  "project_member",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    primaryKey({ name: "project_member_pk", columns: [table.projectId, table.userId] }),
+    // Hot path: "all projects visible to user X" (project list/get membership filter).
+    index("projectMember_userId_idx").on(table.userId),
   ],
 );
 
@@ -588,6 +613,12 @@ export const projectRelations = relations(project, ({ one, many }) => ({
   boqVersions: many(boqVersion),
   reportingPeriods: many(reportingPeriod),
   progressEntries: many(progressEntry),
+  members: many(projectMember),
+}));
+
+export const projectMemberRelations = relations(projectMember, ({ one }) => ({
+  project: one(project, { fields: [projectMember.projectId], references: [project.id] }),
+  user: one(user, { fields: [projectMember.userId], references: [user.id] }),
 }));
 
 export const boqVersionRelations = relations(boqVersion, ({ one, many }) => ({

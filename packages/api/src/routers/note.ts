@@ -1,18 +1,18 @@
 import { db } from "@DashboardV2/db";
 import { notePhoto, project, projectNote } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import z from "zod";
 
-import { adminCompanyProcedure, companyProcedure, router } from "../index";
+import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
-import { assertNoteInScope, assertProjectInScope } from "../lib/scope";
+import { assertNoteAccess, assertProjectAccess } from "../lib/scope";
 
 export const noteRouter = router({
-  listByProject: companyProcedure
+  listByProject: companyPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1), limit: z.number().int().min(1).max(100).default(50) }))
     .query(async ({ ctx, input }) => {
-      await assertProjectInScope(ctx.companyId, input.projectId);
+      await assertProjectAccess(ctx, input.projectId);
 
       const notes = await db
         .select()
@@ -50,11 +50,8 @@ export const noteRouter = router({
       };
     }),
 
-  /**
-   * companyProcedure, not admin: recording site evidence is exactly what
-   * non-admin site staff are there to do. Deleting a note stays admin-only.
-   */
-  create: companyProcedure
+  /** Recording site evidence is exactly what an assigned project member is there to do. */
+  create: companyPermissionProcedure("project:write")
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -62,10 +59,11 @@ export const noteRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProjectAccess(ctx, input.projectId);
       const [target] = await db
         .select({ id: project.id, code: project.code, name: project.name })
         .from(project)
-        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
+        .where(eq(project.id, input.projectId));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
@@ -97,7 +95,7 @@ export const noteRouter = router({
   // Photo uploads bypass tRPC: the browser POSTs raw bytes to
   // /notes/:noteId/photos on the Hono server, which inserts the row itself.
 
-  deletePhoto: companyProcedure
+  deletePhoto: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       // Resolve the owning note first so scope is checked before the delete.
@@ -108,16 +106,16 @@ export const noteRouter = router({
       if (!photo) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Photo not found" });
       }
-      await assertNoteInScope(ctx.companyId, photo.noteId);
+      await assertNoteAccess(ctx, photo.noteId);
 
       await db.delete(notePhoto).where(eq(notePhoto.id, input.id));
       return { success: true };
     }),
 
-  delete: adminCompanyProcedure
+  delete: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await assertNoteInScope(ctx.companyId, input.id);
+      await assertNoteAccess(ctx, input.id);
       // Bytes live in note_photo rows, so the cascade removes them too.
       await db.delete(projectNote).where(eq(projectNote.id, input.id));
       return { success: true };

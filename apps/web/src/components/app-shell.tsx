@@ -1,5 +1,6 @@
 "use client";
 
+import { roleOf } from "@DashboardV2/api/lib/permissions";
 import { useState } from "react";
 
 import { writeSidebarCookie } from "@/lib/sidebar";
@@ -25,7 +26,7 @@ export default function AppShell({
   children: React.ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
-  const isAdmin = user.role === "admin";
+  const role = roleOf(user);
 
   function toggle() {
     setCollapsed((value) => {
@@ -38,7 +39,7 @@ export default function AppShell({
     <div className="flex h-svh">
       {/* First in the DOM so it is the first thing Tab reaches. */}
       <SkipLink />
-      <AppSidebar isAdmin={isAdmin} collapsed={collapsed} />
+      <AppSidebar role={role} collapsed={collapsed} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Header user={user} collapsed={collapsed} onToggleSidebar={toggle} />
         {/* tabIndex={-1} so the skip link can actually land focus here; without

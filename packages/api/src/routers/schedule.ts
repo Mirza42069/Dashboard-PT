@@ -11,19 +11,19 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
-import { adminCompanyProcedure, companyProcedure, router } from "../index";
+import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { getVersion, leafPredicate } from "../lib/boq";
-import { assertProjectInScope } from "../lib/scope";
+import { assertProjectAccess, type ProjectScopeCtx } from "../lib/scope";
 import { PeriodRangeError, generatePeriods } from "../lib/periods";
 import { toAmount } from "../lib/money";
 
 /** Percentages are stored to six decimals, matching the column. */
 const toPctString = (value: number) => value.toFixed(6);
 
-async function requireScheduleDraft(companyId: string, versionId: string) {
-  const version = await getVersion(companyId, versionId);
+async function requireScheduleDraft(ctx: ProjectScopeCtx, versionId: string) {
+  const version = await getVersion(ctx, versionId);
   const editable =
     version.scheduleStatus === "draft" &&
     (version.status === "draft" || version.status === "active");
@@ -92,14 +92,14 @@ async function assertPeriodsOfProject(projectId: string, periodIds: string[]) {
 }
 
 export const scheduleRouter = router({
-  listPeriods: companyProcedure
+  listPeriods: companyPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
-      await assertProjectInScope(ctx.companyId, input.projectId);
+      await assertProjectAccess(ctx, input.projectId);
       return listPeriodsFor(input.projectId);
     }),
 
-  updateSettings: adminCompanyProcedure
+  updateSettings: companyPermissionProcedure("project:write")
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -111,8 +111,8 @@ export const scheduleRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await assertProjectInScope(ctx.companyId, input.projectId);
-      const version = await requireScheduleDraft(ctx.companyId, input.versionId);
+      await assertProjectAccess(ctx, input.projectId);
+      const version = await requireScheduleDraft(ctx, input.versionId);
       if (version.projectId !== input.projectId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Baseline does not belong to this project." });
       }
@@ -167,13 +167,11 @@ export const scheduleRouter = router({
    * reading is attached to, and regenerating them would either orphan those
    * readings or move them to dates nobody reported against.
    */
-  generatePeriods: adminCompanyProcedure
+  generatePeriods: companyPermissionProcedure("project:write")
     .input(z.object({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const [target] = await db
-        .select()
-        .from(project)
-        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
+      await assertProjectAccess(ctx, input.projectId);
+      const [target] = await db.select().from(project).where(eq(project.id, input.projectId));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
@@ -255,10 +253,10 @@ export const scheduleRouter = router({
       return { periods: await listPeriodsFor(input.projectId) };
     }),
 
-  getDistribution: companyProcedure
+  getDistribution: companyPermissionProcedure("project:read")
     .input(z.object({ versionId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
-      await getVersion(ctx.companyId, input.versionId);
+      await getVersion(ctx, input.versionId);
 
       const rows = await db
         .select({
@@ -286,7 +284,7 @@ export const scheduleRouter = router({
    * batch so a half-applied edit cannot leave the row totalling something the
    * user never typed.
    */
-  setDistributionCells: adminCompanyProcedure
+  setDistributionCells: companyPermissionProcedure("project:write")
     .input(
       z.object({
         versionId: z.string().min(1),
@@ -303,7 +301,7 @@ export const scheduleRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const version = await requireScheduleDraft(ctx.companyId, input.versionId);
+      const version = await requireScheduleDraft(ctx, input.versionId);
 
       const itemIds = [...new Set(input.cells.map((cell) => cell.boqItemId))];
       const periodIds = [...new Set(input.cells.map((cell) => cell.periodId))];
@@ -363,10 +361,10 @@ export const scheduleRouter = router({
    * is quicker to correct than an empty row is to fill. The remainder lands on
    * the final period so the row totals exactly 100.
    */
-  distributeEvenly: adminCompanyProcedure
+  distributeEvenly: companyPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1), boqItemId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const version = await requireScheduleDraft(ctx.companyId, input.versionId);
+      const version = await requireScheduleDraft(ctx, input.versionId);
       await assertLeavesOfVersion(input.versionId, [input.boqItemId]);
 
       const periods = await listPeriodsFor(version.projectId);
@@ -408,10 +406,10 @@ export const scheduleRouter = router({
     }),
 
   /** Clears every planned cell for one item. */
-  clearItemDistribution: adminCompanyProcedure
+  clearItemDistribution: companyPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1), boqItemId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await requireScheduleDraft(ctx.companyId, input.versionId);
+      await requireScheduleDraft(ctx, input.versionId);
       await assertLeavesOfVersion(input.versionId, [input.boqItemId]);
 
       await db

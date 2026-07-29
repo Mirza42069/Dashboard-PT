@@ -14,7 +14,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
-import { adminCompanyProcedure, companyProcedure, router } from "../index";
+import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import {
@@ -28,7 +28,7 @@ import {
   serializeItem,
   serializeVersion,
 } from "../lib/boq";
-import { assertProjectInScope } from "../lib/scope";
+import { assertProjectAccess } from "../lib/scope";
 
 const itemSchema = z.object({
   code: z.string().trim().min(1, "Code is required").max(32),
@@ -94,10 +94,10 @@ export const boqRouter = router({
    * the tree — it needs the parent/child relationship in hand anyway to work
    * out which lines are leaves.
    */
-  overview: companyProcedure
+  overview: companyPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1), versionId: z.string().min(1).optional() }))
     .query(async ({ ctx, input }) => {
-      await assertProjectInScope(ctx.companyId, input.projectId);
+      await assertProjectAccess(ctx, input.projectId);
 
       const versions = await db
         .select()
@@ -126,10 +126,10 @@ export const boqRouter = router({
       return { version: serializeVersion(current), items: items.map(serializeItem) };
     }),
 
-  listVersions: companyProcedure
+  listVersions: companyPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
-      await assertProjectInScope(ctx.companyId, input.projectId);
+      await assertProjectAccess(ctx, input.projectId);
       const versions = await db
         .select()
         .from(boqVersion)
@@ -142,9 +142,10 @@ export const boqRouter = router({
    * Opens the BoQ for editing. An active baseline is deep-cloned so edits never
    * rewrite the contract, plan or progress history currently in force.
    */
-  getOrCreateDraft: adminCompanyProcedure
+  getOrCreateDraft: companyPermissionProcedure("project:write")
     .input(z.object({ projectId: z.string().min(1), title: z.string().trim().max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
+      await assertProjectAccess(ctx, input.projectId);
       const label = await projectLabel(ctx.companyId, input.projectId);
 
       const [existing] = await db
@@ -280,7 +281,7 @@ export const boqRouter = router({
       }
 
       await runBatch(statements);
-      const created = await getVersion(ctx.companyId, versionId);
+      const created = await getVersion(ctx, versionId);
 
       await recordActivity(ctx, {
         action: "created",
@@ -294,12 +295,12 @@ export const boqRouter = router({
     }),
 
   /** Redistributes derived weights by value. Draft only. */
-  recalcWeights: adminCompanyProcedure
+  recalcWeights: companyPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await requireDraft(ctx.companyId, input.versionId);
+      await requireDraft(ctx, input.versionId);
       await recalcWeights(input.versionId);
-      const version = await getVersion(ctx.companyId, input.versionId);
+      const version = await getVersion(ctx, input.versionId);
       return { version: serializeVersion(version), weightTotal: await leafWeightTotal(input.versionId) };
     }),
 
@@ -309,10 +310,10 @@ export const boqRouter = router({
    * A prior active baseline is superseded in the same database batch. Its items,
    * schedule and progress remain intact as the historical snapshot.
    */
-  activate: adminCompanyProcedure
+  activate: companyPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const draft = await getVersion(ctx.companyId, input.versionId);
+      const draft = await getVersion(ctx, input.versionId);
       const activatable =
         draft.scheduleStatus === "draft" &&
         (draft.status === "draft" || draft.status === "active");
@@ -456,7 +457,7 @@ export const boqRouter = router({
           .where(eq(boqVersion.id, input.versionId)),
       );
       await runBatch(statements);
-      const activated = await getVersion(ctx.companyId, input.versionId);
+      const activated = await getVersion(ctx, input.versionId);
 
       await recordActivity(ctx, {
         action: "baselined",
@@ -470,7 +471,7 @@ export const boqRouter = router({
     }),
 
   /** Adds a section (no parentId) or a line under one. */
-  createItem: adminCompanyProcedure
+  createItem: companyPermissionProcedure("project:write")
     .input(
       itemSchema.extend({
         versionId: z.string().min(1),
@@ -478,7 +479,7 @@ export const boqRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await requireDraft(ctx.companyId, input.versionId);
+      await requireDraft(ctx, input.versionId);
 
       const parentId = input.parentId ?? null;
       if (parentId) {
@@ -532,10 +533,10 @@ export const boqRouter = router({
       return { item: created ? serializeItem(created) : null };
     }),
 
-  updateItem: adminCompanyProcedure
+  updateItem: companyPermissionProcedure("project:write")
     .input(itemSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const current = await requireDraftForItem(ctx.companyId, input.id);
+      const current = await requireDraftForItem(ctx, input.id);
       const { id, code, quantity, unitRate, weight, ...rest } = input;
 
       if (code && code !== current.code) {
@@ -571,10 +572,10 @@ export const boqRouter = router({
    * has to take its lines with it, or they survive as parentless leaves that
    * still draw weight.
    */
-  deleteItem: adminCompanyProcedure
+  deleteItem: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await requireDraftForItem(ctx.companyId, input.id);
+      await requireDraftForItem(ctx, input.id);
 
       await db.execute(sql`
         update boq_item
@@ -594,7 +595,7 @@ export const boqRouter = router({
     }),
 
   /** Applies a new ordering to a group of siblings in one statement. */
-  reorderItems: adminCompanyProcedure
+  reorderItems: companyPermissionProcedure("project:write")
     .input(
       z.object({
         versionId: z.string().min(1),
@@ -602,7 +603,7 @@ export const boqRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await requireDraft(ctx.companyId, input.versionId);
+      await requireDraft(ctx, input.versionId);
 
       const rows = sql.join(
         input.orderedIds.map((id, index) => sql`(${id}::text, ${index}::int)`),

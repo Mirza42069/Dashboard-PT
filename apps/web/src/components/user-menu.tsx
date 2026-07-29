@@ -1,5 +1,6 @@
 "use client";
 
+import { roleOf } from "@DashboardV2/api/lib/permissions";
 import { Badge } from "@DashboardV2/ui/components/badge";
 import { Button } from "@DashboardV2/ui/components/button";
 import {
@@ -40,6 +41,9 @@ function initials(name: string) {
 export default function UserMenu({ user }: { user: ShellUser }) {
   const t = useT();
   const router = useRouter();
+  const role = roleOf(user);
+  const isSuperAdmin = role === "super_admin";
+  const isRowAdmin = role === "admin";
 
   return (
     <DropdownMenu>
@@ -53,8 +57,8 @@ export default function UserMenu({ user }: { user: ShellUser }) {
         <div className="space-y-1 px-2 py-2">
           <p className="text-xs font-medium">{user.name}</p>
           <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-          <Badge variant={user.role === "admin" ? "default" : "outline"}>
-            {user.role === "admin" ? t.users.roleAdmin : t.users.roleUser}
+          <Badge variant={isSuperAdmin ? "default" : isRowAdmin ? "secondary" : "outline"}>
+            {isSuperAdmin ? t.users.roleSuperAdmin : isRowAdmin ? t.users.roleAdmin : t.users.roleUser}
           </Badge>
         </div>
         <DropdownMenuSeparator />

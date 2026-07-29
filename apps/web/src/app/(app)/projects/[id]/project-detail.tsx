@@ -36,14 +36,17 @@ import { trpc } from "@/utils/trpc";
 import BaselineTab from "./baseline-tab";
 import NotesTab from "./notes-tab";
 import ProgressTab from "./progress-tab";
+import TeamTab from "./team-tab";
 import TicketsTab from "./tickets-tab";
 
 export default function ProjectDetail({
   projectId,
-  isAdmin,
+  canEdit,
+  canManageMembers,
 }: {
   projectId: string;
-  isAdmin: boolean;
+  canEdit: boolean;
+  canManageMembers: boolean;
 }) {
   const t = useT();
   const { money, percent, quantity, formatDate } = useFormat();
@@ -178,14 +181,15 @@ export default function ProjectDetail({
           <TabsTrigger value="expenses">{t.projects.tabExpenses}</TabsTrigger>
           <TabsTrigger value="materials">{t.projects.tabMaterials}</TabsTrigger>
           <TabsTrigger value="notes">{t.notes.tab}</TabsTrigger>
+          {canManageMembers && <TabsTrigger value="team">{t.projects.teamTab}</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="baseline">
-          <BaselineTab projectId={projectId} isAdmin={isAdmin} />
+          <BaselineTab projectId={projectId} canEdit={canEdit} />
         </TabsContent>
 
         <TabsContent value="progress">
-          <ProgressTab projectId={projectId} isAdmin={isAdmin} />
+          <ProgressTab projectId={projectId} canEdit={canEdit} />
         </TabsContent>
 
         <TabsContent value="tickets">
@@ -211,14 +215,14 @@ export default function ProjectDetail({
                     <TableHead>{t.expenses.category}</TableHead>
                     <TableHead>{t.expenses.date}</TableHead>
                     <TableHead className="text-right">{t.expenses.amount}</TableHead>
-                    {isAdmin && <TableHead className="pr-4" />}
+                    {canEdit && <TableHead className="pr-4" />}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {(expensesQuery.data?.expenses.length ?? 0) === 0 && (
                     <TableRow>
                       <TableCell
-                        colSpan={isAdmin ? 5 : 4}
+                        colSpan={canEdit ? 5 : 4}
                         className="py-10 text-center text-muted-foreground"
                       >
                         {t.expenses.empty}
@@ -235,7 +239,7 @@ export default function ProjectDetail({
                         {formatDate(row.incurredOn)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{money(row.amount)}</TableCell>
-                      {isAdmin && (
+                      {canEdit && (
                         <TableCell className="pr-4 text-right">
                           <Button
                             variant="ghost"
@@ -321,8 +325,14 @@ export default function ProjectDetail({
         </TabsContent>
 
         <TabsContent value="notes">
-          <NotesTab projectId={projectId} isAdmin={isAdmin} />
+          <NotesTab projectId={projectId} canEdit={canEdit} />
         </TabsContent>
+
+        {canManageMembers && (
+          <TabsContent value="team">
+            <TeamTab projectId={projectId} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
