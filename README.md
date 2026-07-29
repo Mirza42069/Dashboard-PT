@@ -11,4 +11,4 @@
 - **Bun** - Runtime environment
 - **Drizzle** - TypeScript-first ORM
 - **PostgreSQL** - Database engine
-- **Authentication** - Better-Auth, admin-managed accounts only
+- **Authentication** - Better-Auth, admin-managed accounts onl
