@@ -81,6 +81,7 @@ export const en = {
     updating: "Updating…",
     updated: "Password updated",
     revokeNote: "Signing in elsewhere will be revoked once your password changes.",
+    lostTempHint: "Lost the temporary password? Ask your administrator to reset it — the new one will work right here.",
     currentRequired: "Current password is required",
     minLength: "Password must be at least 12 characters",
     confirmRequired: "Confirm your new password",

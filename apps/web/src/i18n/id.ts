@@ -82,6 +82,7 @@ export const id = {
     updating: "Memperbarui…",
     updated: "Kata sandi diperbarui",
     revokeNote: "Sesi masuk di perangkat lain akan dicabut setelah kata sandi berubah.",
+    lostTempHint: "Kehilangan kata sandi sementara? Minta administrator Anda untuk meresetnya — kata sandi baru bisa langsung dipakai di sini.",
     currentRequired: "Kata sandi saat ini wajib diisi",
     minLength: "Kata sandi minimal 12 karakter",
     confirmRequired: "Konfirmasi kata sandi baru Anda",

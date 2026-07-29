@@ -9,6 +9,7 @@ import type { Metadata } from "next";
 
 import { BRAND_NAME } from "@/components/brand";
 import ChangePasswordForm from "@/components/change-password-form";
+import SignOutButton from "@/components/sign-out-button";
 import { getDictionary, getLocale, interpolate } from "@/i18n";
 import { requireSession } from "@/lib/session";
 
@@ -43,6 +44,17 @@ export default async function ChangePasswordPage() {
         </Card>
 
         <p className="text-center text-xs text-muted-foreground">{dict.password.revokeNote}</p>
+
+        {/* This page has no AppShell, so it's the one place in the app with
+            no sign-out control at all — without this, an account that lost
+            its temporary password has no way out of /login -> /dashboard ->
+            /change-password. */}
+        {forced && (
+          <div className="space-y-3 text-center">
+            <p className="text-xs text-muted-foreground">{dict.password.lostTempHint}</p>
+            <SignOutButton className="w-full" />
+          </div>
+        )}
       </div>
     </div>
   );
