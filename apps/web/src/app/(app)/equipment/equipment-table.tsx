@@ -68,7 +68,7 @@ const ALL = "all";
 const UNASSIGNED = "unassigned";
 const PAGE_SIZE = 25;
 
-export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
+export default function EquipmentTable({ canManage }: { canManage: boolean }) {
   const t = useT();
   const { formatDate } = useFormat();
   const statusLabel = useStatusLabel();
@@ -97,7 +97,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
   // pay for a list of every project in the company and never see it.
   const projectOptions = useQuery({
     ...trpc.project.options.queryOptions(),
-    enabled: isAdmin,
+    enabled: canManage,
   });
 
   const deleteMany = useMutation(trpc.equipment.deleteMany.mutationOptions());
@@ -190,7 +190,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
             ))}
           </SelectContent>
         </Select>
-        {isAdmin && (
+        {canManage && (
           <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
             <Plus />
             {t.equipment.newEquipment}
@@ -198,7 +198,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
           {/* Editing is inherently single-row, so it appears only once the
               selection names exactly one thing to edit. */}
@@ -239,7 +239,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
           <Table>
             <TableHeader>
               <TableRow>
-                {isAdmin && (
+                {canManage && (
                   <TableHead className="w-10 pl-4">
                     <Checkbox
                       checked={selection.allSelected}
@@ -249,7 +249,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                     />
                   </TableHead>
                 )}
-                <TableHead className={isAdmin ? undefined : "pl-4"}>
+                <TableHead className={canManage ? undefined : "pl-4"}>
                   {t.equipment.equipment}
                 </TableHead>
                 <TableHead>{t.equipment.category}</TableHead>
@@ -264,7 +264,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                 // the height the page will actually occupy.
                 Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={isAdmin ? 6 : 5} className="pl-4">
+                    <TableCell colSpan={canManage ? 6 : 5} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -275,7 +275,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                   filters to fix a network error. */}
               {equipmentQuery.isError && (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 6 : 5} className="p-4">
+                  <TableCell colSpan={canManage ? 6 : 5} className="p-4">
                     <QueryError
                       error={equipmentQuery.error}
                       onRetry={() => void equipmentQuery.refetch()}
@@ -288,7 +288,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
               {!equipmentQuery.isPending && !equipmentQuery.isError && rows.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={isAdmin ? 6 : 5}
+                    colSpan={canManage ? 6 : 5}
                     className="py-10 text-center text-muted-foreground"
                   >
                     {t.equipment.noMatch}
@@ -301,7 +301,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                   key={row.id}
                   data-state={selection.isSelected(row.id) ? "selected" : undefined}
                 >
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pl-4">
                       <Checkbox
                         checked={selection.isSelected(row.id)}
@@ -310,7 +310,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
                       />
                     </TableCell>
                   )}
-                  <TableCell className={isAdmin ? undefined : "pl-4"}>
+                  <TableCell className={canManage ? undefined : "pl-4"}>
                     <span className="font-medium">{row.name}</span>
                     <p className="font-mono text-muted-foreground">{row.code}</p>
                   </TableCell>
@@ -371,7 +371,7 @@ export default function EquipmentTable({ isAdmin }: { isAdmin: boolean }) {
         </div>
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <>
           <EquipmentFormDialog open={createOpen} onOpenChange={setCreateOpen} />
           <EquipmentFormDialog

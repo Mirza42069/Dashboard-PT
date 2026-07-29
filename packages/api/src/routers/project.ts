@@ -6,18 +6,19 @@ import {
   equipment,
   expense,
   project,
+  projectMember,
   ticket,
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, ilike, inArray, or, sql, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, notInArray, or, sql, sum } from "drizzle-orm";
 import z from "zod";
 
-import { adminCompanyProcedure, companyProcedure, router } from "../index";
+import { companyPermissionProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { type BoqMetrics, boqMetricsByProject } from "../lib/boq-metrics";
 import { percentOf, toAmount } from "../lib/money";
-import { assertUserAssignable } from "../lib/scope";
+import { assertProjectAccess, assertUserAssignable, projectAccessFilter } from "../lib/scope";
 
 const statusSchema = z.enum(PROJECT_STATUSES);
 
@@ -91,7 +92,7 @@ function decorate(
 }
 
 export const projectRouter = router({
-  list: companyProcedure
+  list: companyPermissionProcedure("project:read")
     .input(
       z.object({
         search: z.string().trim().max(200).default(""),
@@ -102,7 +103,7 @@ export const projectRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const filters = [
-        eq(project.companyId, ctx.companyId),
+        projectAccessFilter(ctx),
         input.search
           ? or(
               ilike(project.name, `%${input.search}%`),
@@ -140,11 +141,11 @@ export const projectRouter = router({
     }),
 
   /** Lightweight list for the project pickers on other screens. */
-  options: companyProcedure.query(async ({ ctx }) => {
+  options: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
     return db
       .select({ id: project.id, code: project.code, name: project.name, status: project.status })
       .from(project)
-      .where(eq(project.companyId, ctx.companyId))
+      .where(projectAccessFilter(ctx))
       .orderBy(asc(project.code));
   }),
 
@@ -155,50 +156,52 @@ export const projectRouter = router({
       .where(
         and(
           eq(user.banned, false),
-          or(eq(user.companyId, ctx.companyId), eq(user.role, "admin")),
+          or(eq(user.companyId, ctx.companyId), eq(user.role, "super_admin")),
         ),
       )
       .orderBy(asc(user.name));
   }),
 
-  get: companyProcedure.input(z.object({ id: z.string().min(1) })).query(async ({ ctx, input }) => {
-    const [row] = await db
-      .select()
-      .from(project)
-      .where(and(eq(project.id, input.id), eq(project.companyId, ctx.companyId)));
-    if (!row) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
-    }
+  get: companyPermissionProcedure("project:read")
+    .input(z.object({ id: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const [row] = await db
+        .select()
+        .from(project)
+        .where(and(eq(project.id, input.id), projectAccessFilter(ctx)));
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+      }
 
-    const [openTickets, boq, manager] = await Promise.all([
-      openTicketsByProject([row.id]),
-      boqMetricsByProject([row.id]),
-      row.managerId
-        ? db
-            .select({ id: user.id, name: user.name, email: user.email })
-            .from(user)
-            .where(eq(user.id, row.managerId))
-        : Promise.resolve([]),
-    ]);
+      const [openTickets, boq, manager] = await Promise.all([
+        openTicketsByProject([row.id]),
+        boqMetricsByProject([row.id]),
+        row.managerId
+          ? db
+              .select({ id: user.id, name: user.name, email: user.email })
+              .from(user)
+              .where(eq(user.id, row.managerId))
+          : Promise.resolve([]),
+      ]);
 
-    return {
-      ...decorate(row, openTickets.get(row.id) ?? 0, boq.get(row.id)),
-      manager: manager[0] ?? null,
-    };
-  }),
+      return {
+        ...decorate(row, openTickets.get(row.id) ?? 0, boq.get(row.id)),
+        manager: manager[0] ?? null,
+      };
+    }),
 
   /**
    * Projects running behind their baseline, worst first. Only projects with an
    * active BoQ and at least one reading can be behind — everything else has no
    * plan to be measured against and is left out rather than shown as on track.
    */
-  behindSchedule: companyProcedure
+  behindSchedule: companyPermissionProcedure("project:read")
     .input(z.object({ limit: z.number().int().min(1).max(20).default(5) }))
     .query(async ({ ctx, input }) => {
       const rows = await db
         .select({ id: project.id, code: project.code, name: project.name, client: project.client })
         .from(project)
-        .where(eq(project.companyId, ctx.companyId));
+        .where(projectAccessFilter(ctx));
 
       const metrics = await boqMetricsByProject(rows.map((row) => row.id));
 
@@ -213,8 +216,8 @@ export const projectRouter = router({
     }),
 
   /** Everything the dashboard needs, in one round trip. */
-  summary: companyProcedure.query(async ({ ctx }) => {
-    const inCompany = eq(project.companyId, ctx.companyId);
+  summary: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
+    const inCompany = projectAccessFilter(ctx);
     const [projectRows, [baselineTotal], [openTicketRow]] = await Promise.all([
       db
         .select({ id: project.id, status: project.status })
@@ -270,7 +273,7 @@ export const projectRouter = router({
     };
   }),
 
-  create: adminCompanyProcedure.input(upsertSchema).mutation(async ({ ctx, input }) => {
+  create: companyPermissionProcedure("project:create").input(upsertSchema).mutation(async ({ ctx, input }) => {
     const code = input.code.toUpperCase();
 
     // Codes are unique per company, so the clash check is scoped too.
@@ -309,15 +312,13 @@ export const projectRouter = router({
     return { id: created?.id };
   }),
 
-  update: adminCompanyProcedure
+  update: companyPermissionProcedure("project:update")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { id: projectId, code, ...rest } = input;
 
-      const [current] = await db
-        .select()
-        .from(project)
-        .where(and(eq(project.id, projectId), eq(project.companyId, ctx.companyId)));
+      await assertProjectAccess(ctx, projectId);
+      const [current] = await db.select().from(project).where(eq(project.id, projectId));
       if (!current) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
@@ -359,7 +360,7 @@ export const projectRouter = router({
    * accident, so deleting a project with either requires an explicit confirm.
    * Equipment is only unassigned, never deleted — it outlives the site.
    */
-  delete: adminCompanyProcedure
+  delete: companyPermissionProcedure("project:delete")
     .input(z.object({ id: z.string().min(1), force: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
       // Read the label before deleting — after the row is gone there is nothing
@@ -410,7 +411,7 @@ export const projectRouter = router({
    * released before the delete for the same reason as the single-row version —
    * otherwise the machines keep pointing at a site that no longer exists.
    */
-  deleteMany: adminCompanyProcedure
+  deleteMany: companyPermissionProcedure("project:delete")
     .input(
       z.object({
         ids: z.array(z.string().min(1)).min(1).max(100),
@@ -465,5 +466,90 @@ export const projectRouter = router({
         deletedTickets: ticketCount,
         deletedExpenses: expenseCount,
       };
+    }),
+
+  /** Who currently sees this project — for the project's Team tab. */
+  listMembers: companyPermissionProcedure("member:manage")
+    .input(z.object({ projectId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      await assertProjectAccess(ctx, input.projectId);
+      return db
+        .select({ id: user.id, name: user.name, email: user.email })
+        .from(projectMember)
+        .innerJoin(user, eq(user.id, projectMember.userId))
+        .where(eq(projectMember.projectId, input.projectId))
+        .orderBy(asc(user.name));
+    }),
+
+  /** Company Users eligible to be assigned to a project — feeds the picker. */
+  memberOptions: companyPermissionProcedure("member:manage").query(async ({ ctx }) => {
+    return db
+      .select({ id: user.id, name: user.name, email: user.email })
+      .from(user)
+      .where(and(eq(user.companyId, ctx.companyId), eq(user.role, "user"), eq(user.banned, false)))
+      .orderBy(asc(user.name));
+  }),
+
+  /**
+   * Replaces a project's member list wholesale. Two idempotent statements
+   * rather than a read-diff-write — the Neon HTTP driver has no interactive
+   * transactions, so delete-then-insert is what keeps a partial failure a
+   * subset of the intended result, never a superset.
+   */
+  setMembers: companyPermissionProcedure("member:manage")
+    .input(z.object({ projectId: z.string().min(1), userIds: z.array(z.string().min(1)).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      await assertProjectAccess(ctx, input.projectId);
+
+      const uniqueIds = [...new Set(input.userIds)];
+      if (uniqueIds.length > 0) {
+        const eligible = await db
+          .select({ id: user.id })
+          .from(user)
+          .where(
+            and(
+              inArray(user.id, uniqueIds),
+              eq(user.companyId, ctx.companyId),
+              eq(user.role, "user"),
+            ),
+          );
+        if (eligible.length !== uniqueIds.length) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "One or more users were not found" });
+        }
+      }
+
+      await db
+        .delete(projectMember)
+        .where(
+          uniqueIds.length > 0
+            ? and(
+                eq(projectMember.projectId, input.projectId),
+                notInArray(projectMember.userId, uniqueIds),
+              )
+            : eq(projectMember.projectId, input.projectId),
+        );
+
+      if (uniqueIds.length > 0) {
+        await db
+          .insert(projectMember)
+          .values(uniqueIds.map((userId) => ({ projectId: input.projectId, userId })))
+          .onConflictDoNothing();
+      }
+
+      const [target] = await db
+        .select({ code: project.code, name: project.name })
+        .from(project)
+        .where(eq(project.id, input.projectId));
+      if (target) {
+        await recordActivity(ctx, {
+          action: "assigned",
+          entityType: "project",
+          entityId: input.projectId,
+          entityLabel: `${target.code} · ${target.name}`,
+          detail: `${uniqueIds.length} member(s)`,
+        });
+      }
+
+      return { success: true };
     }),
 });

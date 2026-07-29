@@ -1,5 +1,6 @@
 "use client";
 
+import { roleOf } from "@DashboardV2/api/lib/permissions";
 import { useState } from "react";
 
 import { writeSidebarCookie } from "@/lib/sidebar";
@@ -24,7 +25,7 @@ export default function AppShell({
   children: React.ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
-  const isAdmin = user.role === "admin";
+  const role = roleOf(user);
 
   function toggle() {
     setCollapsed((value) => {
@@ -35,7 +36,7 @@ export default function AppShell({
 
   return (
     <div className="flex h-svh">
-      <AppSidebar isAdmin={isAdmin} collapsed={collapsed} />
+      <AppSidebar role={role} collapsed={collapsed} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Header user={user} collapsed={collapsed} onToggleSidebar={toggle} />
         <main className="flex-1 overflow-y-auto">{children}</main>

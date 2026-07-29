@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { BRAND_NAME } from "@/components/brand";
 import { getDictionary, getLocale } from "@/i18n";
-import { requireAdmin } from "@/lib/session";
+import { requirePermission } from "@/lib/session";
 
 import CompaniesTable from "./companies-table";
 
@@ -12,7 +12,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AdminCompaniesPage() {
-  await requireAdmin();
+  await requirePermission("company:manage");
   const dict = getDictionary(await getLocale());
 
   return (

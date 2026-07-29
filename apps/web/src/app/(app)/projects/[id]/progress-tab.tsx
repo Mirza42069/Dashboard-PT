@@ -35,10 +35,10 @@ const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
 
 export default function ProgressTab({
   projectId,
-  isAdmin,
+  canEdit,
 }: {
   projectId: string;
-  isAdmin: boolean;
+  canEdit: boolean;
 }) {
   const t = useT();
   const { formatDate } = useFormat();
@@ -225,7 +225,7 @@ export default function ProgressTab({
                 <CardTitle>{t.progress.matrixTitle}</CardTitle>
                 <CardDescription>{t.progress.matrixHint}</CardDescription>
               </div>
-              {isAdmin && drafts.size > 0 && (
+              {canEdit && drafts.size > 0 && (
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={() => setDrafts(new Map())}>
                     {t.progress.discard}
@@ -285,7 +285,7 @@ export default function ProgressTab({
 
                       {periods.map((period) => {
                         const key = cellKey(row.leaf.id, period.id);
-                        const editable = isAdmin && period.status !== "locked";
+                        const editable = canEdit && period.status !== "locked";
 
                         return (
                           <td key={period.id} className="px-1 py-1">

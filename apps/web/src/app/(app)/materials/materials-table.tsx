@@ -80,7 +80,7 @@ type MaterialRow = {
   isLowStock: boolean;
 };
 
-export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
+export default function MaterialsTable({ canManage }: { canManage: boolean }) {
   const t = useT();
   const { money, quantity } = useFormat();
   const queryClient = useQueryClient();
@@ -160,7 +160,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
           {t.materials.lowStock}
           {lowStockCount > 0 && !lowStockOnly ? ` (${lowStockCount})` : ""}
         </Button>
-        {isAdmin && (
+        {canManage && (
           <Button size="sm" className="ml-auto" onClick={() => setCreateOpen(true)}>
             <Plus />
             {t.materials.newMaterial}
@@ -168,7 +168,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
           {/* Editing is inherently single-row, so it appears only once the
               selection names exactly one thing to edit. */}
@@ -190,7 +190,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
           <Table>
             <TableHeader>
               <TableRow>
-                {isAdmin && (
+                {canManage && (
                   <TableHead className="w-10 pl-4">
                     <Checkbox
                       checked={selection.allSelected}
@@ -200,7 +200,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                     />
                   </TableHead>
                 )}
-                <TableHead className={isAdmin ? undefined : "pl-4"}>
+                <TableHead className={canManage ? undefined : "pl-4"}>
                   {t.materials.material}
                 </TableHead>
                 <TableHead>{t.materials.sku}</TableHead>
@@ -208,14 +208,14 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                 <TableHead className="text-right">{t.materials.reorderAt}</TableHead>
                 <TableHead className="text-right">{t.materials.unitCost}</TableHead>
                 <TableHead className="text-right">{t.materials.stockValue}</TableHead>
-                {isAdmin && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
+                {canManage && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {materialsQuery.isPending &&
                 Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={isAdmin ? 8 : 6} className="pl-4">
+                    <TableCell colSpan={canManage ? 8 : 6} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -223,7 +223,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
 
               {materialsQuery.isError && (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 8 : 6} className="p-4">
+                  <TableCell colSpan={canManage ? 8 : 6} className="p-4">
                     <QueryError
                       error={materialsQuery.error}
                       onRetry={() => void materialsQuery.refetch()}
@@ -236,7 +236,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
               {!materialsQuery.isPending && !materialsQuery.isError && materials.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={isAdmin ? 8 : 6}
+                    colSpan={canManage ? 8 : 6}
                     className="py-10 text-center text-muted-foreground"
                   >
                     {lowStockOnly ? t.materials.nothingLow : t.materials.empty}
@@ -249,7 +249,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                   key={row.id}
                   data-state={selection.isSelected(row.id) ? "selected" : undefined}
                 >
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pl-4">
                       <Checkbox
                         checked={selection.isSelected(row.id)}
@@ -258,7 +258,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                       />
                     </TableCell>
                   )}
-                  <TableCell className={isAdmin ? "font-medium" : "pl-4 font-medium"}>
+                  <TableCell className={canManage ? "font-medium" : "pl-4 font-medium"}>
                     {row.name}
                     {row.isLowStock && (
                       <Badge variant="destructive" className="ml-2">
@@ -276,7 +276,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{money(row.unitCost)}</TableCell>
                   <TableCell className="text-right tabular-nums">{money(row.stockValue)}</TableCell>
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pr-4">
                       <div className="flex items-center justify-end">
                         <Button variant="outline" size="sm" onClick={() => setMovementTarget(row)}>
@@ -322,7 +322,7 @@ export default function MaterialsTable({ isAdmin }: { isAdmin: boolean }) {
         </div>
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <>
           <MaterialFormDialog
             open={createOpen}

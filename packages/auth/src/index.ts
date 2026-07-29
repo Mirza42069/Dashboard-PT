@@ -3,7 +3,24 @@ import * as schema from "@DashboardV2/db/schema/auth";
 import { env } from "@DashboardV2/env/server";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createAccessControl } from "better-auth/plugins/access";
+import { adminAc, defaultStatements, userAc } from "better-auth/plugins/admin/access";
 import { admin } from "better-auth/plugins";
+
+/**
+ * Without a `roles` map, better-auth's admin plugin types createUser/setRole
+ * bodies as accepting only "user" | "admin" (its two built-in roles), which
+ * rejects "super_admin" at compile time even though `adminRoles` below lists
+ * it. Registering "super_admin" here — with the same statements as the
+ * built-in "admin" role, since better-auth's own ban/impersonate/etc. actions
+ * don't distinguish the two — is what makes it a type-level option too.
+ */
+const accessControl = createAccessControl(defaultStatements);
+const adminRoleMap = {
+  super_admin: accessControl.newRole(adminAc.statements),
+  admin: adminAc,
+  user: userAc,
+};
 
 export type CreateAuthOptions = {
   /**
@@ -38,10 +55,11 @@ export function createAuth(opts: CreateAuthOptions = {}) {
           defaultValue: true,
           input: false,
         },
-        // The tenant this account is pinned to. Null for admins, who choose an
-        // active company instead. `input: false` for the same reason as above:
-        // a user must never be able to move themselves to another company by
-        // putting a companyId in a request body.
+        // The tenant this account is pinned to. Null for super admins, who
+        // choose an active company instead — admin and user are both pinned.
+        // `input: false` for the same reason as above: a user must never be
+        // able to move themselves to another company by putting a companyId
+        // in a request body.
         companyId: {
           type: "string",
           required: false,
@@ -71,7 +89,17 @@ export function createAuth(opts: CreateAuthOptions = {}) {
     plugins: [
       admin({
         defaultRole: "user",
-        adminRoles: ["admin"],
+        // "admin" is here, not just "super_admin", because packages/api's
+        // admin router calls auth.api.createUser/setUserPassword/banUser/
+        // unbanUser/removeUser with the *caller's* headers — better-auth
+        // checks the caller against this list on every one of those calls,
+        // and company admins must keep creating/resetting/banning their own
+        // users. The raw HTTP admin surface this also unlocks is closed for
+        // non-super-admins in apps/server/src/index.ts, since nothing but a
+        // super admin needs it and tRPC (which does its own tenant scoping
+        // before ever calling auth.api.*) is how every in-app flow gets here.
+        adminRoles: ["super_admin", "admin"],
+        roles: adminRoleMap,
       }),
     ],
   });

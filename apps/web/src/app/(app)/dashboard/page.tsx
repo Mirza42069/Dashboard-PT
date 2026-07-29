@@ -1,3 +1,4 @@
+import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import type { Metadata } from "next";
 
 import { BRAND_NAME } from "@/components/brand";
@@ -12,14 +13,14 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function DashboardPage() {
-  // Still gates the route even though the page renders nothing about the user.
-  await requireSession();
+  const session = await requireSession();
   const dict = getDictionary(await getLocale());
+  const showActivity = hasPermission(roleOf(session.user), "activity:read");
 
   return (
     <div className="space-y-4 p-4 md:p-6">
       <h1 className="sr-only">{dict.dashboard.title}</h1>
-      <DashboardOverview />
+      <DashboardOverview showActivity={showActivity} />
     </div>
   );
 }

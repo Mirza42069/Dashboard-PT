@@ -17,6 +17,7 @@ apps/web/src/routeTree.gen.ts
 # documented in README.md (Database Setup) and enforced by packages/env.
 .env
 .env.*
+.claude
 
 # IDEs and editors
 .vscode/*

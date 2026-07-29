@@ -4,13 +4,13 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sum } from "drizzle-orm";
 import z from "zod";
 
-import { adminCompanyProcedure, companyProcedure, router } from "../index";
+import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { toAmount, toNumericString } from "../lib/money";
-import { assertProjectInScope } from "../lib/scope";
+import { assertProjectAccess } from "../lib/scope";
 
 export const expenseRouter = router({
-  listByProject: companyProcedure
+  listByProject: companyPermissionProcedure("project:read")
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -18,7 +18,7 @@ export const expenseRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      await assertProjectInScope(ctx.companyId, input.projectId);
+      await assertProjectAccess(ctx, input.projectId);
 
       const [rows, [total]] = await Promise.all([
         db
@@ -47,7 +47,7 @@ export const expenseRouter = router({
       };
     }),
 
-  create: adminCompanyProcedure
+  create: companyPermissionProcedure("project:write")
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -58,10 +58,11 @@ export const expenseRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProjectAccess(ctx, input.projectId);
       const [target] = await db
         .select({ id: project.id, code: project.code })
         .from(project)
-        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
+        .where(eq(project.id, input.projectId));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
@@ -87,18 +88,18 @@ export const expenseRouter = router({
       return { id: created?.id };
     }),
 
-  delete: adminCompanyProcedure
+  delete: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      // The company filter doubles as the scope check: no row, no delete.
       const [target] = await db
-        .select({ description: expense.description, code: project.code })
+        .select({ description: expense.description, code: project.code, projectId: project.id })
         .from(expense)
         .innerJoin(project, eq(project.id, expense.projectId))
         .where(and(eq(expense.id, input.id), eq(project.companyId, ctx.companyId)));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Expense not found" });
       }
+      await assertProjectAccess(ctx, target.projectId);
 
       await db.delete(expense).where(eq(expense.id, input.id));
 

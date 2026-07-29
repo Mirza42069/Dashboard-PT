@@ -45,10 +45,10 @@ const ROW_TOLERANCE = 0.5;
 
 export default function BaselineTab({
   projectId,
-  isAdmin,
+  canEdit,
 }: {
   projectId: string;
-  isAdmin: boolean;
+  canEdit: boolean;
 }) {
   const t = useT();
   const [step, setStep] = useState<BaselineStep>("boq");
@@ -121,7 +121,7 @@ export default function BaselineTab({
       {step === "boq" && (
         <BoqTab
           projectId={projectId}
-          isAdmin={isAdmin}
+          canEdit={canEdit}
           targetVersionId={target?.id}
           setupMode={setupMode}
           onContinue={() => setStep("schedule")}
@@ -130,7 +130,7 @@ export default function BaselineTab({
       {step === "schedule" && (
         <ScheduleTab
           projectId={projectId}
-          isAdmin={isAdmin}
+          canEdit={canEdit}
           targetVersionId={target?.id}
           setupMode={setupMode}
           onReview={() => setStep("review")}
@@ -141,7 +141,7 @@ export default function BaselineTab({
           projectId={projectId}
           versionId={target.id}
           activeVersionNo={active?.versionNo ?? null}
-          isAdmin={isAdmin}
+          canEdit={canEdit}
           onEditBoq={() => setStep("boq")}
           onEditSchedule={() => setStep("schedule")}
           onActivated={() => setStep("boq")}
@@ -176,7 +176,7 @@ function BaselineReview({
   projectId,
   versionId,
   activeVersionNo,
-  isAdmin,
+  canEdit,
   onEditBoq,
   onEditSchedule,
   onActivated,
@@ -184,7 +184,7 @@ function BaselineReview({
   projectId: string;
   versionId: string;
   activeVersionNo: number | null;
-  isAdmin: boolean;
+  canEdit: boolean;
   onEditBoq: () => void;
   onEditSchedule: () => void;
   onActivated: () => void;
@@ -280,7 +280,7 @@ function BaselineReview({
                 {t.baseline.editSchedule}
               </Button>
             </div>
-            {isAdmin && (
+            {canEdit && (
               <Button disabled={!ready || activate.isPending} onClick={() => setConfirming(true)}>
                 <Lock />
                 {activeVersionNo === null

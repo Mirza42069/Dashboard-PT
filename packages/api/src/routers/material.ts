@@ -4,10 +4,11 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import z from "zod";
 
-import { adminCompanyProcedure, companyProcedure, router } from "../index";
+import { companyPermissionProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { roundAmount, toAmount, toNumericString } from "../lib/money";
-import { assertProjectInScope } from "../lib/scope";
+import { hasPermission, roleOf } from "../lib/permissions";
+import { assertProjectAccess } from "../lib/scope";
 
 /**
  * Signed stock expression. `out` subtracts, `in` and `adjustment` add — so a
@@ -41,7 +42,7 @@ const upsertSchema = z.object({
 });
 
 export const materialRouter = router({
-  list: companyProcedure
+  list: companyPermissionProcedure("material:read")
     .input(
       z.object({
         search: z.string().trim().max(200).default(""),
@@ -137,6 +138,11 @@ export const materialRouter = router({
       };
     }),
 
+  /**
+   * Dual-mode on purpose: with a projectId this is "what did my site receive"
+   * (open to an assigned member); without one it's the company-wide ledger
+   * (material:read, admin+) — two different questions with different readers.
+   */
   listMovements: companyProcedure
     .input(
       z.object({
@@ -146,6 +152,12 @@ export const materialRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
+      if (input.projectId) {
+        await assertProjectAccess(ctx, input.projectId);
+      } else if (!hasPermission(roleOf(ctx.session.user), "material:read")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Insufficient role" });
+      }
+
       // The material join below is inner, so scoping the material also scopes
       // the movements — a movement cannot outlive its material.
       const filters = [
@@ -175,7 +187,7 @@ export const materialRouter = router({
         .limit(input.limit);
     }),
 
-  create: adminCompanyProcedure.input(upsertSchema).mutation(async ({ ctx, input }) => {
+  create: companyPermissionProcedure("material:manage").input(upsertSchema).mutation(async ({ ctx, input }) => {
     const sku = input.sku.toUpperCase();
     const [existing] = await db
       .select({ id: material.id })
@@ -208,7 +220,7 @@ export const materialRouter = router({
     return { id: created?.id };
   }),
 
-  update: adminCompanyProcedure
+  update: companyPermissionProcedure("material:manage")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { id: materialId, sku, reorderLevel, unitCost, ...rest } = input;
@@ -245,7 +257,7 @@ export const materialRouter = router({
       return { success: true };
     }),
 
-  recordMovement: adminCompanyProcedure
+  recordMovement: companyPermissionProcedure("material:manage")
     .input(
       z.object({
         materialId: z.string().min(1),
@@ -267,7 +279,7 @@ export const materialRouter = router({
       // A movement may name a project, which must belong to the same company —
       // otherwise it would surface one tenant's site code in the other's ledger.
       if (input.projectId) {
-        await assertProjectInScope(ctx.companyId, input.projectId);
+        await assertProjectAccess(ctx, input.projectId);
       }
 
       // Issuing more than is on hand is a data-entry error, not a negative
@@ -310,7 +322,7 @@ export const materialRouter = router({
    * deletes a movement, so there was no way out. The material_movement FK is
    * ON DELETE cascade, so the ledger goes with the row.
    */
-  delete: adminCompanyProcedure
+  delete: companyPermissionProcedure("material:manage")
     .input(z.object({ id: z.string().min(1), force: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
       // Read the label before deleting — afterwards there is nothing left to
@@ -353,7 +365,7 @@ export const materialRouter = router({
    * id filter, so an id from another tenant is simply not matched rather than
    * reported as forbidden — which would confirm the row exists.
    */
-  deleteMany: adminCompanyProcedure
+  deleteMany: companyPermissionProcedure("material:manage")
     .input(
       z.object({
         ids: z.array(z.string().min(1)).min(1).max(100),

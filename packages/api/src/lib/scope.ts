@@ -4,11 +4,14 @@ import {
   equipment,
   material,
   project,
+  projectMember,
   projectNote,
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, exists, sql } from "drizzle-orm";
+
+import { roleOf } from "./permissions";
 
 /**
  * Company scoping.
@@ -48,7 +51,9 @@ export async function resolveCompanyIdForSession(
   sessionUser: SessionUser,
   headers: Headers,
 ): Promise<string> {
-  if (sessionUser.role !== "admin") {
+  if (roleOf(sessionUser) !== "super_admin") {
+    // admin and user are both pinned to one company now — only super_admin
+    // gets the cross-tenant cookie-switcher below.
     if (!sessionUser.companyId) {
       throw new TRPCError({
         code: "FORBIDDEN",
@@ -58,8 +63,8 @@ export async function resolveCompanyIdForSession(
     return sessionUser.companyId;
   }
 
-  // Admin: the cookie is a preference, not an authority — validate it still
-  // names a real company before trusting it.
+  // Super admin: the cookie is a preference, not an authority — validate it
+  // still names a real company before trusting it.
   const requested = readCookie(headers, COMPANY_COOKIE);
   if (requested) {
     const [found] = await db
@@ -89,14 +94,69 @@ export async function resolveCompanyIdForSession(
  * These throw NOT_FOUND rather than FORBIDDEN on a cross-company id on
  * purpose: FORBIDDEN would confirm to another tenant that the row exists.
  */
-export async function assertProjectInScope(companyId: string, projectId: string) {
+
+/** The subset of tRPC context every project-scoped guard/filter needs. */
+export type ProjectScopeCtx = {
+  companyId: string;
+  session: { user: SessionUser };
+};
+
+/**
+ * Company check for every role, plus a project_member check for role=user —
+ * a User only ever sees the projects an admin assigned them to. NOT_FOUND
+ * either way; a non-member must not learn the project exists.
+ */
+export async function assertProjectAccess(ctx: ProjectScopeCtx, projectId: string) {
   const [row] = await db
     .select({ companyId: project.companyId })
     .from(project)
     .where(eq(project.id, projectId));
-  if (!row || row.companyId !== companyId) {
+  if (!row || row.companyId !== ctx.companyId) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
+  if (roleOf(ctx.session.user) === "user") {
+    await assertMember(projectId, ctx.session.user.id, "Project not found");
+  }
+}
+
+/**
+ * Raw membership check for routers that resolve their own project id through
+ * a join (tickets, notes, BoQ …) and just need the same "must be a member if
+ * role=user" rule assertProjectAccess applies — call this only after
+ * confirming `roleOf(ctx.session.user) === "user"`.
+ */
+export async function assertMember(projectId: string, userId: string, message: string) {
+  const [member] = await db
+    .select({ userId: projectMember.userId })
+    .from(projectMember)
+    .where(and(eq(projectMember.projectId, projectId), eq(projectMember.userId, userId)));
+  if (!member) {
+    throw new TRPCError({ code: "NOT_FOUND", message });
+  }
+}
+
+/**
+ * Drizzle condition for list queries: company equality for admin/super_admin,
+ * plus a project_member EXISTS clause for role=user. Mirrors assertProjectAccess
+ * so a list and a by-id lookup never disagree about what's visible.
+ */
+export function projectAccessFilter(ctx: ProjectScopeCtx) {
+  const inCompany = eq(project.companyId, ctx.companyId);
+  if (roleOf(ctx.session.user) !== "user") return inCompany;
+  return and(
+    inCompany,
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(projectMember)
+        .where(
+          and(
+            eq(projectMember.projectId, project.id),
+            eq(projectMember.userId, ctx.session.user.id),
+          ),
+        ),
+    ),
+  );
 }
 
 export async function assertMaterialInScope(companyId: string, materialId: string) {
@@ -120,30 +180,34 @@ export async function assertEquipmentInScope(companyId: string, equipmentId: str
 }
 
 /** Notes carry no company of their own — scope comes from the parent project. */
-export async function assertNoteInScope(companyId: string, noteId: string) {
+export async function assertNoteAccess(ctx: ProjectScopeCtx, noteId: string) {
   const [row] = await db
-    .select({ companyId: project.companyId })
+    .select({ companyId: project.companyId, projectId: project.id })
     .from(projectNote)
     .innerJoin(project, eq(projectNote.projectId, project.id))
     .where(eq(projectNote.id, noteId));
-  if (!row || row.companyId !== companyId) {
+  if (!row || row.companyId !== ctx.companyId) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+  }
+  if (roleOf(ctx.session.user) === "user") {
+    await assertMember(row.projectId, ctx.session.user.id, "Note not found");
   }
 }
 
 /**
- * A user who may be named on this company's records — its own staff, or an
- * admin (unpinned, and legitimately assignable anywhere). Without this, an
- * assigneeId or managerId from another tenant is stored and then joined back,
- * rendering that person's name — and, on project.get, their email — inside a
- * company that should never see them.
+ * A user who may be named on this company's records — its own staff, or a
+ * super_admin (unpinned, and legitimately assignable anywhere: admins are
+ * pinned to one company now, so a plain companyId match already covers them).
+ * Without this, an assigneeId or managerId from another tenant is stored and
+ * then joined back, rendering that person's name — and, on project.get, their
+ * email — inside a company that should never see them.
  */
 export async function assertUserAssignable(companyId: string, userId: string) {
   const [row] = await db
     .select({ companyId: user.companyId, role: user.role })
     .from(user)
     .where(eq(user.id, userId));
-  if (!row || (row.role !== "admin" && row.companyId !== companyId)) {
+  if (!row || (row.role !== "super_admin" && row.companyId !== companyId)) {
     throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
   }
 }

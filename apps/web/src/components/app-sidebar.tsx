@@ -1,13 +1,14 @@
+import type { Role } from "@DashboardV2/api/lib/permissions";
 import { cn } from "@DashboardV2/ui/lib/utils";
 
 import AppNav from "./app-nav";
 import { BrandMark } from "./brand";
 
 export default function AppSidebar({
-  isAdmin,
+  role,
   collapsed,
 }: {
-  isAdmin: boolean;
+  role: Role;
   collapsed: boolean;
 }) {
   return (
@@ -54,7 +55,7 @@ export default function AppSidebar({
           collapsed ? "px-2" : "px-3",
         )}
       >
-        <AppNav isAdmin={isAdmin} collapsed={collapsed} />
+        <AppNav role={role} collapsed={collapsed} />
       </div>
     </aside>
   );

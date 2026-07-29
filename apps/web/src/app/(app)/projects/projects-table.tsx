@@ -56,7 +56,7 @@ const STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as 
 const ALL = "all";
 
 
-export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
+export default function ProjectsTable({ canManage }: { canManage: boolean }) {
   const t = useT();
   const { money, percent, formatDate } = useFormat();
   const statusLabel = useStatusLabel();
@@ -161,7 +161,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
             ))}
           </SelectContent>
         </Select>
-        {isAdmin && (
+        {canManage && (
           <Button size="sm" className="ml-auto" onClick={openCreate}>
             <Plus />
             {t.projects.newProject}
@@ -169,7 +169,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
           <Button variant="outline" size="sm" onClick={() => setBulkDeleteOpen(true)}>
             <Trash2 />
@@ -183,7 +183,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
           <Table>
             <TableHeader>
               <TableRow>
-                {isAdmin && (
+                {canManage && (
                   <TableHead className="w-10 pl-4">
                     <Checkbox
                       checked={selection.allSelected}
@@ -193,7 +193,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                     />
                   </TableHead>
                 )}
-                <TableHead className={isAdmin ? undefined : "pl-4"}>{t.projects.project}</TableHead>
+                <TableHead className={canManage ? undefined : "pl-4"}>{t.projects.project}</TableHead>
                 <TableHead>{t.projects.statusLabel}</TableHead>
                 <TableHead>{t.projects.client}</TableHead>
                 <TableHead className="w-56">{t.projects.workCompleted}</TableHead>
@@ -201,14 +201,14 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                 <TableHead className="text-right">{t.projects.contract}</TableHead>
                 <TableHead>{t.projects.dueColumn}</TableHead>
                 <TableHead className="text-right">{t.projects.openTicketsColumn}</TableHead>
-                {isAdmin && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
+                {canManage && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {projectsQuery.isPending &&
                 Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={isAdmin ? 9 : 8} className="pl-4">
+                    <TableCell colSpan={canManage ? 9 : 8} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -216,7 +216,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
 
               {projectsQuery.isError && (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 9 : 8} className="p-4">
+                  <TableCell colSpan={canManage ? 9 : 8} className="p-4">
                     <QueryError
                       error={projectsQuery.error}
                       onRetry={() => void projectsQuery.refetch()}
@@ -229,7 +229,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
               {!projectsQuery.isPending && !projectsQuery.isError && projects.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={isAdmin ? 9 : 8}
+                    colSpan={canManage ? 9 : 8}
                     className="py-10 text-center text-muted-foreground"
                   >
                     {debouncedSearch || status !== ALL ? t.projects.noMatch : t.projects.empty}
@@ -242,7 +242,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                   key={row.id}
                   data-state={selection.isSelected(row.id) ? "selected" : undefined}
                 >
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pl-4">
                       <Checkbox
                         checked={selection.isSelected(row.id)}
@@ -251,7 +251,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                       />
                     </TableCell>
                   )}
-                  <TableCell className={isAdmin ? undefined : "pl-4"}>
+                  <TableCell className={canManage ? undefined : "pl-4"}>
                     <Link href={`/projects/${row.id}`} className="font-medium hover:underline">
                       {row.name}
                     </Link>
@@ -294,7 +294,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(row.endDate)}</TableCell>
                   <TableCell className="text-right tabular-nums">{row.openTickets}</TableCell>
-                  {isAdmin && (
+                  {canManage && (
                     <TableCell className="pr-4 text-right">
                       {/* Edit is the only per-row action left; deleting happens
                           through the selection checkboxes. */}
@@ -345,7 +345,7 @@ export default function ProjectsTable({ isAdmin }: { isAdmin: boolean }) {
         </div>
       </div>
 
-      {isAdmin && (
+      {canManage && (
         <ProjectFormDialog
           // Remount on target change so the form picks up fresh defaultValues.
           key={editingId ?? "new"}

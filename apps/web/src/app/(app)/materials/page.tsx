@@ -1,8 +1,9 @@
+import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import type { Metadata } from "next";
 
 import { BRAND_NAME } from "@/components/brand";
 import { getDictionary, getLocale } from "@/i18n";
-import { requireSession } from "@/lib/session";
+import { requirePermission } from "@/lib/session";
 
 import MaterialsTable from "./materials-table";
 
@@ -12,7 +13,9 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function MaterialsPage() {
-  const session = await requireSession();
+  // Nav hides this link from Users, but the URL is still typeable — gate the
+  // page itself, not just the link.
+  const session = await requirePermission("material:read");
   const dict = getDictionary(await getLocale());
 
   return (
@@ -22,7 +25,7 @@ export default async function MaterialsPage() {
           and it is what a screen reader announces on navigation. */}
       <h1 className="sr-only">{dict.materials.title}</h1>
 
-      <MaterialsTable isAdmin={session.user.role === "admin"} />
+      <MaterialsTable canManage={hasPermission(roleOf(session.user), "material:manage")} />
     </div>
   );
 }
