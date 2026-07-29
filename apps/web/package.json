@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@DashboardV2/api": "workspace:*",
+    "@DashboardV2/auth": "workspace:*",
     "@DashboardV2/env": "workspace:*",
     "@DashboardV2/ui": "workspace:*",
     "@swc/helpers": "^0.5.23",
