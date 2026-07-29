@@ -1,8 +1,6 @@
 import { db } from "@DashboardV2/db";
 import {
   company,
-  equipment,
-  material,
   project,
   projectMember,
   projectNote,
@@ -157,26 +155,6 @@ export function projectAccessFilter(ctx: ProjectScopeCtx) {
         ),
     ),
   );
-}
-
-export async function assertMaterialInScope(companyId: string, materialId: string) {
-  const [row] = await db
-    .select({ companyId: material.companyId })
-    .from(material)
-    .where(eq(material.id, materialId));
-  if (!row || row.companyId !== companyId) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Material not found" });
-  }
-}
-
-export async function assertEquipmentInScope(companyId: string, equipmentId: string) {
-  const [row] = await db
-    .select({ companyId: equipment.companyId })
-    .from(equipment)
-    .where(eq(equipment.id, equipmentId));
-  if (!row || row.companyId !== companyId) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Equipment not found" });
-  }
 }
 
 /** Notes carry no company of their own — scope comes from the parent project. */

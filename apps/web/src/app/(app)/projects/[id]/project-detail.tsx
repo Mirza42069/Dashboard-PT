@@ -1,29 +1,17 @@
 "use client";
 
-import { Badge } from "@DashboardV2/ui/components/badge";
-import { Button } from "@DashboardV2/ui/components/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from "@DashboardV2/ui/components/card";
 import { Empty, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@DashboardV2/ui/components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import { toast } from "@/lib/toast";
 
 import { DeviationBadge } from "@/components/deviation-badge";
 import { Meter } from "@/components/meter";
@@ -49,14 +37,9 @@ export default function ProjectDetail({
   canManageMembers: boolean;
 }) {
   const t = useT();
-  const { money, percent, quantity, formatDate } = useFormat();
-  const queryClient = useQueryClient();
+  const { money, percent, formatDate } = useFormat();
 
   const projectQuery = useQuery(trpc.project.get.queryOptions({ id: projectId }));
-  const expensesQuery = useQuery(trpc.expense.listByProject.queryOptions({ projectId }));
-  const movementsQuery = useQuery(trpc.material.listMovements.queryOptions({ projectId, limit: 50 }));
-
-  const deleteExpense = useMutation(trpc.expense.delete.mutationOptions());
 
   const project = projectQuery.data;
 
@@ -178,8 +161,6 @@ export default function ProjectDetail({
           <TabsTrigger value="tickets">{t.projects.tabTickets}</TabsTrigger>
           <TabsTrigger value="baseline">{t.projects.tabBaseline}</TabsTrigger>
           <TabsTrigger value="progress">{t.projects.tabProgress}</TabsTrigger>
-          <TabsTrigger value="expenses">{t.projects.tabExpenses}</TabsTrigger>
-          <TabsTrigger value="materials">{t.projects.tabMaterials}</TabsTrigger>
           <TabsTrigger value="notes">{t.notes.tab}</TabsTrigger>
           {canManageMembers && <TabsTrigger value="team">{t.projects.teamTab}</TabsTrigger>}
         </TabsList>
@@ -194,134 +175,6 @@ export default function ProjectDetail({
 
         <TabsContent value="tickets">
           <TicketsTab projectId={projectId} />
-        </TabsContent>
-
-        <TabsContent value="expenses">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t.expenses.recordedExpenses}</CardTitle>
-              <CardDescription>
-                {interpolate(t.expenses.summary, {
-                  total: money(expensesQuery.data?.total ?? 0),
-                  count: expensesQuery.data?.expenses.length ?? 0,
-                })}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="px-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="pl-4">{t.expenses.description}</TableHead>
-                    <TableHead>{t.expenses.category}</TableHead>
-                    <TableHead>{t.expenses.date}</TableHead>
-                    <TableHead className="text-right">{t.expenses.amount}</TableHead>
-                    {canEdit && <TableHead className="pr-4" />}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(expensesQuery.data?.expenses.length ?? 0) === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={canEdit ? 5 : 4}
-                        className="py-10 text-center text-muted-foreground"
-                      >
-                        {t.expenses.empty}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {(expensesQuery.data?.expenses ?? []).map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell className="pl-4 font-medium">{row.description}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{t.expenses.categories[row.category]}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatDate(row.incurredOn)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{money(row.amount)}</TableCell>
-                      {canEdit && (
-                        <TableCell className="pr-4 text-right">
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={interpolate(t.expenses.deleteAria, {
-                              description: row.description,
-                            })}
-                            onClick={async () => {
-                              try {
-                                 await deleteExpense.mutateAsync({ id: row.id });
-                                 await queryClient.invalidateQueries(trpc.expense.pathFilter());
-                                 toast.success(t.expenses.deleted);
-                              } catch (error) {
-                                toast.error(
-                                  error instanceof Error ? error.message : t.expenses.deleteFailed,
-                                );
-                              }
-                            }}
-                          >
-                            <Trash2 />
-                          </Button>
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="materials">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t.projects.tabMaterials}</CardTitle>
-            </CardHeader>
-            <CardContent className="px-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="pl-4">{t.materials.material}</TableHead>
-                    <TableHead>{t.materials.movement}</TableHead>
-                    <TableHead className="text-right">{t.materials.quantity}</TableHead>
-                    <TableHead>{t.materials.dateLabel}</TableHead>
-                    <TableHead className="pr-4">{t.materials.recordedBy}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(movementsQuery.data?.length ?? 0) === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
-                        {t.materials.emptyMovements}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                  {(movementsQuery.data ?? []).map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell className="pl-4 font-medium">{row.materialName}</TableCell>
-                      <TableCell>
-                        <Badge variant={row.type === "out" ? "secondary" : "outline"}>
-                          {row.type === "out"
-                            ? t.materials.issued
-                            : row.type === "in"
-                              ? t.materials.received
-                              : t.materials.adjusted}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {quantity(Number(row.quantity), row.materialUnit)}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {formatDate(row.occurredOn)}
-                      </TableCell>
-                      <TableCell className="pr-4 text-muted-foreground">
-                        {row.recordedByName ?? "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
         </TabsContent>
 
         <TabsContent value="notes">

@@ -135,11 +135,9 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
     const ids = selection.selectedIds;
     try {
       // force, for the same reason as the single-row path: the dialog already
-      // spells out that tickets and expenses go too.
+      // spells out that tickets go too.
       await deleteMany.mutateAsync({ ids, force: true });
       await queryClient.invalidateQueries(trpc.project.pathFilter());
-      // Equipment is released by the delete, so its list is stale too.
-      await queryClient.invalidateQueries(trpc.equipment.pathFilter());
       toast.success(plural(t.projects.bulkDeletedToast, ids.length));
       selection.clear();
     } catch (error) {

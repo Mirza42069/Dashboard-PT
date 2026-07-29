@@ -105,7 +105,7 @@ export default function CompaniesTable() {
               </TableHeader>
               <TableBody>
                 {companies.map((row) => {
-                  const owned = row.projects + row.materials + row.equipment + row.users;
+                  const owned = row.projects + row.users;
                   return (
                     <TableRow key={row.id}>
                       <TableCell className="font-medium">{row.name}</TableCell>

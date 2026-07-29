@@ -12,7 +12,7 @@ import { useT } from "@/i18n/provider";
  * Renders nothing at zero, so callers can mount it unconditionally and let the
  * bar appear as soon as something is selected. The entity-specific actions come
  * in as children — the count, the clear button and the layout are the only
- * parts worth sharing between equipment, materials and projects.
+ * parts worth sharing across tables.
  */
 export function BulkActionsBar({
   count,

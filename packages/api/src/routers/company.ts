@@ -1,7 +1,7 @@
 import { db } from "@DashboardV2/db";
 import { user } from "@DashboardV2/db/schema/auth";
 import { company } from "@DashboardV2/db/schema/company";
-import { equipment, material, project } from "@DashboardV2/db/schema/construction";
+import { project } from "@DashboardV2/db/schema/construction";
 import { TRPCError } from "@trpc/server";
 import { asc, count, eq } from "drizzle-orm";
 import z from "zod";
@@ -53,13 +53,8 @@ export const companyRouter = router({
       .orderBy(asc(company.createdAt));
 
     // Counts drive the "can this be deleted?" affordance in the table.
-    const [projects, materials, equipments, users] = await Promise.all([
+    const [projects, users] = await Promise.all([
       db.select({ companyId: project.companyId, value: count() }).from(project).groupBy(project.companyId),
-      db.select({ companyId: material.companyId, value: count() }).from(material).groupBy(material.companyId),
-      db
-        .select({ companyId: equipment.companyId, value: count() })
-        .from(equipment)
-        .groupBy(equipment.companyId),
       db.select({ companyId: user.companyId, value: count() }).from(user).groupBy(user.companyId),
     ]);
 
@@ -70,8 +65,6 @@ export const companyRouter = router({
       companies: rows.map((row) => ({
         ...row,
         projects: tally(projects, row.id),
-        materials: tally(materials, row.id),
-        equipment: tally(equipments, row.id),
         users: tally(users, row.id),
       })),
     };
@@ -135,24 +128,17 @@ export const companyRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
       }
 
-      const [[projects], [materials], [equipments], [users]] = await Promise.all([
+      const [[projects], [users]] = await Promise.all([
         db.select({ value: count() }).from(project).where(eq(project.companyId, input.id)),
-        db.select({ value: count() }).from(material).where(eq(material.companyId, input.id)),
-        db.select({ value: count() }).from(equipment).where(eq(equipment.companyId, input.id)),
         db.select({ value: count() }).from(user).where(eq(user.companyId, input.id)),
       ]);
 
-      const owned =
-        (projects?.value ?? 0) +
-        (materials?.value ?? 0) +
-        (equipments?.value ?? 0) +
-        (users?.value ?? 0);
+      const owned = (projects?.value ?? 0) + (users?.value ?? 0);
       if (owned > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            `This company still owns ${projects?.value ?? 0} project(s), ` +
-            `${materials?.value ?? 0} material(s), ${equipments?.value ?? 0} equipment item(s) ` +
+            `This company still owns ${projects?.value ?? 0} project(s) ` +
             `and ${users?.value ?? 0} user(s). Move or delete them first.`,
         });
       }

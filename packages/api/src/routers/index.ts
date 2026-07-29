@@ -4,9 +4,6 @@ import { activityRouter } from "./activity";
 import { adminRouter } from "./admin";
 import { boqRouter } from "./boq";
 import { companyRouter } from "./company";
-import { equipmentRouter } from "./equipment";
-import { expenseRouter } from "./expense";
-import { materialRouter } from "./material";
 import { noteRouter } from "./note";
 import { progressRouter } from "./progress";
 import { projectRouter } from "./project";
@@ -29,9 +26,6 @@ export const appRouter = router({
   company: companyRouter,
   project: projectRouter,
   ticket: ticketRouter,
-  material: materialRouter,
-  equipment: equipmentRouter,
-  expense: expenseRouter,
   note: noteRouter,
   boq: boqRouter,
   schedule: scheduleRouter,

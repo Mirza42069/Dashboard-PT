@@ -3,8 +3,6 @@ import {
   PERIOD_TYPES,
   PROJECT_STATUSES,
   boqVersion,
-  equipment,
-  expense,
   project,
   projectMember,
   ticket,
@@ -356,9 +354,8 @@ export const projectRouter = router({
     }),
 
   /**
-   * Tickets and expenses cascade, but that is a lot of history to lose by
-   * accident, so deleting a project with either requires an explicit confirm.
-   * Equipment is only unassigned, never deleted — it outlives the site.
+   * Tickets cascade, but that is a lot of history to lose by accident, so
+   * deleting a project with tickets requires an explicit confirm.
    */
   delete: companyPermissionProcedure("project:delete")
     .input(z.object({ id: z.string().min(1), force: z.boolean().default(false) }))
@@ -373,25 +370,19 @@ export const projectRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
 
-      const [[expenses], [tickets]] = await Promise.all([
-        db.select({ value: count() }).from(expense).where(eq(expense.projectId, input.id)),
-        db.select({ value: count() }).from(ticket).where(eq(ticket.projectId, input.id)),
-      ]);
+      const [tickets] = await db
+        .select({ value: count() })
+        .from(ticket)
+        .where(eq(ticket.projectId, input.id));
 
-      const expenseCount = expenses?.value ?? 0;
       const ticketCount = tickets?.value ?? 0;
 
-      if (!input.force && (expenseCount > 0 || ticketCount > 0)) {
+      if (!input.force && ticketCount > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `This project has ${ticketCount} ticket(s) and ${expenseCount} expense(s), which will be deleted with it. Confirm to continue.`,
+          message: `This project has ${ticketCount} ticket(s), which will be deleted with it. Confirm to continue.`,
         });
       }
-
-      await db
-        .update(equipment)
-        .set({ projectId: null, status: "available" })
-        .where(eq(equipment.projectId, input.id));
 
       await db.delete(project).where(eq(project.id, input.id));
 
@@ -402,14 +393,12 @@ export const projectRouter = router({
         entityLabel: `${target.code} · ${target.name}`,
       });
 
-      return { success: true, deletedTickets: ticketCount, deletedExpenses: expenseCount };
+      return { success: true, deletedTickets: ticketCount };
     }),
 
   /**
    * Bulk counterpart of delete. Scoping shares the where clause with the id
-   * filter so a cross-tenant id is simply not matched, and equipment is
-   * released before the delete for the same reason as the single-row version —
-   * otherwise the machines keep pointing at a site that no longer exists.
+   * filter so a cross-tenant id is simply not matched.
    */
   deleteMany: companyPermissionProcedure("project:delete")
     .input(
@@ -429,25 +418,19 @@ export const projectRouter = router({
 
       const ids = targets.map((row) => row.id);
 
-      const [[expenses], [tickets]] = await Promise.all([
-        db.select({ value: count() }).from(expense).where(inArray(expense.projectId, ids)),
-        db.select({ value: count() }).from(ticket).where(inArray(ticket.projectId, ids)),
-      ]);
+      const [tickets] = await db
+        .select({ value: count() })
+        .from(ticket)
+        .where(inArray(ticket.projectId, ids));
 
-      const expenseCount = expenses?.value ?? 0;
       const ticketCount = tickets?.value ?? 0;
 
-      if (!input.force && (expenseCount > 0 || ticketCount > 0)) {
+      if (!input.force && ticketCount > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `These projects have ${ticketCount} ticket(s) and ${expenseCount} expense(s), which will be deleted with them. Confirm to continue.`,
+          message: `These projects have ${ticketCount} ticket(s), which will be deleted with them. Confirm to continue.`,
         });
       }
-
-      await db
-        .update(equipment)
-        .set({ projectId: null, status: "available" })
-        .where(inArray(equipment.projectId, ids));
 
       await db.delete(project).where(inArray(project.id, ids));
 
@@ -464,7 +447,6 @@ export const projectRouter = router({
         success: true,
         count: targets.length,
         deletedTickets: ticketCount,
-        deletedExpenses: expenseCount,
       };
     }),
 

@@ -38,15 +38,11 @@ export default function ActivityFeed() {
     const key = `${entry.entityType}_${entry.action}` as keyof Sentences;
     const template = t.activity.sentence[key] ?? t.activity.sentence.fallback;
 
-    // `detail` holds raw keys (an equipment status, a role) — localize them so
-    // the sentence doesn't switch to English mid-way.
+    // `detail` holds raw keys (a role), localize them so the sentence doesn't
+    // switch to English mid-way.
     let detail = entry.detail ?? "";
-    if (entry.entityType === "equipment" && entry.action === "status_changed" && detail) {
-      detail = statusLabel("equipment", detail);
-    } else if (entry.entityType === "ticket" && entry.action === "status_changed" && detail) {
+    if (entry.entityType === "ticket" && entry.action === "status_changed" && detail) {
       detail = statusLabel("ticket", detail);
-    } else if (entry.entityType === "equipment" && entry.action === "assigned" && !detail) {
-      detail = t.activity.returnedToYard;
     } else if (entry.entityType === "user" && entry.action === "role_changed") {
       detail = detail === "admin" ? t.users.roleAdmin : t.users.roleUser;
     }

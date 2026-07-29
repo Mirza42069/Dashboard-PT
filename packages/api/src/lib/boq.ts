@@ -11,9 +11,9 @@ import { assertMember, type ProjectScopeCtx } from "./scope";
  * Shared BoQ machinery.
  *
  * The old system did this work in Postgres triggers and stored procedures. Here
- * it lives in the API layer, matching how material stock is handled — with two
- * exceptions that stay in SQL because they must be atomic and the Neon HTTP
- * driver has no interactive transactions:
+ * it lives in the API layer instead — with two exceptions that stay in SQL
+ * because they must be atomic and the Neon HTTP driver has no interactive
+ * transactions:
  *
  *   - the weight recalculation, which is one UPDATE only because `value` is a
  *     generated column and Postgres can therefore do the whole sum-and-divide

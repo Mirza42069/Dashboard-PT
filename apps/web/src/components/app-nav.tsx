@@ -3,7 +3,7 @@
 import { hasPermission, type Permission, type Role } from "@DashboardV2/api/lib/permissions";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
-import { Boxes, Building2, HardHat, LayoutDashboard, Truck, Users } from "lucide-react";
+import { Building2, HardHat, LayoutDashboard, Users } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -39,11 +39,7 @@ const SECTIONS: NavSection[] = [
   },
   {
     headingKey: "operations",
-    items: [
-      { href: "/projects", labelKey: "projects", icon: HardHat },
-      { href: "/materials", labelKey: "materials", icon: Boxes, permission: "material:read" },
-      { href: "/equipment", labelKey: "equipment", icon: Truck, permission: "equipment:read" },
-    ],
+    items: [{ href: "/projects", labelKey: "projects", icon: HardHat }],
   },
   {
     headingKey: "administration",
@@ -69,9 +65,9 @@ const SECTIONS: NavSection[] = [
 const MOTION = "duration-[320ms] ease-[cubic-bezier(0.16,1,0.3,1)]";
 
 /**
- * Per-row delay for the label cascade, applied on expand only. Six rows at most
- * (overview + three operations + two admin), so the last label starts at 175ms,
- * while the rail is still widening, and settles at 175 + 320 = 495ms — after the
+ * Per-row delay for the label cascade, applied on expand only. Four rows at most
+ * (overview + one operations + two admin), so the last label starts at 105ms,
+ * while the rail is still widening, and settles at 105 + 320 = 425ms — after the
  * rail has stopped. That overhang is the point: the labels read as settling into
  * a rail that has already arrived, rather than racing it to the same frame.
  */

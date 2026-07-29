@@ -9,7 +9,6 @@ import {
   Hammer,
   OctagonX,
   PauseCircle,
-  Wrench,
 } from "lucide-react";
 
 import type { Dictionary } from "@/i18n";
@@ -41,12 +40,6 @@ const STYLES: Record<string, Record<string, Descriptor>> = {
     in_progress: { variant: "default", icon: CircleDot },
     resolved: { variant: "secondary", icon: CircleCheck },
     closed: { variant: "ghost", icon: CircleSlash },
-  },
-  equipment: {
-    available: { variant: "outline", icon: CircleCheck },
-    in_use: { variant: "default", icon: Hammer },
-    maintenance: { variant: "secondary", icon: Wrench },
-    retired: { variant: "ghost", icon: CircleSlash },
   },
 };
 

@@ -34,7 +34,7 @@ export const PERMISSIONS = [
   /** Reading a project and everything under it. */
   "project:read",
   /**
-   * Mutating anything a project owns: tickets, expenses, notes/photos, BoQ,
+   * Mutating anything a project owns: tickets, notes/photos, BoQ,
    * schedule/distribution, progress entries. One permission for all of it —
    * the scope layer (company match, or project membership for role=user)
    * decides *which* projects, not this map.
@@ -42,10 +42,6 @@ export const PERMISSIONS = [
   "project:write",
   /** Assign users to a project's member list. */
   "member:manage",
-  "material:read",
-  "material:manage",
-  "equipment:read",
-  "equipment:manage",
   "activity:read",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];

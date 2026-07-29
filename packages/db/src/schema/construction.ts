@@ -57,15 +57,6 @@ export const PROJECT_STATUSES = [
   "cancelled",
 ] as const;
 export const TICKET_STATUSES = ["open", "in_progress", "resolved", "closed"] as const;
-export const MOVEMENT_TYPES = ["in", "out", "adjustment"] as const;
-export const EQUIPMENT_STATUSES = ["available", "in_use", "maintenance", "retired"] as const;
-export const EXPENSE_CATEGORIES = [
-  "labor",
-  "materials",
-  "equipment",
-  "subcontractor",
-  "other",
-] as const;
 
 export const BOQ_VERSION_STATUSES = ["draft", "active", "superseded"] as const;
 export const SCHEDULE_VERSION_STATUSES = ["draft", "active"] as const;
@@ -78,9 +69,6 @@ export const PERIOD_STATUSES = ["open", "locked"] as const;
 
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
-export type MovementType = (typeof MOVEMENT_TYPES)[number];
-export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
-export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 export type BoqVersionStatus = (typeof BOQ_VERSION_STATUSES)[number];
 export type ScheduleVersionStatus = (typeof SCHEDULE_VERSION_STATUSES)[number];
 export type WeightSource = (typeof WEIGHT_SOURCES)[number];
@@ -139,10 +127,9 @@ export const project = pgTable(
 );
 
 /**
- * Which `user` (role=user) accounts may see and act on a given project. Roots
- * (project/material/equipment) are scoped by company alone; a project also
- * needs this row-level layer because a company's Users only see the subset
- * of projects an admin has assigned them to.
+ * Which `user` (role=user) accounts may see and act on a given project. A
+ * project is scoped by company alone; this row-level layer is what limits a
+ * company's Users to the subset of projects an admin has assigned them to.
  */
 export const projectMember = pgTable(
   "project_member",
@@ -187,101 +174,6 @@ export const ticket = pgTable(
   ],
 );
 
-export const material = pgTable(
-  "material",
-  {
-    id: id(),
-    companyId: companyId(),
-    sku: text("sku").notNull(),
-    name: text("name").notNull(),
-    /** Unit of measure: bag, m3, ton, piece… */
-    unit: text("unit").notNull(),
-    reorderLevel: numeric("reorder_level", { precision: 12, scale: 2 }).default("0").notNull(),
-    unitCost: numeric("unit_cost", { precision: 14, scale: 2 }).default("0").notNull(),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-  },
-  (table) => [
-    index("material_name_idx").on(table.name),
-    index("material_companyId_idx").on(table.companyId),
-    unique("material_companyId_sku_key").on(table.companyId, table.sku),
-  ],
-);
-
-/**
- * The ledger that stock is derived from. There is intentionally no
- * `quantity_on_hand` column on `material`: the Neon HTTP driver has no
- * interactive transactions, so an insert-here-plus-update-there pair could
- * half-succeed and leave the counter permanently wrong. Summing this table is
- * always correct and cheap at this scale.
- */
-export const materialMovement = pgTable(
-  "material_movement",
-  {
-    id: id(),
-    materialId: text("material_id")
-      .notNull()
-      .references(() => material.id, { onDelete: "cascade" }),
-    /** Which site consumed or received it. Null for central-store adjustments. */
-    projectId: text("project_id").references(() => project.id, { onDelete: "set null" }),
-    type: text("type").$type<MovementType>().notNull(),
-    quantity: numeric("quantity", { precision: 12, scale: 2 }).notNull(),
-    occurredOn: date("occurred_on").notNull(),
-    note: text("note"),
-    recordedById: text("recorded_by_id").references(() => user.id, { onDelete: "set null" }),
-    createdAt: createdAt(),
-  },
-  (table) => [
-    index("materialMovement_materialId_idx").on(table.materialId),
-    index("materialMovement_projectId_idx").on(table.projectId),
-  ],
-);
-
-export const equipment = pgTable(
-  "equipment",
-  {
-    id: id(),
-    companyId: companyId(),
-    code: text("code").notNull(),
-    name: text("name").notNull(),
-    category: text("category"),
-    status: text("status").$type<EquipmentStatus>().default("available").notNull(),
-    /** Site it is currently deployed to. */
-    projectId: text("project_id").references(() => project.id, { onDelete: "set null" }),
-    purchaseDate: date("purchase_date"),
-    notes: text("notes"),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-  },
-  (table) => [
-    index("equipment_status_idx").on(table.status),
-    index("equipment_projectId_idx").on(table.projectId),
-    index("equipment_companyId_idx").on(table.companyId),
-    unique("equipment_companyId_code_key").on(table.companyId, table.code),
-  ],
-);
-
-export const expense = pgTable(
-  "expense",
-  {
-    id: id(),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => project.id, { onDelete: "cascade" }),
-    category: text("category").$type<ExpenseCategory>().notNull(),
-    description: text("description").notNull(),
-    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
-    incurredOn: date("incurred_on").notNull(),
-    recordedById: text("recorded_by_id").references(() => user.id, { onDelete: "set null" }),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-  },
-  (table) => [
-    index("expense_projectId_idx").on(table.projectId),
-    index("expense_category_idx").on(table.category),
-  ],
-);
-
 /**
  * Bill of Quantities.
  *
@@ -297,8 +189,7 @@ export const expense = pgTable(
  *
  * Deviation = actual % − planned %, both weighted by the same item weights and
  * both measured at the project's data date. Nothing about that number is
- * stored: it is derived on read, for the same reason materialMovement has no
- * quantity_on_hand column.
+ * stored — it is derived on read.
  */
 export const boqVersion = pgTable(
   "boq_version",
@@ -535,9 +426,6 @@ export const notePhoto = pgTable(
 export const ACTIVITY_ENTITIES = [
   "project",
   "ticket",
-  "material",
-  "equipment",
-  "expense",
   "note",
   "user",
   "boq",
@@ -552,7 +440,6 @@ export const ACTIVITY_ACTIONS = [
   "deleted",
   "assigned",
   "status_changed",
-  "movement_recorded",
   "paused",
   "resumed",
   "role_changed",
@@ -597,8 +484,6 @@ export const activityLog = pgTable(
 
 export const companyRelations = relations(company, ({ many }) => ({
   projects: many(project),
-  materials: many(material),
-  equipment: many(equipment),
   users: many(user),
 }));
 
@@ -606,9 +491,6 @@ export const projectRelations = relations(project, ({ one, many }) => ({
   company: one(company, { fields: [project.companyId], references: [company.id] }),
   manager: one(user, { fields: [project.managerId], references: [user.id] }),
   tickets: many(ticket),
-  expenses: many(expense),
-  equipment: many(equipment),
-  materialMovements: many(materialMovement),
   notes: many(projectNote),
   boqVersions: many(boqVersion),
   reportingPeriods: many(reportingPeriod),
@@ -676,25 +558,4 @@ export const notePhotoRelations = relations(notePhoto, ({ one }) => ({
 export const ticketRelations = relations(ticket, ({ one }) => ({
   project: one(project, { fields: [ticket.projectId], references: [project.id] }),
   issuer: one(user, { fields: [ticket.issuerId], references: [user.id] }),
-}));
-
-export const materialRelations = relations(material, ({ one, many }) => ({
-  company: one(company, { fields: [material.companyId], references: [company.id] }),
-  movements: many(materialMovement),
-}));
-
-export const materialMovementRelations = relations(materialMovement, ({ one }) => ({
-  material: one(material, { fields: [materialMovement.materialId], references: [material.id] }),
-  project: one(project, { fields: [materialMovement.projectId], references: [project.id] }),
-  recordedBy: one(user, { fields: [materialMovement.recordedById], references: [user.id] }),
-}));
-
-export const equipmentRelations = relations(equipment, ({ one }) => ({
-  company: one(company, { fields: [equipment.companyId], references: [company.id] }),
-  project: one(project, { fields: [equipment.projectId], references: [project.id] }),
-}));
-
-export const expenseRelations = relations(expense, ({ one }) => ({
-  project: one(project, { fields: [expense.projectId], references: [project.id] }),
-  recordedBy: one(user, { fields: [expense.recordedById], references: [user.id] }),
 }));
