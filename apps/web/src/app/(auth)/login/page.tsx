@@ -11,7 +11,7 @@ import { getSession } from "@/lib/session";
 
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
-  return { title: `${dict.auth.signIn} · ${BRAND_NAME}` };
+  return { title: `${dict.auth.signIn} - ${BRAND_NAME}` };
 }
 
 export default async function LoginPage() {

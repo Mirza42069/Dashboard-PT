@@ -21,7 +21,7 @@ import {
 } from "@DashboardV2/ui/components/select";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarRange, Save } from "lucide-react";
+import { CalendarRange, Save } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
@@ -262,7 +262,7 @@ export default function ScheduleTab({
                     <th
                       scope="row"
                       className="sticky left-0 z-10 max-w-64 truncate bg-card px-4 py-1.5 text-left font-normal"
-                      title={`${row.section} · ${row.leaf.description}`}
+                      title={`${row.section} - ${row.leaf.description}`}
                     >
                       <span className="font-mono text-xs text-muted-foreground">
                         {row.leaf.code}
@@ -281,7 +281,7 @@ export default function ScheduleTab({
                               max={100}
                               step="any"
                               value={drafts.get(cellKey(row.leaf.id, period.id)) ?? (value === 0 ? "" : String(value))}
-                              aria-label={`${row.leaf.code} · ${period.label ?? period.periodIndex}`}
+                              aria-label={`${row.leaf.code} - ${period.label ?? period.periodIndex}`}
                               className="h-8 text-right tabular-nums"
                               onChange={(e) =>
                                 setDrafts((current) =>

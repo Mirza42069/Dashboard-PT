@@ -78,13 +78,13 @@ async function assertTargetManageable(
   }
 }
 
-/** "Name · email" for the audit trail, resolved while the row still exists. */
+/** "Name - email" for the audit trail, resolved while the row still exists. */
 async function userLabel(userId: string): Promise<string> {
   const [row] = await db
     .select({ name: user.name, email: user.email })
     .from(user)
     .where(eq(user.id, userId));
-  return row ? `${row.name} · ${row.email}` : userId;
+  return row ? `${row.name} - ${row.email}` : userId;
 }
 
 function assertNotSelf(actorId: string, targetId: string, action: string) {
@@ -244,7 +244,7 @@ export const adminRouter = router({
         action: "created",
         entityType: "user",
         entityId: created.user.id,
-        entityLabel: `${input.name} · ${email}`,
+        entityLabel: `${input.name} - ${email}`,
         detail: role,
       });
 

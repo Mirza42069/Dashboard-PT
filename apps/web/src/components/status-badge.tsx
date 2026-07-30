@@ -9,7 +9,7 @@ import {
   Hammer,
   OctagonX,
   PauseCircle,
-} from "lucide-react";
+} from "@DashboardV2/ui/components/icons";
 
 import type { Dictionary } from "@/i18n";
 import { useT } from "@/i18n/provider";

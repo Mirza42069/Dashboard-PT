@@ -13,7 +13,7 @@ import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Plus } from "@DashboardV2/ui/components/icons";
 import { useEffect, useRef, useState } from "react";
 import z from "zod";
 

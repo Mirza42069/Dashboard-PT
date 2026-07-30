@@ -9,7 +9,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@DashboardV2/ui/components/empty";
-import { RotateCcw, TriangleAlert } from "lucide-react";
+import { RotateCcw, TriangleAlert } from "@DashboardV2/ui/components/icons";
 import { useEffect } from "react";
 
 import { interpolate } from "@/i18n";

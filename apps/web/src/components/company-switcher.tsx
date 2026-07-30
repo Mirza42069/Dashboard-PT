@@ -8,7 +8,7 @@ import {
   SelectValue,
 } from "@DashboardV2/ui/components/select";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2 } from "lucide-react";
+import { Building2 } from "@DashboardV2/ui/components/icons";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 

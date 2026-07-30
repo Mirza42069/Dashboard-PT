@@ -7,7 +7,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@DashboardV2/ui/components/empty";
-import { FileQuestionMark, House } from "lucide-react";
+import { FileQuestionMark, House } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
 
 import { getDictionary, getLocale } from "@/i18n";

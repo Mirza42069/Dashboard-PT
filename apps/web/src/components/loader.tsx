@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "@DashboardV2/ui/components/icons";
 
 export default function Loader() {
   return (

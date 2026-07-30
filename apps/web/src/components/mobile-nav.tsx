@@ -10,7 +10,7 @@ import {
   SheetTrigger,
 } from "@DashboardV2/ui/components/sheet";
 import type { Role } from "@DashboardV2/api/lib/permissions";
-import { Menu } from "lucide-react";
+import { Menu } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 
 import { useT } from "@/i18n/provider";

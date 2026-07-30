@@ -37,7 +37,7 @@ import {
   TableRow,
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronUp, Lock, Pencil, Plus, Scale, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Lock, Pencil, Plus, Scale, Trash2 } from "@DashboardV2/ui/components/icons";
 import { Fragment, useState } from "react";
 import { toast } from "@/lib/toast";
 
@@ -114,7 +114,7 @@ export default function BoqTab({
   const versions = versionsQuery.data ?? [];
   const versionOptions = versions.map((candidate) => ({
     value: candidate.id,
-    label: `${interpolate(t.boq.revision, { number: candidate.versionNo })} · ${
+    label: `${interpolate(t.boq.revision, { number: candidate.versionNo })} - ${
       candidate.status === "draft"
         ? t.boq.draft
         : candidate.status === "active"

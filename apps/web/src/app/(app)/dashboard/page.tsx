@@ -9,7 +9,7 @@ import DashboardOverview from "./dashboard-overview";
 
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
-  return { title: `${dict.dashboard.title} · ${BRAND_NAME}` };
+  return { title: `${dict.dashboard.title} - ${BRAND_NAME}` };
 }
 
 export default async function DashboardPage() {

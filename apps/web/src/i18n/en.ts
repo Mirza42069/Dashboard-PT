@@ -98,6 +98,7 @@ export const en = {
     appearance: "Appearance",
     light: "Light",
     dark: "Dark",
+    darkComingSoon: "Dark mode is coming soon.",
     account: "Account",
     name: "Name",
     role: "Role",

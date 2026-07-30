@@ -35,7 +35,7 @@ import {
   TableRow,
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
 import { useDeferredValue, useState } from "react";
 import { toast } from "@/lib/toast";
 

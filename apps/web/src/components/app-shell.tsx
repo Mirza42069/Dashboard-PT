@@ -36,7 +36,11 @@ export default function AppShell({
   }
 
   return (
-    <div className="flex h-svh">
+    // overflow-x-hidden matches the reference's .layout and matters more here
+    // than it looks: nav labels keep their full natural width while collapsed
+    // and are only clipped by the rail, so without this a horizontal scrollbar
+    // can flicker in and out across the one-second slide.
+    <div className="flex h-svh overflow-x-hidden">
       {/* First in the DOM so it is the first thing Tab reaches. */}
       <SkipLink />
       <AppSidebar role={role} collapsed={collapsed} />

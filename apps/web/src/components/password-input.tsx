@@ -3,7 +3,7 @@
 import { Button } from "@DashboardV2/ui/components/button";
 import { Input } from "@DashboardV2/ui/components/input";
 import { cn } from "@DashboardV2/ui/lib/utils";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 
 import { useT } from "@/i18n/provider";

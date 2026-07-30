@@ -3,7 +3,7 @@
 import { hasPermission, type Permission, type Role } from "@DashboardV2/api/lib/permissions";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
-import { Building2, HardHat, LayoutDashboard, Users } from "lucide-react";
+import { Building2, HardHat, LayoutDashboard, Users } from "@DashboardV2/ui/components/icons";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -51,10 +51,16 @@ const SECTIONS: NavSection[] = [
 ];
 
 /**
- * Expo-out. Nearly all the distance is covered in the first third, then it
- * settles — the rail reads as arriving somewhere rather than stopping. Written
- * as a literal class string, not composed at runtime, so Tailwind's scanner
- * still sees `duration-[320ms]` and the `ease-[...]` value in the source.
+ * Circ-out over a full second, matching kolejain.com's `--transition` and the
+ * 1s on its `.sidebar-cont { transition: width }`. Almost all the distance goes
+ * in the first ~350ms and the rest is a long settle, so the rail reads as
+ * gliding to a stop rather than easing off. Written as a literal class string,
+ * not composed at runtime, so Tailwind's scanner still sees `duration-[1000ms]`
+ * and the `ease-[...]` value in the source. No spaces inside cubic-bezier() —
+ * Tailwind will not parse an arbitrary value that contains them.
+ *
+ * This times the rail and the things that must move *with* it. It deliberately
+ * does not touch hover colour; see the row below.
  *
  * No motion-reduce guard here, deliberately — see the reduced-motion block in
  * packages/ui/src/styles/globals.css. On Windows that query follows Settings >
@@ -62,24 +68,7 @@ const SECTIONS: NavSection[] = [
  * with no motion sensitivity involved (this project's own dev box among them),
  * and it takes the whole collapse with it.
  */
-const MOTION = "duration-[320ms] ease-[cubic-bezier(0.16,1,0.3,1)]";
-
-/**
- * Total span of the label cascade on expand — the first label leaves at 0ms and
- * the last at 175ms, whatever the row count. The last one is therefore still
- * moving while the rail widens and settles at 175 + 320 = 495ms, after the rail
- * has stopped. That overhang is the point: the labels read as settling into a
- * rail that has already arrived, rather than racing it to the same frame.
- *
- * Deliberately a span and not a per-row step. A per-row constant makes the whole
- * gesture a function of how many rows happen to be visible, so it drifts every
- * time the nav changes: at 35ms/row this cascade ran 175ms with six rows, fell
- * to 105ms when Materials and Equipment were removed, and collapses to a single
- * 35ms step for a role that only sees Dashboard and Projects — by which point
- * there is no cascade left, just labels arriving together. Pinning the span
- * keeps the tuned shape and makes it independent of the item list.
- */
-const CASCADE_MS = 175;
+const MOTION = "duration-[1000ms] ease-[cubic-bezier(0.075,0.82,0.165,1)]";
 
 export default function AppNav({
   role,
@@ -98,15 +87,6 @@ export default function AppNav({
     items: section.items.filter((item) => !item.permission || hasPermission(role, item.permission)),
   })).filter((section) => section.items.length > 0);
 
-  // Running row number across sections, so the cascade runs down the whole rail
-  // rather than restarting at each heading.
-  const sectionOffsets: number[] = [];
-  let rows = 0;
-  for (const section of sections) {
-    sectionOffsets.push(rows);
-    rows += section.items.length;
-  }
-
   return (
     <nav className={cn("flex flex-col transition-[gap]", MOTION, collapsed ? "gap-1" : "gap-5")}>
       {sections.map((section, sectionIndex) => (
@@ -119,90 +99,92 @@ export default function AppNav({
               The heading collapses to zero height rather than unmounting, so it
               slides away with the rail instead of vanishing on the first frame. */}
           {collapsed && sectionIndex > 0 && <div className="mx-2 my-1 border-t" />}
+          {/* The one thing in the rail that fades rather than clips. Headings
+              are the exception because a partial word ("OPERA") would sit there
+              for most of a one-second slide, which nothing else here risks.
+              Mirrors the reference's only fading element, .time-cont, which
+              fades on .1s while everything around it moves on the 1s curve.
+              Two durations against the two properties, in order: the height
+              closes with the rail so the rows below it travel in sync, while
+              the text itself is gone in 100ms. Collapsing both onto one
+              duration is what makes this look wrong — a fast height snaps every
+              row upward while the rail is still a tenth of the way through. */}
           <p
             aria-hidden={collapsed}
             className={cn(
-              "overflow-hidden px-2 text-[0.6875rem] font-medium tracking-widest whitespace-nowrap text-muted-foreground uppercase transition-[height,opacity,transform]",
-              MOTION,
-              // Drifting left as it collapses ties the heading to the rail's
-              // direction of travel instead of just dimming in place.
-              collapsed ? "h-0 -translate-x-1 opacity-0" : "h-4 translate-x-0 opacity-100",
+              "overflow-hidden px-2 text-[0.6875rem] font-medium tracking-widest whitespace-nowrap text-muted-foreground uppercase",
+              "transition-[height,opacity] duration-[1000ms,100ms] ease-[cubic-bezier(0.075,0.82,0.165,1)]",
+              collapsed ? "h-0 opacity-0" : "h-4 opacity-100",
             )}
           >
             {t.nav[section.headingKey]}
           </p>
 
-          {section.items.map(({ href, labelKey, icon: Icon }, itemIndex) => {
+          {section.items.map(({ href, labelKey, icon: Icon }) => {
             const isActive = pathname === href || pathname.startsWith(`${href}/`);
             const label = t.nav[labelKey];
-            const order = sectionOffsets[sectionIndex] + itemIndex;
 
             const link = (
               <Link
                 href={href}
                 onClick={onNavigate}
                 aria-current={isActive ? "page" : undefined}
-                // The label below stays in the DOM when collapsed, but at zero
-                // width — not every screen reader announces a clipped text node
-                // reliably, so name the link explicitly rather than depend on it.
+                // The label below stays in the DOM when collapsed, just clipped
+                // by the row's overflow edge — not every screen reader announces
+                // a clipped text node reliably, so name the link explicitly
+                // rather than depend on it.
                 aria-label={collapsed ? label : undefined}
                 className={cn(
-                  // h-10 in both states. Previously the row was ~30px expanded
-                  // and 40px collapsed, so toggling resized every row mid-slide.
-                  // w-10 collapsed is not arbitrary either: it puts the icon at
-                  // the same 20px from the sidebar edge as the expanded layout
-                  // (8px container padding + (40-16)/2), so the icons hold still
-                  // while everything around them moves.
-                  "relative flex h-10 items-center rounded-md text-sm transition-[width,gap,padding,background-color,color]",
-                  MOTION,
-                  collapsed ? "w-10 justify-center gap-0 px-0" : "w-full gap-2 px-2",
+                  // Geometrically identical in both states — no width, gap or
+                  // padding swap. That is the whole trick behind the reference
+                  // animation: nothing inside the rail moves, and the rail's
+                  // own edge travels over the content and clips it. The moment
+                  // the row changes shape, icons drift and the illusion goes.
+                  //
+                  // Combined with the container's px-3 (see app-sidebar.tsx),
+                  // px-2 here puts the icon 20px from the rail edge, which is
+                  // where the old collapsed layout landed it too.
+                  "relative flex h-10 w-full items-center gap-2 overflow-hidden rounded-md px-2 text-sm",
+                  // Colour only, and pointedly not on MOTION. Hover has nothing
+                  // to do with the collapse, and at 1000ms a row would take a
+                  // full second to light up under the cursor. The reference
+                  // keeps its own hover on a separate rule for the same reason:
+                  // .label { transition: background-color .4s }.
+                  "transition-[background-color,color] duration-[400ms]",
                   isActive
                     ? "bg-muted font-medium text-foreground"
                     : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 )}
               >
                 {/* Active marker grows from the row's centre line rather than
-                    fading, so moving between pages reads as the bar travelling. */}
+                    fading, so moving between pages reads as the bar travelling.
+                    On the row's own 400ms and not MOTION: this fires on
+                    navigation, not on collapse, and a marker that took a full
+                    second to arrive would still be growing well after the new
+                    page had rendered. */}
                 <span
                   aria-hidden
                   className={cn(
-                    "absolute left-0 w-0.5 rounded-r-full bg-foreground transition-[height,opacity]",
-                    MOTION,
+                    "absolute left-0 w-0.5 rounded-r-full bg-foreground transition-[height,opacity] duration-[400ms]",
                     isActive ? "h-5 opacity-100" : "h-0 opacity-0",
                   )}
                 />
-                {/* Collapsed, the icon is the only thing left carrying the row,
-                    so it takes over a little of the label's visual weight. */}
-                <Icon
-                  className={cn(
-                    "size-4 shrink-0 transition-transform",
-                    MOTION,
-                    collapsed ? "scale-110" : "scale-100",
-                  )}
-                />
-                {/* Kept mounted and faded rather than unmounted — a label that
-                    disappears instantly is what made the collapse read as a jump
-                    rather than a slide. max-w-0 keeps it out of the layout. */}
-                <span
-                  style={{
-                    // Cascade on the way out only. Expanding is the gesture worth
-                    // decorating; on collapse the labels need to be gone before
-                    // the rail reaches them, or they clip against the edge.
-                    // Spread across CASCADE_MS rather than stepped per row, so
-                    // the gesture keeps its shape at any row count. Guarded
-                    // because a single-row rail has no interval to divide.
-                    transitionDelay: collapsed
-                      ? "0ms"
-                      : `${Math.round((order / Math.max(1, rows - 1)) * CASCADE_MS)}ms`,
-                  }}
-                  className={cn(
-                    "overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform]",
-                    MOTION,
-                    collapsed ? "max-w-0 -translate-x-2 opacity-0" : "max-w-40 translate-x-0 opacity-100",
-                  )}
-                >
-                  {label}
-                </span>
+                {/* Never scales. It is the fixed point the slide is measured
+                    against — if it grows, the rail stops looking like it is
+                    passing over the row and starts looking like the row is
+                    reacting to it. */}
+                <Icon className="size-4 shrink-0" />
+                {/* No transition at all, which is the point. The label keeps its
+                    natural width the whole time and the row's overflow-hidden
+                    edge cuts it off as the rail narrows — the reference does
+                    exactly this and never fades or moves its text.
+                    shrink-0 is load-bearing: without it flex squeezes the span
+                    as the row narrows and the text reflows or wraps instead of
+                    being cleanly clipped.
+                    Still in the DOM and still in the accessibility tree when
+                    clipped, but the aria-label above names the link explicitly
+                    rather than relying on that. */}
+                <span className="shrink-0 whitespace-nowrap">{label}</span>
               </Link>
             );
 

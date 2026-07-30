@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@DashboardV2/ui/components/dialog";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 

@@ -24,7 +24,7 @@ import {
 } from "@DashboardV2/ui/components/table";
 import { Popover, PopoverContent, PopoverTrigger } from "@DashboardV2/ui/components/popover";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, Pencil, Trash2 } from "lucide-react";
+import { CircleAlert, Pencil, Trash2 } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 

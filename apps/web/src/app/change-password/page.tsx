@@ -15,7 +15,7 @@ import { requireSession } from "@/lib/session";
 
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
-  return { title: `${dict.password.changeTitle} · ${BRAND_NAME}` };
+  return { title: `${dict.password.changeTitle} - ${BRAND_NAME}` };
 }
 
 export default async function ChangePasswordPage() {

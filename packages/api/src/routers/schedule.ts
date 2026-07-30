@@ -246,7 +246,7 @@ export const scheduleRouter = router({
         action: "generated",
         entityType: "period",
         entityId: input.projectId,
-        entityLabel: `${target.code} · ${target.name}`,
+        entityLabel: `${target.code} - ${target.name}`,
         detail: `${periods.length} ${target.periodType} periods`,
       });
 

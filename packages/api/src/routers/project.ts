@@ -303,7 +303,7 @@ export const projectRouter = router({
         action: "created",
         entityType: "project",
         entityId: created.id,
-        entityLabel: `${code} · ${input.name}`,
+        entityLabel: `${code} - ${input.name}`,
       });
     }
 
@@ -390,7 +390,7 @@ export const projectRouter = router({
         action: "deleted",
         entityType: "project",
         entityId: input.id,
-        entityLabel: `${target.code} · ${target.name}`,
+        entityLabel: `${target.code} - ${target.name}`,
       });
 
       return { success: true, deletedTickets: ticketCount };
@@ -439,7 +439,7 @@ export const projectRouter = router({
           action: "deleted",
           entityType: "project",
           entityId: target.id,
-          entityLabel: `${target.code} · ${target.name}`,
+          entityLabel: `${target.code} - ${target.name}`,
         });
       }
 
@@ -527,7 +527,7 @@ export const projectRouter = router({
           action: "assigned",
           entityType: "project",
           entityId: input.projectId,
-          entityLabel: `${target.code} · ${target.name}`,
+          entityLabel: `${target.code} - ${target.name}`,
           detail: `${uniqueIds.length} member(s)`,
         });
       }

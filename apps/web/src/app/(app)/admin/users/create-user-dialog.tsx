@@ -21,7 +21,7 @@ import {
 } from "@DashboardV2/ui/components/select";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { UserPlus } from "lucide-react";
+import { UserPlus } from "@DashboardV2/ui/components/icons";
 import { useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 import z from "zod";

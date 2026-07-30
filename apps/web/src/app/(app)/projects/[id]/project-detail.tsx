@@ -10,7 +10,7 @@ import { Empty, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
 
 import { DeviationBadge } from "@/components/deviation-badge";
@@ -77,8 +77,8 @@ export default function ProjectDetail({
           </div>
           <p className="text-xs text-muted-foreground">
             <span className="font-mono">{project.code}</span>
-            {project.client && ` · ${project.client}`}
-            {project.location && ` · ${project.location}`}
+            {project.client && ` - ${project.client}`}
+            {project.location && ` - ${project.location}`}
           </p>
         </div>
       </div>

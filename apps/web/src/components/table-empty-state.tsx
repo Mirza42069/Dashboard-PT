@@ -9,7 +9,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@DashboardV2/ui/components/empty";
-import { Inbox, Plus, SearchX } from "lucide-react";
+import { Inbox, Plus, SearchX } from "@DashboardV2/ui/components/icons";
 
 import { useT } from "@/i18n/provider";
 

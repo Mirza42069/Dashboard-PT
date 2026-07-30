@@ -41,7 +41,7 @@ import {
   ShieldMinus,
   ShieldPlus,
   Trash2,
-} from "lucide-react";
+} from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 

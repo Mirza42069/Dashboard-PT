@@ -4,7 +4,7 @@ import * as React from "react"
 import { Select as SelectPrimitive } from "@base-ui/react/select"
 
 import { cn } from "@DashboardV2/ui/lib/utils"
-import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
+import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "@DashboardV2/ui/components/icons"
 
 type SelectProps<Value, Multiple extends boolean | undefined = false> =
   SelectPrimitive.Root.Props<Value, Multiple> & {

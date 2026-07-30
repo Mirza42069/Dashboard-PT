@@ -12,9 +12,9 @@ import { Checkbox } from "@DashboardV2/ui/components/checkbox";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save } from "lucide-react";
+import { Save } from "@DashboardV2/ui/components/icons";
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";

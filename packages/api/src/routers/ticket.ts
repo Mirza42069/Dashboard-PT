@@ -112,7 +112,7 @@ export const ticketRouter = router({
         entityType: "ticket",
         entityId: created.id,
         entityLabel: input.title,
-        detail: target ? `${target.code} · ${target.name}` : undefined,
+        detail: target ? `${target.code} - ${target.name}` : undefined,
       });
       return { id: created.id };
     }),
@@ -128,7 +128,7 @@ export const ticketRouter = router({
         entityType: "ticket",
         entityId: id,
         entityLabel: fields.title,
-        detail: `${current.projectCode} · ${current.projectName}`,
+        detail: `${current.projectCode} - ${current.projectName}`,
       });
       return { success: true };
     }),
@@ -158,7 +158,7 @@ export const ticketRouter = router({
         entityType: "ticket",
         entityId: input.id,
         entityLabel: current.ticket.title,
-        detail: `${current.projectCode} · ${current.projectName}`,
+        detail: `${current.projectCode} - ${current.projectName}`,
       });
       return { success: true };
     }),

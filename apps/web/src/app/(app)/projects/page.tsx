@@ -9,7 +9,7 @@ import ProjectsTable from "./projects-table";
 
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
-  return { title: `${dict.projects.title} · ${BRAND_NAME}` };
+  return { title: `${dict.projects.title} - ${BRAND_NAME}` };
 }
 
 export default async function ProjectsPage() {

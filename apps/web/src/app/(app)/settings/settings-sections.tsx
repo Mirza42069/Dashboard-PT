@@ -15,7 +15,8 @@ import {
   SlidersHorizontal,
   Sun,
   UserRound,
-} from "lucide-react";
+} from "@DashboardV2/ui/components/icons";
+import { toast } from "@/lib/toast";
 
 import ChangePasswordForm from "@/components/change-password-form";
 import type { Locale } from "@/i18n";
@@ -191,6 +192,16 @@ export function PreferencesSection({
               { value: "dark", label: t.settings.dark, icon: Moon },
             ]}
             onSelect={(value) => {
+              // Dark is pulled pending a redesign. The button stays visible and
+              // pressable rather than being hidden or disabled — a disabled
+              // control gives no reason, and removing the row entirely would
+              // make Appearance a single option that reads as broken.
+              // getTheme() forces light server-side too, so a stale cookie from
+              // before this landed cannot strand anyone in the old theme.
+              if (value === "dark") {
+                toast.info(t.settings.darkComingSoon);
+                return;
+              }
               setThemeCookie(value);
               // Reload rather than toggling a class: the theme lives on <html>
               // from the server, so a reload keeps client and server agreeing

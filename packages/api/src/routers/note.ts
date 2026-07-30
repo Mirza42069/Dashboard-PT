@@ -86,7 +86,7 @@ export const noteRouter = router({
         action: "created",
         entityType: "note",
         entityId: created.id,
-        entityLabel: `${target.code} · ${target.name}`,
+        entityLabel: `${target.code} - ${target.name}`,
       });
 
       return { id: created.id };

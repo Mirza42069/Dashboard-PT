@@ -12,7 +12,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/u
 import { Input } from "@DashboardV2/ui/components/input";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save } from "lucide-react";
+import { Save } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
@@ -268,7 +268,7 @@ export default function ProgressTab({
                       <th
                         scope="row"
                         className="sticky left-0 z-10 max-w-64 truncate bg-card px-4 py-1.5 text-left font-normal"
-                        title={`${row.section} · ${row.leaf.description}`}
+                        title={`${row.section} - ${row.leaf.description}`}
                       >
                         <span className="font-mono text-xs text-muted-foreground">
                           {row.leaf.code}
@@ -295,7 +295,7 @@ export default function ProgressTab({
                                 min={0}
                                 step="any"
                                 value={cellValue(row.leaf.id, period.id)}
-                                aria-label={`${row.leaf.code} · ${period.label ?? period.periodIndex}`}
+                                aria-label={`${row.leaf.code} - ${period.label ?? period.periodIndex}`}
                                 className={`h-8 text-right tabular-nums ${
                                   drafts.has(key) ? "border-[var(--chart-3)]" : ""
                                 }`}

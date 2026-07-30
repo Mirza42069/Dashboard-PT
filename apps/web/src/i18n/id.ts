@@ -102,6 +102,7 @@ export const id = {
     appearance: "Tampilan",
     light: "Terang",
     dark: "Gelap",
+    darkComingSoon: "Mode gelap segera hadir.",
     account: "Akun",
     name: "Nama",
     role: "Peran",

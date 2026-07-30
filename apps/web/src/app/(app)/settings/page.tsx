@@ -9,7 +9,7 @@ import { PasswordSection, PreferencesSection, ProfileSection } from "./settings-
 
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
-  return { title: `${dict.settings.title} · ${BRAND_NAME}` };
+  return { title: `${dict.settings.title} - ${BRAND_NAME}` };
 }
 
 export default async function SettingsPage() {

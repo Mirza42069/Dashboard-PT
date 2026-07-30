@@ -2,7 +2,7 @@
 
 import { Button } from "@DashboardV2/ui/components/button";
 import { cn } from "@DashboardV2/ui/lib/utils";
-import { RefreshCw, TriangleAlert } from "lucide-react";
+import { RefreshCw, TriangleAlert } from "@DashboardV2/ui/components/icons";
 
 import { useT } from "@/i18n/provider";
 

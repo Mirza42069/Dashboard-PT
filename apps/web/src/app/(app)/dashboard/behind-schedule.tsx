@@ -43,8 +43,8 @@ export default function BehindSchedule() {
             </div>
             <Meter value={row.progress} max={100} />
             <p className="text-xs text-muted-foreground tabular-nums">
-              <span className="font-mono">{row.code}</span> · {row.progress.toFixed(1)}%{" "}
-              {t.progress.chartActual.toLowerCase()} · {row.planned.toFixed(1)}%{" "}
+              <span className="font-mono">{row.code}</span> - {row.progress.toFixed(1)}%{" "}
+              {t.progress.chartActual.toLowerCase()} - {row.planned.toFixed(1)}%{" "}
               {t.progress.chartPlanned.toLowerCase()}
             </p>
           </div>

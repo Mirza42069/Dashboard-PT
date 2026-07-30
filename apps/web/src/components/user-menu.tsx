@@ -11,7 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@DashboardV2/ui/components/dropdown-menu";
-import { LogOut, Settings } from "lucide-react";
+import { LogOut, Settings } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 

@@ -19,7 +19,22 @@ export function isTheme(value: unknown): value is Theme {
 export async function getTheme(): Promise<Theme> {
   const { cookies } = await import("next/headers");
   const value = (await cookies()).get(THEME_COOKIE)?.value;
-  return isTheme(value) ? value : DEFAULT_THEME;
+  const stored = isTheme(value) ? value : DEFAULT_THEME;
+
+  /*
+   * Dark is off pending a redesign — the settings tile shows it as "coming
+   * soon" rather than switching (see PreferencesSection).
+   *
+   * Forced here rather than only in the UI because the cookie outlives the
+   * button: anyone who selected dark before it was pulled would otherwise stay
+   * on it forever with no control left to get out. Reading and then discarding
+   * also means their preference survives, so re-enabling is a one-line revert
+   * and they land back where they were.
+   *
+   * The .dark block in packages/ui/src/styles/globals.css is deliberately left
+   * intact and is simply unreachable while this stands.
+   */
+  return stored === "dark" ? "light" : stored;
 }
 
 export function setThemeCookie(theme: Theme) {

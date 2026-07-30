@@ -3,7 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@DashboardV2/ui/components/card";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
-import { Hammer, ListChecks, TrendingUp, Wallet } from "lucide-react";
+import { Hammer, ListChecks, TrendingUp, Wallet } from "@DashboardV2/ui/components/icons";
 
 import { Meter } from "@/components/meter";
 import { QueryError } from "@/components/query-error";
@@ -78,7 +78,7 @@ export default function DashboardOverview({ showActivity }: { showActivity: bool
       hint:
         data.workCompletedValue === null
           ? t.dashboard.noMeasuredWork
-          : `${money(data.workCompletedValue)} / ${money(data.portfolioValue)} · ${percent(data.valueCompletionPercent)}`,
+          : `${money(data.workCompletedValue)} / ${money(data.portfolioValue)} - ${percent(data.valueCompletionPercent)}`,
     },
     {
       icon: ListChecks,
@@ -126,7 +126,7 @@ export default function DashboardOverview({ showActivity }: { showActivity: bool
                     <div className="flex items-center justify-between gap-2">
                       <StatusBadge kind="project" value={status} />
                       <span className="tabular-nums text-muted-foreground">
-                        {count} · {percent(totalProjects > 0 ? (count / totalProjects) * 100 : 0)}
+                        {count} - {percent(totalProjects > 0 ? (count / totalProjects) * 100 : 0)}
                       </span>
                     </div>
                     <Meter value={count} max={totalProjects} />

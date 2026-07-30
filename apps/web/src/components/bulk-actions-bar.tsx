@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@DashboardV2/ui/components/button";
-import { X } from "lucide-react";
+import { X } from "@DashboardV2/ui/components/icons";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";

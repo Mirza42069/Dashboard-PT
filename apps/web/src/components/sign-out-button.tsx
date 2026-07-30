@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@DashboardV2/ui/components/button";
-import { LogOut } from "lucide-react";
+import { LogOut } from "@DashboardV2/ui/components/icons";
 import { useRouter } from "next/navigation";
 
 import { useT } from "@/i18n/provider";

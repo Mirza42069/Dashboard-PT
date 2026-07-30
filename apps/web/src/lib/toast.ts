@@ -29,4 +29,13 @@ export const toast = {
   success(message: string, options?: ExternalToast) {
     return sonner.success(message, options);
   },
+
+  /**
+   * Neutral notice: nothing succeeded or failed, the app is just saying
+   * something. Currently the "dark mode is coming soon" reply in settings.
+   * Default timing — like a success, there is nothing here to act on.
+   */
+  info(message: string, options?: ExternalToast) {
+    return sonner.info(message, options);
+  },
 };

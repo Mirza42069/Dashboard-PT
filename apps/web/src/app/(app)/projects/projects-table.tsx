@@ -31,7 +31,7 @@ import {
   TableRow,
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
@@ -291,7 +291,7 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
                           max={row.contractValue}
                         />
                         <p className="mt-1 text-muted-foreground">
-                          {money(row.workCompletedValue)} · {percent(row.valueCompletionPercent)}
+                          {money(row.workCompletedValue)} - {percent(row.valueCompletionPercent)}
                         </p>
                       </>
                     )}
@@ -388,7 +388,7 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
                 {summarizeSelection(
                   projects
                     .filter((row) => selection.isSelected(row.id))
-                    .map((row) => `${row.code} · ${row.name}`),
+                    .map((row) => `${row.code} - ${row.name}`),
                   t,
                 )}
               </span>

@@ -21,7 +21,7 @@ import {
 } from "@DashboardV2/ui/components/card";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, CircleAlert, Lock } from "lucide-react";
+import { CheckCircle2, CircleAlert, Lock } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
@@ -80,7 +80,7 @@ export default function BaselineTab({
                     {target
                       ? interpolate(t.boq.revision, { number: target.versionNo })
                       : interpolate(t.boq.revision, { number: active?.versionNo ?? 1 })}
-                    {` · ${setupMode ? t.boq.draft : t.boq.active}`}
+                    {` - ${setupMode ? t.boq.draft : t.boq.active}`}
                   </Badge>
                 </CardTitle>
                 <CardDescription>

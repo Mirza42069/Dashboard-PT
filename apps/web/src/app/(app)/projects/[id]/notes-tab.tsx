@@ -14,7 +14,7 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Textarea } from "@DashboardV2/ui/components/textarea";
 import { env } from "@DashboardV2/env/web";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ImagePlus, Send, Trash2, X } from "lucide-react";
+import { ImagePlus, Send, Trash2, X } from "@DashboardV2/ui/components/icons";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 

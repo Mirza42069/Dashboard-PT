@@ -56,7 +56,7 @@ async function projectLabel(companyId: string, projectId: string) {
   if (!row) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
-  return `${row.code} · ${row.name}`;
+  return `${row.code} - ${row.name}`;
 }
 
 /** Rejects a code that already exists among the item's siblings. */
@@ -464,7 +464,7 @@ export const boqRouter = router({
         entityType: "boq",
         entityId: activated.id,
         entityLabel: await projectLabel(ctx.companyId, activated.projectId),
-        detail: `${activated.title} · BoQ and schedule`,
+        detail: `${activated.title} - BoQ and schedule`,
       });
 
       return { version: serializeVersion(activated) };

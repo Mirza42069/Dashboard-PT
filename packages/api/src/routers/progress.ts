@@ -286,8 +286,8 @@ export const progressRouter = router({
         action: "progress_recorded",
         entityType: "progress",
         entityId: period.projectId,
-        entityLabel: projectRow ? `${projectRow.code} · ${projectRow.name}` : period.projectId,
-        detail: `${input.entries.length} line(s) · ${period.label ?? ""}`.trim(),
+        entityLabel: projectRow ? `${projectRow.code} - ${projectRow.name}` : period.projectId,
+        detail: `${input.entries.length} line(s) - ${period.label ?? ""}`.trim(),
       });
 
       return { success: true };

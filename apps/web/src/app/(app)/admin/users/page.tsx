@@ -9,7 +9,7 @@ import UsersTable from "./users-table";
 
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
-  return { title: `${dict.users.title} · ${BRAND_NAME}` };
+  return { title: `${dict.users.title} - ${BRAND_NAME}` };
 }
 
 export default async function AdminUsersPage() {

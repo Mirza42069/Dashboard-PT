@@ -8,7 +8,7 @@ import CompaniesTable from "./companies-table";
 
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
-  return { title: `${dict.company.title} · ${BRAND_NAME}` };
+  return { title: `${dict.company.title} - ${BRAND_NAME}` };
 }
 
 export default async function AdminCompaniesPage() {
