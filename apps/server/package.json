@@ -15,6 +15,7 @@
     "@DashboardV2/db": "workspace:*",
     "@DashboardV2/env": "workspace:*",
     "@hono/trpc-server": "^0.4.2",
+    "@opentelemetry/api": "^1.9.1",
     "@trpc/server": "catalog:",
     "better-auth": "catalog:",
     "dotenv": "catalog:",
