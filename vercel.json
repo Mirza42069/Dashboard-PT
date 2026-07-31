@@ -12,8 +12,9 @@
     "server": {
       "root": "apps/server",
       "framework": "hono",
-      "entrypoint": "src/index.ts",
+      "entrypoint": "entry.mjs",
       "installCommand": "cd ../.. && bun install",
+      "buildCommand": "bun run build",
       "routes": [
         {
           "src": "/api/((?!auth(?:/|$)).*)",
