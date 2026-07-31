@@ -10,5 +10,5 @@
 - **tRPC** - End-to-end type-safe APIs
 - **Bun** - Runtime environment
 - **Drizzle** - TypeScript-first ORM
-- **PostgreSQL** - Database engine
+- **PostgreSQL** - Database engin
 - **Authentication** - Better-Auth, admin-managed accounts only
