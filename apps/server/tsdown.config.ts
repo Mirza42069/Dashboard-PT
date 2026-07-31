@@ -28,5 +28,24 @@ export default defineConfig({
   format: "esm",
   outDir: "./dist",
   clean: true,
-  noExternal: [/@DashboardV2\/.*/],
+  /**
+   * Everything is inlined, not just @DashboardV2/*.
+   *
+   * Vercel runs src/index.ts under Bun rather than bundling it, so every bare
+   * specifier is resolved at cold start relative to the file that imports it —
+   * and `packages/env/src/server.ts` asking for `@t3-oss/env-core` looks in
+   * packages/env/node_modules, which is not part of the deployed function.
+   * Declaring the dependency on apps/server cannot help: Bun never looks there.
+   * Leaving nothing external is what removes the failure rather than moving it.
+   */
+  deps: { alwaysBundle: [/.*/] },
+  /**
+   * exceljs stays out. It is CommonJS over a tree of dynamic requires that does
+   * not survive bundling, and it is reachable only from the export route, which
+   * loads it on demand. External and lazy, the worst it can cost is the
+   * spreadsheet download; bundled, it would be back in the boot path.
+   */
+  external: ["exceljs"],
+  /** One file, so there are no sibling chunks left to resolve or to package. */
+  outputOptions: { inlineDynamicImports: true },
 });
