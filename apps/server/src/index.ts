@@ -1,16 +1,18 @@
 import { createContext } from "@DashboardV2/api/context";
-import { roleOf } from "@DashboardV2/api/lib/permissions";
+import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
 import { auth } from "@DashboardV2/auth";
 import { resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
 import { db } from "@DashboardV2/db";
 import { notePhoto, project, projectMember, projectNote } from "@DashboardV2/db/schema";
-import { env } from "@DashboardV2/env/server";
+import { trustedOrigins } from "@DashboardV2/env/server";
 import { trpcServer } from "@hono/trpc-server";
 import { and, eq, exists, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+
+import { buildProjectWorkbook } from "./project-export";
 
 const app = new Hono();
 
@@ -18,9 +20,18 @@ app.use(logger());
 app.use(
   "/*",
   cors({
-    origin: env.CORS_ORIGIN,
+    // A list, not one value: on a preview the browser may be on either the
+    // per-build or the per-branch hostname (packages/env/src/server.ts).
+    origin: trustedOrigins,
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
+    // The spreadsheet export reads its filename off this header. Without it
+    // listed, the browser hides the header from cross-origin JS — which is
+    // every request in development, where the web app is on another port — and
+    // every download silently falls back to the generic name. Production goes
+    // through the /api rewrite and is same-origin, so this only ever broke on
+    // the machine of whoever was writing the feature.
+    exposeHeaders: ["Content-Disposition"],
     credentials: true,
   }),
 );
@@ -205,6 +216,47 @@ app.get("/photos/:id", async (c) => {
   return c.body(new Uint8Array(photo.data), 200, {
     "Content-Type": photo.contentType,
     "Cache-Control": "private, max-age=31536000, immutable",
+  });
+});
+
+/**
+ * The project list as a spreadsheet.
+ *
+ * A plain Hono route rather than a tRPC procedure because the response is a
+ * binary file, and tRPC's JSON envelope would mean base64 in and out of a string
+ * — the same reason the note photos above are not tRPC either.
+ *
+ * Deliberately the whole company portfolio, not the caller's current filters:
+ * exporting is what people do to work on the numbers elsewhere, and a file that
+ * silently held 3 of 200 projects because a filter was set is the kind of thing
+ * nobody notices until it is in a report. `projectAccessFilter` still applies,
+ * so a role=user only ever gets the projects they are a member of.
+ */
+app.get("/projects/export", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session?.user) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  if (!hasPermission(roleOf(session.user), "project:read")) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const scope = await resolveCompany(session.user, c.req.raw.headers);
+  if ("error" in scope) {
+    return c.json({ error: scope.error }, scope.status);
+  }
+
+  const { filename, body } = await buildProjectWorkbook({
+    companyId: scope.companyId,
+    session: { user: session.user },
+    locale: c.req.query("locale") === "id" ? "id" : "en",
+  });
+
+  return c.body(body, 200, {
+    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    // Generated per request from live data; a cached copy is always wrong.
+    "Cache-Control": "no-store",
   });
 });
 

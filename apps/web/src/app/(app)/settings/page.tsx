@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { BRAND_NAME } from "@/components/brand";
 import { getDictionary, getLocale } from "@/i18n";
 import { requireSession } from "@/lib/session";
-import { getTheme } from "@/lib/theme";
+import { getTextScale } from "@/lib/text-scale";
 
 import { PasswordSection, PreferencesSection, ProfileSection } from "./settings-sections";
 
@@ -37,7 +37,10 @@ export default async function SettingsPage() {
           role={session.user.role ?? "user"}
           className="sm:col-span-2"
         />
-        <PreferencesSection theme={await getTheme()} className="sm:col-span-2 lg:col-span-1" />
+        <PreferencesSection
+          textScale={await getTextScale()}
+          className="sm:col-span-2 lg:col-span-1"
+        />
         <PasswordSection className="sm:col-span-2 lg:col-span-3" />
       </div>
     </div>

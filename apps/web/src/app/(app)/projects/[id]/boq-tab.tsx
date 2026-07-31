@@ -291,27 +291,27 @@ export default function BoqTab({
                 return (
                   <Fragment key={section.header.id}>
                     <TableRow className="bg-muted/40">
-                      <TableCell className="pl-4 font-mono font-medium">
+                      <TableCell className="pl-4 font-mono font-medium whitespace-nowrap">
                         {section.header.code}
                       </TableCell>
                       <TableCell className="font-medium">{section.header.description}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {section.leaves.length === 0 ? (section.header.unit ?? "—") : ""}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                      <TableCell className="whitespace-nowrap text-right tabular-nums text-muted-foreground">
                         {section.leaves.length === 0 && section.header.quantity !== null
                           ? quantity(section.header.quantity)
                           : ""}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                      <TableCell className="whitespace-nowrap text-right tabular-nums text-muted-foreground">
                         {section.leaves.length === 0 && section.header.unitRate !== null
                           ? money(section.header.unitRate)
                           : ""}
                       </TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">
+                      <TableCell className="whitespace-nowrap text-right font-medium tabular-nums">
                         {money(sectionAmount(section))}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="whitespace-nowrap text-right tabular-nums">
                         {sectionWeight(section).toFixed(2)}%
                       </TableCell>
                       {editable && (
@@ -381,21 +381,21 @@ export default function BoqTab({
 
                     {section.leaves.map((leaf) => (
                       <TableRow key={leaf.id}>
-                        <TableCell className="pl-8 font-mono text-muted-foreground">
+                        <TableCell className="pl-8 font-mono whitespace-nowrap text-muted-foreground">
                           {leaf.code}
                         </TableCell>
                         <TableCell>{leaf.description}</TableCell>
                         <TableCell className="text-muted-foreground">{leaf.unit ?? "—"}</TableCell>
-                        <TableCell className="text-right tabular-nums">
+                        <TableCell className="whitespace-nowrap text-right tabular-nums">
                           {leaf.quantity === null ? "—" : quantity(leaf.quantity)}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">
+                        <TableCell className="whitespace-nowrap text-right tabular-nums">
                           {leaf.unitRate === null ? "—" : money(leaf.unitRate)}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">
+                        <TableCell className="whitespace-nowrap text-right tabular-nums">
                           {money(leaf.value ?? 0)}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">
+                        <TableCell className="whitespace-nowrap text-right tabular-nums">
                           {leaf.weight.toFixed(2)}%
                         </TableCell>
                         {editable && (

@@ -185,12 +185,12 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                     <p>{row.responsibleName}</p>
                     <a
                       href={`tel:${row.responsibleContactNumber.replace(/[^+0-9]/g, "")}`}
-                      className="text-muted-foreground hover:underline"
+                      className="whitespace-nowrap text-muted-foreground hover:underline"
                     >
                       {row.responsibleContactNumber}
                     </a>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
+                  <TableCell className="whitespace-nowrap text-muted-foreground">
                     {formatDateTime(row.createdAt)}
                   </TableCell>
                   <TableCell>

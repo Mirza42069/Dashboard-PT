@@ -27,6 +27,7 @@
  */
 
 import {
+  AccessibilityIcon as HiAccessibility,
   Add01Icon as HiAdd01,
   Alert02Icon as HiAlert02,
   AlertCircleIcon as HiAlertCircle,
@@ -45,6 +46,7 @@ import {
   DashboardSquare01Icon as HiDashboardSquare01,
   DashedLineCircleIcon as HiDashedLineCircle,
   Delete02Icon as HiDelete02,
+  Download01Icon as HiDownload01,
   Edit02Icon as HiEdit02,
   FileQuestionMarkIcon as HiFileQuestionMark,
   FloppyDiskIcon as HiFloppyDisk,
@@ -107,6 +109,16 @@ function icon(glyph: Glyph, name: string) {
      *
      * Before the spread on purpose: an icon that ever needs to carry its own
      * name can pass aria-hidden={false} with an aria-label and win.
+     *
+     * Glyph *size* is deliberately not set here. Putting a `size-*` class on the
+     * icon would satisfy the `:not([class*='size-'])` guard in every component's
+     * sizing rule and so override all of them at once — a 16px glyph inside a
+     * 24px `icon-xs` button. The defaults live in those components instead.
+     *
+     * `strokeWidth` is left alone for the same reason it is not a size: Hugeicons'
+     * own 1.5 is the weight the set is drawn at, and overriding it here changed
+     * every glyph in the product at once. A call site that wants a heavier line
+     * can still pass its own.
      */
     return <HugeiconsIcon icon={glyph} aria-hidden {...props} />;
   }
@@ -115,6 +127,7 @@ function icon(glyph: Glyph, name: string) {
   return Icon;
 }
 
+export const Accessibility = icon(HiAccessibility, "Accessibility");
 export const ArrowDownIcon = icon(HiArrowDown01, "ArrowDownIcon");
 export const ArrowLeft = icon(HiArrowLeft01, "ArrowLeft");
 export const Building2 = icon(HiBuilding03, "Building2");
@@ -125,6 +138,7 @@ export const CheckIcon = icon(HiTick02, "CheckIcon");
 export const ChevronDown = icon(HiArrowDown01, "ChevronDown");
 export const ChevronDownIcon = icon(HiArrowDown01, "ChevronDownIcon");
 export const ChevronLeft = icon(HiArrowLeft01, "ChevronLeft");
+export const ChevronRight = icon(HiArrowRight01, "ChevronRight");
 export const ChevronRightIcon = icon(HiArrowRight01, "ChevronRightIcon");
 export const ChevronUp = icon(HiArrowUp01, "ChevronUp");
 export const ChevronUpIcon = icon(HiArrowUp01, "ChevronUpIcon");
@@ -135,6 +149,7 @@ export const CircleDashed = icon(HiDashedLineCircle, "CircleDashed");
 export const CircleDot = icon(HiRecord, "CircleDot");
 export const CircleSlash = icon(HiCircleSlashTwo, "CircleSlash");
 export const Copy = icon(HiCopy01, "Copy");
+export const Download = icon(HiDownload01, "Download");
 export const Eye = icon(HiView, "Eye");
 export const EyeOff = icon(HiViewOff, "EyeOff");
 export const FileQuestionMark = icon(HiFileQuestionMark, "FileQuestionMark");

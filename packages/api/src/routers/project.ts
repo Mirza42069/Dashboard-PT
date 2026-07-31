@@ -9,7 +9,7 @@ import {
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, ilike, inArray, notInArray, or, sql, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, ne, notInArray, or, sql, sum } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, companyProcedure, router } from "../index";
@@ -20,6 +20,26 @@ import { assertProjectAccess, assertUserAssignable, projectAccessFilter } from "
 
 const statusSchema = z.enum(PROJECT_STATUSES);
 
+/**
+ * Every nullable column is `nullish()`, not `optional()`, and the difference is
+ * load-bearing for `update`: because that input is `.partial()`, an absent key
+ * has to keep meaning "leave this column alone", which leaves nothing to express
+ * "empty this column" with. `null` is that word.
+ *
+ * Without it, clearing a project's client or manager in the edit dialog was
+ * accepted, reported as saved, and silently discarded — the form sent
+ * `undefined`, JSON dropped the key, and the column was never in the SET clause.
+ *
+ * For the same reason **no field here carries `.default()`**. `update` takes
+ * this schema `.partial()`, and zod applies a default when a key is absent — so
+ * a default is not "the value to use on create", it is "the value to overwrite
+ * with on every edit that leaves the field out". `status`, `progress` and
+ * `periodType` all had one, and the old edit dialog sent none of the last two:
+ * every pencil-click quietly reset site progress to 0 and reporting cadence to
+ * weekly. The three columns are `.notNull().default(...)` in the Drizzle schema,
+ * so leaving them out of an insert still fills them in — the default belongs
+ * there, once, where it cannot leak into an update.
+ */
 const upsertSchema = z.object({
   code: z
     .string()
@@ -28,17 +48,17 @@ const upsertSchema = z.object({
     .max(32)
     .regex(/^[A-Za-z0-9-]+$/, "Use letters, numbers and hyphens only"),
   name: z.string().trim().min(1, "Name is required").max(200),
-  client: z.string().trim().max(200).optional(),
-  location: z.string().trim().max(200).optional(),
-  status: statusSchema.default("planning"),
+  client: z.string().trim().max(200).nullish(),
+  location: z.string().trim().max(200).nullish(),
+  status: statusSchema.optional(),
   // Plain calendar dates end to end — see the note in the schema file.
-  startDate: z.iso.date().optional(),
-  endDate: z.iso.date().optional(),
-  progress: z.number().int().min(0).max(100).default(0),
-  periodType: z.enum(PERIOD_TYPES).default("weekly"),
-  scheduleStart: z.iso.date().optional(),
-  managerId: z.string().min(1).optional(),
-  notes: z.string().max(2000).optional(),
+  startDate: z.iso.date().nullish(),
+  endDate: z.iso.date().nullish(),
+  progress: z.number().int().min(0).max(100).optional(),
+  periodType: z.enum(PERIOD_TYPES).optional(),
+  scheduleStart: z.iso.date().nullish(),
+  managerId: z.string().min(1).nullish(),
+  notes: z.string().max(2000).nullish(),
 });
 
 /** Tickets remain open until somebody explicitly closes them. */
@@ -147,6 +167,15 @@ export const projectRouter = router({
       .orderBy(asc(project.code));
   }),
 
+  /**
+   * Who can be named as a project manager: this company's own staff.
+   *
+   * Super admins are deliberately absent. The role is there to supervise every
+   * company's data from outside all of them, so it must never appear in a
+   * picker an admin or user reads — putting one in the list is how their name
+   * and email end up printed on a project page. `assertUserAssignable` enforces
+   * the same rule on write, so a hand-made request cannot get around the list.
+   */
   managerOptions: companyProcedure.query(async ({ ctx }) => {
     return db
       .select({ id: user.id, name: user.name, email: user.email })
@@ -154,7 +183,8 @@ export const projectRouter = router({
       .where(
         and(
           eq(user.banned, false),
-          or(eq(user.companyId, ctx.companyId), eq(user.role, "super_admin")),
+          eq(user.companyId, ctx.companyId),
+          ne(user.role, "super_admin"),
         ),
       )
       .orderBy(asc(user.name));
@@ -174,11 +204,18 @@ export const projectRouter = router({
       const [openTickets, boq, manager] = await Promise.all([
         openTicketsByProject([row.id]),
         boqMetricsByProject([row.id]),
+        // The same guard `managerOptions` and the export apply, for the same
+        // reason and on the surface where it matters most: a super admin can no
+        // longer be assigned, but a row predating that rule would otherwise
+        // print their name *and* email on a page every admin and assigned user
+        // of the company reads. No row back means the project shows as
+        // unmanaged, which is the truthful answer: nobody in this company
+        // manages it.
         row.managerId
           ? db
               .select({ id: user.id, name: user.name, email: user.email })
               .from(user)
-              .where(eq(user.id, row.managerId))
+              .where(and(eq(user.id, row.managerId), ne(user.role, "super_admin")))
           : Promise.resolve([]),
       ]);
 
@@ -321,12 +358,23 @@ export const projectRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
 
-      const startDate = rest.startDate ?? current.startDate;
-      const endDate = rest.endDate ?? current.endDate;
+      // `??` would be wrong here now that null means "clear it": an explicit
+      // null would fall through to the stored date and the check would compare
+      // against a value the caller is in the middle of removing.
+      const startDate = rest.startDate === undefined ? current.startDate : rest.startDate;
+      const endDate = rest.endDate === undefined ? current.endDate : rest.endDate;
       if (startDate && endDate && endDate < startDate) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date" });
       }
-      if (rest.managerId) {
+      // Only a *change* of manager is checked. The edit form resubmits whatever
+      // is stored, so a project left over from when super admins were assignable
+      // could not be saved at all: changing only its name re-sent the legacy
+      // managerId, which `assertUserAssignable` now rejects with "User not
+      // found" — naming nothing the user can see, since that manager is also
+      // absent from the picker. Re-sending the value already in the column
+      // changes nothing and is treated as such; assigning a new one is checked
+      // as before.
+      if (rest.managerId && rest.managerId !== current.managerId) {
         await assertUserAssignable(ctx.companyId, rest.managerId);
       }
 
@@ -349,6 +397,15 @@ export const projectRouter = router({
           ...(code ? { code: code.toUpperCase() } : {}),
         })
         .where(eq(project.id, projectId));
+
+      // create, delete and setMembers all record themselves; this one did not,
+      // so editing a project was the one change to a project that left no trail.
+      await recordActivity(ctx, {
+        action: "updated",
+        entityType: "project",
+        entityId: projectId,
+        entityLabel: `${code?.toUpperCase() ?? current.code} - ${rest.name ?? current.name}`,
+      });
 
       return { success: true };
     }),

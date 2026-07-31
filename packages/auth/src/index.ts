@@ -1,6 +1,6 @@
 import { createDb } from "@DashboardV2/db";
 import * as schema from "@DashboardV2/db/schema/auth";
-import { env } from "@DashboardV2/env/server";
+import { env, trustedOrigins } from "@DashboardV2/env/server";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createAccessControl } from "better-auth/plugins/access";
@@ -40,7 +40,9 @@ export function createAuth(opts: CreateAuthOptions = {}) {
 
       schema: schema,
     }),
-    trustedOrigins: [env.CORS_ORIGIN],
+    // Not just CORS_ORIGIN: a preview is reachable on both its per-build and
+    // its per-branch hostname. See trustedOrigins in packages/env/src/server.ts.
+    trustedOrigins,
     emailAndPassword: {
       enabled: true,
       disableSignUp: !opts.allowSignUp,

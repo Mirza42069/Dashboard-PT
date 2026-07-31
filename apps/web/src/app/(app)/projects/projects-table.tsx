@@ -21,7 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@DashboardV2/ui/components/select";
+import { env } from "@DashboardV2/env/web";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import {
   Table,
   TableBody,
@@ -31,7 +33,7 @@ import {
   TableRow,
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
+import { Download, Loader2, Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
@@ -43,14 +45,19 @@ import { QueryError } from "@/components/query-error";
 import { TableEmptyState } from "@/components/table-empty-state";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate, plural } from "@/i18n";
-import { useT } from "@/i18n/provider";
+import { useLocale, useT } from "@/i18n/provider";
+import { getServerUrl } from "@/lib/server-url";
 import { summarizeSelection } from "@/lib/summarize-selection";
 import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
 import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
-import ProjectFormDialog, { EMPTY_PROJECT, type ProjectFormValues } from "./project-form-dialog";
+import ProjectFormDialog, {
+  EMPTY_PROJECT,
+  projectToFormValues,
+  type ProjectFormValues,
+} from "./project-form-dialog";
 
 const PAGE_SIZE = 25;
 const STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
@@ -59,6 +66,7 @@ const ALL = "all";
 
 export default function ProjectsTable({ canManage }: { canManage: boolean }) {
   const t = useT();
+  const { locale } = useLocale();
   const { money, percent, formatDate } = useFormat();
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
@@ -73,7 +81,11 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [initialValues, setInitialValues] = useState<ProjectFormValues>(EMPTY_PROJECT);
+  // An active BoQ baseline supplies the progress figure, so the dialog's manual
+  // field would be ignored — it says so rather than accepting a number quietly.
+  const [progressLocked, setProgressLocked] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const debouncedSearch = useDebounced(search);
 
@@ -114,21 +126,63 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
   function openCreate() {
     setEditingId(null);
     setInitialValues(EMPTY_PROJECT);
+    setProgressLocked(false);
     setFormOpen(true);
   }
 
+  /**
+   * The panel opens on whichever row's edit button was pressed. It covers the
+   * actions column while it is open, so there is no way to press a second row's
+   * button without closing it first — which is also why the panel never has to
+   * swap targets underneath a half-typed form.
+   */
   function openEdit(row: (typeof projects)[number]) {
     setEditingId(row.id);
-    setInitialValues({
-      code: row.code,
-      name: row.name,
-      client: row.client ?? "",
-      location: row.location ?? "",
-      status: row.status,
-      managerId: row.managerId ?? "",
-      notes: row.notes ?? "",
-    });
+    setInitialValues(projectToFormValues(row));
+    setProgressLocked(row.progressSource === "boq");
     setFormOpen(true);
+  }
+
+  /**
+   * Fetched rather than linked.
+   *
+   * A bare <a href> would be simpler, but the file lives on the API origin —
+   * a different port in development — so a plain navigation depends on the
+   * session cookie surviving a cross-site top-level GET, and an error would
+   * replace the page with raw JSON. Fetching with credentials keeps the failure
+   * in a toast and lets the button show that it is working.
+   */
+  async function downloadSpreadsheet() {
+    setExporting(true);
+    try {
+      const response = await fetch(
+        `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/projects/export?locale=${locale}`,
+        { credentials: "include" },
+      );
+      if (!response.ok) throw new Error(t.projects.exportFailed);
+
+      const blob = await response.blob();
+      // The server names the file; fall back only if the header is missing.
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const named = /filename="([^"]+)"/.exec(disposition)?.[1];
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = named ?? "projects.xlsx";
+      // In the document and revoked a tick late, both on purpose: Firefox does
+      // not start a download from a programmatic click on a detached anchor,
+      // and revoking in the next statement races the download's own read of the
+      // blob. Chrome tolerates either, which is how this passed review.
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.projects.exportFailed);
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function confirmBulkDelete() {
@@ -177,6 +231,23 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
             ))}
           </SelectContent>
         </Select>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label={t.projects.exportLabel}
+                disabled={exporting}
+                onClick={() => void downloadSpreadsheet()}
+              />
+            }
+          >
+            {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t.projects.exportLabel}</TooltipContent>
+        </Tooltip>
+
         {canManage && (
           <Button size="sm" className="ml-auto" onClick={openCreate}>
             <Plus />
@@ -300,20 +371,25 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
                     <Meter value={row.progressPercent} max={100} />
                     <p className="mt-1 text-muted-foreground">
                       {row.progressPercent.toFixed(row.progressSource === "boq" ? 1 : 0)}%
-                      {row.progressSource === "boq" ? (
+                      {/* A deviation only exists against a baseline. Without one
+                          the figure stands on its own, unlabelled — where the
+                          number came from is not the reader's problem. */}
+                      {row.progressSource === "boq" && (
                         <span className="ml-1.5">
                           <DeviationBadge value={row.deviation} />
                         </span>
-                      ) : (
-                        <span className="ml-1.5">{t.projects.progressManual}</span>
                       )}
                     </p>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="whitespace-nowrap text-right tabular-nums">
                     {row.contractValue === null ? "—" : money(row.contractValue)}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{formatDate(row.endDate)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{row.openTickets}</TableCell>
+                  <TableCell className="whitespace-nowrap text-muted-foreground">
+                    {formatDate(row.endDate)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right tabular-nums">
+                    {row.openTickets}
+                  </TableCell>
                   {canManage && (
                     <TableCell className="pr-4 text-right">
                       {/* Edit is the only per-row action left; deleting happens
@@ -367,12 +443,14 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
 
       {canManage && (
         <ProjectFormDialog
-          // Remount on target change so the form picks up fresh defaultValues.
-          key={editingId ?? "new"}
+          // No `key` on purpose: the dialog resets itself from initialValues, so
+          // remounting it would only throw away the mounted form to build an
+          // identical one.
           open={formOpen}
           onOpenChange={setFormOpen}
           editingId={editingId}
           initialValues={initialValues}
+          progressLocked={progressLocked}
         />
       )}
 

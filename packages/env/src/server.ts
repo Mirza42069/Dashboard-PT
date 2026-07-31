@@ -2,13 +2,27 @@ import "dotenv/config";
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
+/** Vercel exposes bare hostnames; everything downstream wants a full origin. */
+function toOrigin(value: string | undefined) {
+  if (!value) return undefined;
+  return value.startsWith("http") ? value : `https://${value}`;
+}
+
+// The immutable per-build URL (…-<hash>-<scope>.vercel.app). Unique to one
+// deployment, so on a preview it is almost never the URL anyone actually opens.
+const deploymentOrigin = toOrigin(process.env.VERCEL_URL);
+// The stable per-branch alias (…-git-<branch>-<scope>.vercel.app). This is the
+// link a `git push` preview gives you, and therefore the Origin the browser
+// sends. It differs from VERCEL_URL on every single preview deployment.
+const branchOrigin = toOrigin(process.env.VERCEL_BRANCH_URL);
+const productionOrigin = toOrigin(process.env.VERCEL_PROJECT_PRODUCTION_URL);
+
 function getVercelOrigin() {
-  const vercelUrl =
-    process.env.VERCEL_ENV === "production"
-      ? (process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL)
-      : (process.env.VERCEL_URL ?? process.env.VERCEL_PROJECT_PRODUCTION_URL);
-  if (!vercelUrl) return undefined;
-  return vercelUrl.startsWith("http") ? vercelUrl : `https://${vercelUrl}`;
+  // Preview prefers the branch alias: it is the hostname a human opens, so
+  // deriving the auth base URL from it keeps baseURL and Origin on one host.
+  return process.env.VERCEL_ENV === "production"
+    ? (productionOrigin ?? deploymentOrigin)
+    : (branchOrigin ?? deploymentOrigin ?? productionOrigin);
 }
 
 const vercelOrigin = getVercelOrigin();
@@ -41,3 +55,25 @@ export const env = createEnv({
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,
   emptyStringAsUndefined: true,
 });
+
+/**
+ * Every hostname this deployment can legitimately be reached on.
+ *
+ * A Vercel preview answers on at least two: the immutable VERCEL_URL and the
+ * stable VERCEL_BRANCH_URL alias. The browser sends whichever one the user
+ * opened as `Origin`, so trusting a single origin breaks sign-in on the other
+ * — better-auth rejects the POST on the origin check, before it ever looks at
+ * the password, and the UI can only show a generic failure. That reads exactly
+ * like a wrong password, which is what makes it so hard to place.
+ *
+ * Only platform-provided values are listed. None of them come from the request,
+ * so widening the list this way does not weaken the CSRF protection the origin
+ * check exists to provide.
+ */
+export const trustedOrigins = [
+  ...new Set(
+    [env.CORS_ORIGIN, deploymentOrigin, branchOrigin, productionOrigin].filter(
+      (origin): origin is string => Boolean(origin),
+    ),
+  ),
+];

@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@DashboardV2/ui/components/card";
+import { DatePicker } from "@DashboardV2/ui/components/date-picker";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
@@ -26,8 +27,10 @@ import { useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { interpolate } from "@/i18n";
-import { useT } from "@/i18n/provider";
+import { useLocale, useT } from "@/i18n/provider";
 import { computePlannedCurve, distributionMap, scheduleRows } from "@/lib/boq/curves";
+import { datePickerLabels } from "@/lib/date-picker-labels";
+import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 /** A row is "complete" when its cells total 100, within rounding. */
@@ -381,6 +384,8 @@ function ScheduleSettings({
   periodsExist: boolean;
 }) {
   const t = useT();
+  const { intlLocale } = useLocale();
+  const { formatDate } = useFormat();
   const queryClient = useQueryClient();
   const [startDate, setStartDate] = useState(initialStartDate);
   const [endDate, setEndDate] = useState(initialEndDate);
@@ -427,34 +432,47 @@ function ScheduleSettings({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Same picker the new/edit dialog uses. These are the same two columns
+            on the same project, so two different date UIs for them was the first
+            inconsistency anyone noticed. */}
         <div className="space-y-2">
           <Label htmlFor="baseline-start">{t.projects.startDate}</Label>
-          <Input
+          <DatePicker
             id="baseline-start"
-            type="date"
-            value={startDate}
+            value={startDate || null}
+            // Unbounded on purpose — see the note in project-form-dialog.tsx.
             disabled={!editable}
-            onChange={(event) => setStartDate(event.target.value)}
+            locale={intlLocale}
+            formatValue={formatDate}
+            labels={datePickerLabels(t)}
+            onValueChange={(next) => setStartDate(next ?? "")}
           />
         </div>
         <div className="space-y-2">
           <Label htmlFor="baseline-end">{t.projects.endDate}</Label>
-          <Input
+          <DatePicker
             id="baseline-end"
-            type="date"
-            value={endDate}
+            value={endDate || null}
+            min={startDate || null}
             disabled={!editable}
-            onChange={(event) => setEndDate(event.target.value)}
+            locale={intlLocale}
+            formatValue={formatDate}
+            labels={datePickerLabels(t)}
+            onValueChange={(next) => setEndDate(next ?? "")}
           />
         </div>
         <div className="space-y-2">
           <Label htmlFor="baseline-reporting-start">{t.projects.scheduleStart}</Label>
-          <Input
+          <DatePicker
             id="baseline-reporting-start"
-            type="date"
-            value={scheduleStart}
+            value={scheduleStart || null}
+            min={startDate || null}
+            max={endDate || null}
             disabled={!editable}
-            onChange={(event) => setScheduleStart(event.target.value)}
+            locale={intlLocale}
+            formatValue={formatDate}
+            labels={datePickerLabels(t)}
+            onValueChange={(next) => setScheduleStart(next ?? "")}
           />
         </div>
         <div className="space-y-2">

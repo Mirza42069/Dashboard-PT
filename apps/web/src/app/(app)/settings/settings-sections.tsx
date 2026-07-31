@@ -7,21 +7,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@DashboardV2/ui/compon
 import { cn } from "@DashboardV2/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Accessibility,
   Building2,
   KeyRound,
   Languages,
-  Moon,
-  Palette,
   SlidersHorizontal,
-  Sun,
   UserRound,
 } from "@DashboardV2/ui/components/icons";
-import { toast } from "@/lib/toast";
 
 import ChangePasswordForm from "@/components/change-password-form";
 import type { Locale } from "@/i18n";
 import { setLocaleCookie, useLocale, useT } from "@/i18n/provider";
-import { setThemeCookie, type Theme } from "@/lib/theme";
+import { setTextScaleCookie, type TextScale } from "@/lib/text-scale";
 import { trpc } from "@/utils/trpc";
 
 /**
@@ -67,7 +64,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 /**
- * A two-option segmented control. Both settings pages below pick one of two
+ * A two-option segmented control. Both preferences below pick one of two
  * values, and full-width halves make the current choice obvious at a glance —
  * the previous inline buttons left most of the card empty.
  */
@@ -76,7 +73,7 @@ function Segmented<T extends string>({
   value,
   onSelect,
 }: {
-  options: { value: T; label: string; icon?: typeof Sun }[];
+  options: { value: T; label: string }[];
   value: T;
   onSelect: (value: T) => void;
 }) {
@@ -92,7 +89,6 @@ function Segmented<T extends string>({
             if (value !== option.value) onSelect(option.value);
           }}
         >
-          {option.icon ? <option.icon /> : null}
           {option.label}
         </Button>
       ))}
@@ -158,57 +154,53 @@ export function ProfileSection({
 }
 
 /**
- * Appearance and language share a tile rather than getting one each. Alone,
+ * Text size and language share a tile rather than getting one each. Alone,
  * either is a single row of two buttons — beside the taller profile tile the
  * grid would stretch them and leave the extra height blank. Together they fill
  * the column, and they belong together anyway: both are display preferences.
+ *
+ * The Light/Dark row used to sit above these two. It went when dark mode did:
+ * getTheme() had already been forcing light for a while, so the buttons only
+ * ever raised a "coming soon" toast, and a control that cannot change anything
+ * is worse than no control. lib/theme.ts and the .dark token block are still
+ * there for whenever the redesign lands.
  */
 export function PreferencesSection({
-  theme,
+  textScale,
   className,
 }: {
-  theme: Theme;
+  textScale: TextScale;
   className?: string;
 }) {
   const t = useT();
   const { locale } = useLocale();
 
-  // Tile icon is deliberately not Palette: that belongs to the Appearance row
-  // below, and using it here too put the same icon twice in one card, which read
-  // as two headings for the same section. The tile covers appearance *and*
-  // language, so it takes the generic control icon and lets each row keep its own.
+  // Tile icon is the generic control glyph rather than either row's own: the
+  // card covers text size *and* language, and reusing one row's icon at the top
+  // read as two headings for the same section.
   return (
     <Tile title={t.settings.preferences} icon={SlidersHorizontal} className={className}>
       <div className="space-y-5">
         <div className="space-y-2">
           <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Palette className="size-3.5 shrink-0" />
-            {t.settings.appearance}
+            <Accessibility className="size-3.5 shrink-0" />
+            {t.settings.textSize}
           </p>
-          <Segmented
-            value={theme}
+          <Segmented<TextScale>
+            value={textScale}
             options={[
-              { value: "light", label: t.settings.light, icon: Sun },
-              { value: "dark", label: t.settings.dark, icon: Moon },
+              { value: "normal", label: t.settings.textSizeNormal },
+              { value: "large", label: t.settings.textSizeLarge },
             ]}
             onSelect={(value) => {
-              // Dark is pulled pending a redesign. The button stays visible and
-              // pressable rather than being hidden or disabled — a disabled
-              // control gives no reason, and removing the row entirely would
-              // make Appearance a single option that reads as broken.
-              // getTheme() forces light server-side too, so a stale cookie from
-              // before this landed cannot strand anyone in the old theme.
-              if (value === "dark") {
-                toast.info(t.settings.darkComingSoon);
-                return;
-              }
-              setThemeCookie(value);
-              // Reload rather than toggling a class: the theme lives on <html>
-              // from the server, so a reload keeps client and server agreeing
-              // and avoids a second source of truth.
+              setTextScaleCookie(value);
+              // Reload rather than toggling the class here: the scale lives on
+              // <html> from the server, so a reload keeps client and server
+              // agreeing and avoids a second source of truth.
               window.location.reload();
             }}
           />
+          <p className="text-xs text-muted-foreground">{t.settings.textSizeHint}</p>
         </div>
 
         <div className="space-y-2 border-t pt-4">

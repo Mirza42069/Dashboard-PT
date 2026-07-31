@@ -1,9 +1,11 @@
+import { cn } from "@DashboardV2/ui/lib/utils";
 import type { Metadata } from "next";
 
 import "../index.css";
 import { BRAND_NAME } from "@/components/brand";
 import Providers from "@/components/providers";
 import { getDictionary, getLocale } from "@/i18n";
+import { getTextScale, TEXT_SCALE_CLASS } from "@/lib/text-scale";
 import { getTheme } from "@/lib/theme";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -19,17 +21,25 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const [locale, theme] = await Promise.all([getLocale(), getTheme()]);
+  const [locale, theme, textScale] = await Promise.all([
+    getLocale(),
+    getTheme(),
+    getTextScale(),
+  ]);
 
   return (
-    // Theme and language both come from cookies read on the server, so the
-    // first byte of HTML is already correct — no flash, and no client-side
-    // script rewriting the class after paint.
+    // Theme, language and text scale all come from cookies read on the server,
+    // so the first byte of HTML is already correct — no flash, and no
+    // client-side script rewriting the class after paint.
     //
     // No next/font here: the theme owns typography via --font-sans / --font-mono
     // in packages/ui/src/styles/globals.css, which `body { @apply font-sans }`
     // applies.
-    <html lang={locale} className={theme} style={{ colorScheme: theme }}>
+    <html
+      lang={locale}
+      className={cn(theme, TEXT_SCALE_CLASS[textScale])}
+      style={{ colorScheme: theme }}
+    >
       <body className="antialiased">
         {/* Chrome lives in app/(app)/layout.tsx — /login and /change-password
             render bare so they cannot show navigation to pages you can't open. */}

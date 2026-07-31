@@ -186,7 +186,10 @@ export default function UsersTable({
                         <span className="ml-1.5 text-muted-foreground">{t.common.you}</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{user.email}</TableCell>
+                    {/* break-words because an address is one unbreakable word:
+                        wrapping alone does nothing for it, so it would set the
+                        table's minimum width on its own. */}
+                    <TableCell className="break-words text-muted-foreground">{user.email}</TableCell>
                     <TableCell>
                       <Badge variant={isSuperAdmin ? "default" : isRowAdmin ? "secondary" : "outline"}>
                         {isSuperAdmin
@@ -214,7 +217,7 @@ export default function UsersTable({
                         <Badge variant="ghost">{t.users.active}</Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="whitespace-nowrap text-muted-foreground">
                       {formatDateTime(user.createdAt)}
                     </TableCell>
                     <TableCell className="pr-4 text-right">

@@ -22,14 +22,15 @@ export async function getTheme(): Promise<Theme> {
   const stored = isTheme(value) ? value : DEFAULT_THEME;
 
   /*
-   * Dark is off pending a redesign — the settings tile shows it as "coming
-   * soon" rather than switching (see PreferencesSection).
+   * Dark is off pending a redesign, and there is no longer a control for it:
+   * the Light/Dark row was removed from PreferencesSection once it could only
+   * ever answer "coming soon".
    *
-   * Forced here rather than only in the UI because the cookie outlives the
-   * button: anyone who selected dark before it was pulled would otherwise stay
-   * on it forever with no control left to get out. Reading and then discarding
-   * also means their preference survives, so re-enabling is a one-line revert
-   * and they land back where they were.
+   * This forcing matters more without that row, not less — the cookie outlives
+   * the button, so anyone who selected dark while it worked would otherwise be
+   * stranded on it with nothing left to press. Reading and then discarding also
+   * means their preference survives, so re-enabling is a one-line revert here
+   * plus a row in the settings tile, and they land back where they were.
    *
    * The .dark block in packages/ui/src/styles/globals.css is deliberately left
    * intact and is simply unreachable while this stands.
@@ -37,6 +38,10 @@ export async function getTheme(): Promise<Theme> {
   return stored === "dark" ? "light" : stored;
 }
 
+/**
+ * Unused while the theme is forced to light, and kept for exactly that reason:
+ * it is the other half of the one-line revert described above.
+ */
 export function setThemeCookie(theme: Theme) {
   document.cookie = `${THEME_COOKIE}=${theme}; path=/; max-age=${60 * 60 * 24 * 365}; samesite=lax`;
 }

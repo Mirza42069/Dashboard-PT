@@ -93,13 +93,16 @@ export default function CompaniesTable() {
 
       {companies.length > 0 && (
         <Card>
-          <CardContent className="overflow-x-auto p-0">
+          {/* px-0, not overflow-x-auto: Table brings its own scroll container
+              (and the shadow affordance painted on it), so a second one here
+              could never scroll and only hid those shadows. */}
+          <CardContent className="px-0">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>{t.company.name}</TableHead>
                   <TableHead>{t.company.code}</TableHead>
-                  <TableHead className="text-right">{t.nav.users}</TableHead>
+                  <TableHead>{t.nav.users}</TableHead>
                   <TableHead>{t.company.created}</TableHead>
                   {/* Wide enough for the two actions plus the blocked marker. */}
                   <TableHead className="w-32" />
@@ -131,8 +134,13 @@ export default function CompaniesTable() {
                       <TableCell>
                         <Badge variant="outline">{row.code}</Badge>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{row.users}</TableCell>
-                      <TableCell className="text-muted-foreground">
+                      {/* Left, against the usual right-align-numbers rule, and
+                          deliberately: a left-aligned Created column sits
+                          immediately after it, so right-aligning pushed the
+                          count hard against the date and it read as part of it.
+                          tabular-nums still keeps the digits in a column. */}
+                      <TableCell className="tabular-nums whitespace-nowrap">{row.users}</TableCell>
+                      <TableCell className="whitespace-nowrap text-muted-foreground">
                         {formatDateTime(row.createdAt)}
                       </TableCell>
                       <TableCell>
@@ -142,6 +150,14 @@ export default function CompaniesTable() {
                               is right-aligned, so growing it leftwards keeps the
                               edit and delete icons on the same vertical line as
                               every other row.
+
+                              The popup opens above the marker rather than beside
+                              it. Beside meant vertically centred on a 28px
+                              button, so a two-line reason straddled the row
+                              boundary and read as belonging to the row below.
+                              Above clears the row entirely, and align="end"
+                              hangs it from the marker's right edge so a max-w-xs
+                              panel cannot run off the left on a narrow screen.
 
                               It carries the explanation itself rather than
                               hanging the popup off the disabled button, because
@@ -172,7 +188,9 @@ export default function CompaniesTable() {
                                   </button>
                                 }
                               />
-                              <PopoverContent side="inline-start">{blockedReason}</PopoverContent>
+                              <PopoverContent side="top" align="end">
+                                {blockedReason}
+                              </PopoverContent>
                             </Popover>
                           )}
                           <Button

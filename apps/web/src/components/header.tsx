@@ -60,9 +60,13 @@ export default function Header({
           </TooltipTrigger>
           <TooltipContent side="bottom">{label}</TooltipContent>
         </Tooltip>
-        <CompanySwitcher />
       </div>
-      <UserMenu user={user} />
+      {/* Which company you are looking at sits beside who you are signed in as —
+          the two things that scope everything else on the page. */}
+      <div className="flex items-center gap-2">
+        <CompanySwitcher />
+        <UserMenu user={user} />
+      </div>
     </header>
   );
 }

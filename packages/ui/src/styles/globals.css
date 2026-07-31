@@ -255,6 +255,32 @@
     @apply font-sans;
   }
 
+  /*
+   * The large text setting (Settings -> Preferences). Set on <html> from a
+   * cookie — see apps/web/src/lib/text-scale.ts.
+   *
+   * One declaration rescales the entire product because everything here is rem:
+   * Tailwind v4 derives every spacing, size and radius utility from --spacing
+   * (0.25rem), and the type scale is rem too. Raising the root font size
+   * therefore grows text, icons, padding and corners together — a real zoom, not
+   * large type rattling around inside the old layout. That is why this is a
+   * font-size and not, say, a --spacing override: the latter would grow the
+   * chrome and leave the words alone.
+   *
+   * 125% and not more. 200% was tried first and was simply too much: a single
+   * table row filled a third of the screen. A quarter larger is the point where
+   * the text is easier for older eyes without the layout turning into a
+   * different, worse product.
+   *
+   * Breakpoints deliberately do not move with it. `rem` inside a media query
+   * resolves against the browser's initial font size rather than this one, so a
+   * desktop stays in the desktop layout when zoomed. That is the behaviour we
+   * want: the alternative drops a 1080p screen into the mobile layout. Tables
+   * reflow to fit instead of scrolling — see TableCell in table.tsx.
+   */
+  html.a11y-large-text {
+    font-size: 125%;
+  }
 }
 
 @layer components {

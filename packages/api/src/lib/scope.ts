@@ -173,19 +173,25 @@ export async function assertNoteAccess(ctx: ProjectScopeCtx, noteId: string) {
 }
 
 /**
- * A user who may be named on this company's records — its own staff, or a
- * super_admin (unpinned, and legitimately assignable anywhere: admins are
- * pinned to one company now, so a plain companyId match already covers them).
- * Without this, an assigneeId or managerId from another tenant is stored and
- * then joined back, rendering that person's name — and, on project.get, their
- * email — inside a company that should never see them.
+ * A user who may be named on this company's records: its own staff, and nobody
+ * else. Without this, an assigneeId or managerId from another tenant is stored
+ * and then joined back, rendering that person's name — and, on project.get,
+ * their email — inside a company that should never see them.
+ *
+ * Super admins are excluded, which is the point rather than an omission. The
+ * role exists to supervise every company's data without being part of any of
+ * them, so naming one as a project manager is what puts their name and address
+ * on a project page that admins and users read. They are unpinned
+ * (`companyId` is null), so the company check would reject them anyway — the
+ * explicit role test is here so the intent survives someone later deciding to
+ * give the account a companyId.
  */
 export async function assertUserAssignable(companyId: string, userId: string) {
   const [row] = await db
     .select({ companyId: user.companyId, role: user.role })
     .from(user)
     .where(eq(user.id, userId));
-  if (!row || (row.role !== "super_admin" && row.companyId !== companyId)) {
+  if (!row || row.role === "super_admin" || row.companyId !== companyId) {
     throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
   }
 }
