@@ -15,8 +15,6 @@
     "@DashboardV2/db": "workspace:*",
     "@DashboardV2/env": "workspace:*",
     "@hono/trpc-server": "^0.4.2",
-    "@neondatabase/serverless": "^1.1.0",
-    "@t3-oss/env-core": "^0.13.11",
     "@trpc/server": "catalog:",
     "better-auth": "catalog:",
     "dotenv": "catalog:",

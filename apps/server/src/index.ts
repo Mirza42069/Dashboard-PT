@@ -12,8 +12,6 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
-import { buildProjectWorkbook } from "./project-export";
-
 const app = new Hono();
 
 app.use(logger());
@@ -245,6 +243,20 @@ app.get("/projects/export", async (c) => {
   if ("error" in scope) {
     return c.json({ error: scope.error }, scope.status);
   }
+
+  // Imported here, not at the top of the file.
+  //
+  // project-export pulls in exceljs, which is CommonJS over a large tree of
+  // dynamic requires that Vercel's bundler does not resolve the way Bun does
+  // locally. Making the *exceljs* import lazy was not enough: this module was
+  // still imported eagerly, so exceljs stayed in the boot graph and the whole
+  // Hono app died at cold start with an empty `ResolveMessage {}` — every
+  // route 500ing, sign-in included, while the web service was fine and local
+  // dev was fine. That is what took production down between V2.10 and V2.11.
+  //
+  // Keeping the whole module behind this await means a failure to resolve it
+  // can only ever cost the spreadsheet download, never the ability to sign in.
+  const { buildProjectWorkbook } = await import("./project-export");
 
   const { filename, body } = await buildProjectWorkbook({
     companyId: scope.companyId,
