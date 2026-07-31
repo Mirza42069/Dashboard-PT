@@ -214,6 +214,7 @@ export const en = {
     behindScheduleEmpty: "No project is behind its baseline",
     asOf: "As of {date}",
     exportLabel: "Download as spreadsheet",
+    exportProjectLabel: "Download this project as a spreadsheet",
     exporting: "Preparing the file…",
     exportFailed: "Could not build the spreadsheet",
 

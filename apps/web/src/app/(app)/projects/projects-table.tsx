@@ -21,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@DashboardV2/ui/components/select";
-import { env } from "@DashboardV2/env/web";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import {
@@ -46,7 +45,7 @@ import { TableEmptyState } from "@/components/table-empty-state";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate, plural } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
-import { getServerUrl } from "@/lib/server-url";
+import { downloadFromServer } from "@/lib/download-file";
 import { summarizeSelection } from "@/lib/summarize-selection";
 import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
@@ -143,41 +142,14 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
     setFormOpen(true);
   }
 
-  /**
-   * Fetched rather than linked.
-   *
-   * A bare <a href> would be simpler, but the file lives on the API origin —
-   * a different port in development — so a plain navigation depends on the
-   * session cookie surviving a cross-site top-level GET, and an error would
-   * replace the page with raw JSON. Fetching with credentials keeps the failure
-   * in a toast and lets the button show that it is working.
-   */
   async function downloadSpreadsheet() {
     setExporting(true);
     try {
-      const response = await fetch(
-        `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/projects/export?locale=${locale}`,
-        { credentials: "include" },
+      await downloadFromServer(
+        `/projects/export?locale=${locale}`,
+        "projects.xlsx",
+        t.projects.exportFailed,
       );
-      if (!response.ok) throw new Error(t.projects.exportFailed);
-
-      const blob = await response.blob();
-      // The server names the file; fall back only if the header is missing.
-      const disposition = response.headers.get("Content-Disposition") ?? "";
-      const named = /filename="([^"]+)"/.exec(disposition)?.[1];
-
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = named ?? "projects.xlsx";
-      // In the document and revoked a tick late, both on purpose: Firefox does
-      // not start a download from a programmatic click on a detached anchor,
-      // and revoking in the next statement races the download's own read of the
-      // blob. Chrome tolerates either, which is how this passed review.
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.projects.exportFailed);
     } finally {

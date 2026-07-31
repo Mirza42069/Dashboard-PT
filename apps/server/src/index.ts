@@ -2,7 +2,7 @@ import { createContext } from "@DashboardV2/api/context";
 import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
 import { auth } from "@DashboardV2/auth";
-import { resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
+import { projectAccessFilter, resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
 import { db } from "@DashboardV2/db";
 import { notePhoto, project, projectMember, projectNote } from "@DashboardV2/db/schema";
 import { trustedOrigins } from "@DashboardV2/env/server";
@@ -268,6 +268,75 @@ app.get("/projects/export", async (c) => {
     "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "Content-Disposition": `attachment; filename="${filename}"`,
     // Generated per request from live data; a cached copy is always wrong.
+    "Cache-Control": "no-store",
+  });
+});
+
+/**
+ * One project as a spreadsheet: summary, BoQ, plan, progress, S-curve, tickets
+ * and — for those who can see the Team tab — the roster.
+ *
+ * Access is decided by re-running `projectAccessFilter` as part of the lookup
+ * rather than by checking the company after fetching. That filter is the same
+ * one the project list and the portfolio export use, so this route cannot drift
+ * from them, and it carries the project_member rule for role=user for free. A
+ * project outside the caller's scope simply returns no row, and the 404 below
+ * is indistinguishable from one that does not exist — which is the rule
+ * lib/scope.ts sets out: FORBIDDEN would confirm another tenant's project to
+ * whoever asked.
+ *
+ * assertProjectAccess would have been the obvious call here and is the wrong
+ * one: it signals by throwing TRPCError, which outside the tRPC pipeline
+ * escapes as a bare 500.
+ */
+app.get("/projects/:id/export", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session?.user) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  if (!hasPermission(roleOf(session.user), "project:read")) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const scope = await resolveCompany(session.user, c.req.raw.headers);
+  if ("error" in scope) {
+    return c.json({ error: scope.error }, scope.status);
+  }
+
+  const projectId = c.req.param("id");
+  const [visible] = await db
+    .select({ id: project.id })
+    .from(project)
+    .where(
+      and(
+        eq(project.id, projectId),
+        projectAccessFilter({ companyId: scope.companyId, session: { user: session.user } }),
+      ),
+    );
+  if (!visible) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  // Lazy for the same reason as the portfolio export above — this module pulls
+  // exceljs, and an eager import puts it back in the boot graph.
+  const { buildProjectDetailWorkbook } = await import("./project-detail-export");
+
+  const built = await buildProjectDetailWorkbook({
+    projectId,
+    locale: c.req.query("locale") === "id" ? "id" : "en",
+    // Mirrors the condition that renders the Team tab in
+    // apps/web/src/app/(app)/projects/[id]/page.tsx. The workbook must not be
+    // the way around a permission the UI enforces.
+    includeTeam: hasPermission(roleOf(session.user), "member:manage"),
+  });
+
+  if (!built) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  return c.body(built.body, 200, {
+    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "Content-Disposition": `attachment; filename="${built.filename}"`,
     "Cache-Control": "no-store",
   });
 });

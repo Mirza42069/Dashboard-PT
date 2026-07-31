@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@DashboardV2/ui/components/button";
 import {
   Card,
   CardContent,
@@ -9,15 +10,19 @@ import {
 import { Empty, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft } from "@DashboardV2/ui/components/icons";
+import { ArrowLeft, Download, Loader2 } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
+import { useState } from "react";
 
 import { DeviationBadge } from "@/components/deviation-badge";
 import { Meter } from "@/components/meter";
 import { StatusBadge } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
-import { useT } from "@/i18n/provider";
+import { useLocale, useT } from "@/i18n/provider";
+import { downloadFromServer } from "@/lib/download-file";
+import { toast } from "@/lib/toast";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
@@ -37,11 +42,31 @@ export default function ProjectDetail({
   canManageMembers: boolean;
 }) {
   const t = useT();
+  const { locale } = useLocale();
   const { money, percent, formatDate } = useFormat();
+  // Declared above the early returns below — a hook that only runs once the
+  // project has loaded would change the hook order on the first successful
+  // render.
+  const [exporting, setExporting] = useState(false);
 
   const projectQuery = useQuery(trpc.project.get.queryOptions({ id: projectId }));
 
   const project = projectQuery.data;
+
+  async function downloadSpreadsheet() {
+    setExporting(true);
+    try {
+      await downloadFromServer(
+        `/projects/${projectId}/export?locale=${locale}`,
+        "project.xlsx",
+        t.projects.exportFailed,
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.projects.exportFailed);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   if (projectQuery.isPending) {
     return <Skeleton className="h-64 w-full" />;
@@ -81,6 +106,23 @@ export default function ProjectDetail({
             {project.location && ` - ${project.location}`}
           </p>
         </div>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label={t.projects.exportProjectLabel}
+                disabled={exporting}
+                onClick={() => void downloadSpreadsheet()}
+              />
+            }
+          >
+            {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t.projects.exportProjectLabel}</TooltipContent>
+        </Tooltip>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

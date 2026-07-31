@@ -13,6 +13,16 @@ import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 // the spreadsheet export can never again cost anyone the ability to sign in.
 import type ExcelJS from "exceljs";
 
+import {
+  DATE_FORMAT,
+  type Locale,
+  MONEY_FORMAT,
+  PERCENT_FORMAT,
+  PROJECT_STATUS_LABELS,
+  toExcelDate,
+  todayStamp,
+} from "./export-format";
+
 /**
  * Builds the .xlsx behind the projects table's download button.
  *
@@ -67,33 +77,11 @@ const HEADERS = {
   ],
 } as const;
 
-const STATUS_LABELS = {
-  en: {
-    planning: "Planning",
-    active: "Active",
-    on_hold: "On hold",
-    completed: "Completed",
-    cancelled: "Cancelled",
-  },
-  id: {
-    planning: "Perencanaan",
-    active: "Aktif",
-    on_hold: "Ditunda",
-    completed: "Selesai",
-    cancelled: "Dibatalkan",
-  },
-} as const;
+const STATUS_LABELS = PROJECT_STATUS_LABELS;
 
 const SHEET_NAME = { en: "Projects", id: "Proyek" } as const;
 
-/** Rupiah, and left numeric so Excel can still sum the column. */
-const MONEY_FORMAT = '"Rp"#,##0';
-const PERCENT_FORMAT = "0.0%";
-const DATE_FORMAT = "yyyy-mm-dd";
-
 const COLUMN_WIDTHS = [12, 34, 13, 22, 20, 22, 13, 17, 13, 16, 22, 22, 11, 12, 40];
-
-type Locale = keyof typeof HEADERS;
 
 export async function buildProjectWorkbook({
   companyId,
@@ -181,17 +169,9 @@ export async function buildProjectWorkbook({
   const buffer = await workbook.xlsx.writeBuffer();
 
   return {
-    filename: `projects-${new Date().toISOString().slice(0, 10)}.xlsx`,
+    filename: `projects-${todayStamp()}.xlsx`,
     body: new Uint8Array(buffer as ArrayBuffer),
   };
-}
-
-/**
- * `date` columns arrive as "YYYY-MM-DD". Parsed at UTC midnight so the day
- * cannot drift by one — the same rule the calendar and the formatters use.
- */
-function toExcelDate(value: string | null) {
-  return value ? new Date(`${value}T00:00:00Z`) : null;
 }
 
 /** Same rule the projects table counts by: open until explicitly closed. */

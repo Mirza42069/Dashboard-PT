@@ -216,6 +216,7 @@ export const id = {
     behindScheduleEmpty: "Tidak ada proyek yang tertinggal dari baseline-nya",
     asOf: "Per {date}",
     exportLabel: "Unduh sebagai spreadsheet",
+    exportProjectLabel: "Unduh proyek ini sebagai spreadsheet",
     exporting: "Menyiapkan berkas…",
     exportFailed: "Tidak dapat membuat spreadsheet",
 
