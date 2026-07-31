@@ -1,21 +1,27 @@
 import { defineConfig } from "tsdown";
 
 /**
- * This bundle — not src/index.ts — is what vercel.json deploys as the server
- * entrypoint.
+ * A self-contained bundle for `bun run start`. **Not** what Vercel deploys —
+ * vercel.json points the service at src/index.ts.
  *
- * Handing Vercel the raw source instead makes Bun resolve the whole import
- * graph at cold start, and that graph reaches out of apps/server: the workspace
- * packages need deps that bun installs into *their* node_modules, not the
- * server's (@t3-oss/env-core for packages/env, @neondatabase/serverless for
- * packages/db). Neither gets traced into the function, so the process dies with
- * a ResolveMessage before serving anything and every /api route 500s — which
- * surfaces as sign-in failing on the deployment while it works locally, where
- * the full workspace is on disk.
+ * It cannot be the deployed entrypoint: a service's `entrypoint` is checked
+ * against the cloned source tree before installCommand or buildCommand run, and
+ * dist/ is gitignored, so the deploy fails validation with "entrypoint
+ * dist/index.mjs ... does not exist" before anything has a chance to build it.
  *
- * noExternal inlines @DashboardV2/*, and rolldown inlines any dep apps/server
- * does not declare itself, so what is left external is exactly what resolves
- * from apps/server/node_modules.
+ * The cold-start resolve failure this was originally reaching for is real, but
+ * it belongs to package.json, not to a bundler. Bun installs a workspace
+ * package's deps into *its* node_modules rather than hoisting them, so
+ * @t3-oss/env-core (packages/env) and @neondatabase/serverless (packages/db)
+ * sat outside apps/server entirely and were never traced into the function —
+ * the process died with a ResolveMessage before serving anything and every
+ * /api route 500d, sign-in included. Both are now direct dependencies of
+ * apps/server, so they resolve from apps/server/node_modules like everything
+ * else and tracing picks them up. Anything a workspace package pulls in at
+ * runtime has to be declared here too.
+ *
+ * noExternal inlines @DashboardV2/*, so the bundle runs without the workspace
+ * on disk.
  */
 export default defineConfig({
   entry: "./src/index.ts",
