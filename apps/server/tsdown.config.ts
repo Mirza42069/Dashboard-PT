@@ -40,12 +40,18 @@ export default defineConfig({
    */
   deps: { alwaysBundle: [/.*/] },
   /**
-   * exceljs stays out. It is CommonJS over a tree of dynamic requires that does
-   * not survive bundling, and it is reachable only from the export route, which
-   * loads it on demand. External and lazy, the worst it can cost is the
-   * spreadsheet download; bundled, it would be back in the boot path.
+   * exceljs is inlined along with everything else.
+   *
+   * Left external it was the one specifier still resolved at runtime, and it
+   * failed the same way everything else did — `ResolveMessage {}`, this time
+   * caught by the route rather than killing the process. Bundling it removes
+   * the last resolution from the deployment.
+   *
+   * Being CommonJS over a tree of dynamic requires, it is the module most
+   * likely to resist bundling, which is why the export route still loads this
+   * module lazily: if a dynamic require does slip through, the cost is a failed
+   * download and not a server that will not boot.
    */
-  external: ["exceljs"],
   /** One file, so there are no sibling chunks left to resolve or to package. */
   outputOptions: { inlineDynamicImports: true },
 });
