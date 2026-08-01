@@ -33,7 +33,11 @@ export type EntryLike = {
 export type LeafLike = { id: string; weight: number };
 
 export type Section<T extends BoqItemLike> = { header: T; leaves: T[] };
-export type ScheduleRow<T extends BoqItemLike> = { section: string; leaf: T };
+export type ScheduleRow<T extends BoqItemLike> = {
+  sectionId: string;
+  section: string;
+  leaf: T;
+};
 
 const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
 
@@ -75,17 +79,17 @@ export function scheduleRows<T extends BoqItemLike>(items: T[]): ScheduleRow<T>[
     children.set(item.parentId, siblings);
   }
 
-  function appendLeaves(item: T, section: string) {
+  function appendLeaves(item: T, sectionId: string, section: string) {
     const descendants = children.get(item.id) ?? [];
     if (descendants.length === 0) {
-      rows.push({ section, leaf: item });
+      rows.push({ sectionId, section, leaf: item });
       return;
     }
-    for (const child of descendants) appendLeaves(child, section);
+    for (const child of descendants) appendLeaves(child, sectionId, section);
   }
 
   for (const root of sorted.filter((item) => item.parentId === null)) {
-    appendLeaves(root, root.description);
+    appendLeaves(root, root.id, root.description);
   }
 
   return rows;

@@ -17,23 +17,22 @@ export default async function ProjectDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  // Loading this page at all already required project:read — for a User that
-  // means membership, and members get full CRUD within their assigned
-  // projects, so there is no narrower "can edit" condition to compute here.
   const session = await requireSession();
+  const role = roleOf(session.user);
   const { id } = await params;
 
   return (
     <div className="p-4 md:p-6">
       <ProjectDetail
         projectId={id}
-        canEdit
-        canManageMembers={hasPermission(roleOf(session.user), "member:manage")}
+        canUpdateProject={hasPermission(role, "project:update")}
+        canWrite={hasPermission(role, "project:write")}
+        canManageMembers={hasPermission(role, "member:manage")}
         // Resolved here, on the server, from the same permission map the API
         // gates the transitions with. The UI hiding a button is a courtesy; the
         // procedure refusing the move is the control.
-        canReview={hasPermission(roleOf(session.user), "progress:review")}
-        canLock={hasPermission(roleOf(session.user), "progress:lock")}
+        canReview={hasPermission(role, "progress:review")}
+        canLock={hasPermission(role, "progress:lock")}
       />
     </div>
   );

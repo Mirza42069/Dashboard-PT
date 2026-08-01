@@ -8,11 +8,9 @@ import { cn } from "@DashboardV2/ui/lib/utils";
  * The container an edit form sits in: a right-hand slide-over when editing an
  * existing record, a centred dialog when creating a new one.
  *
- * Editing slides in beside the row it belongs to, so the row stays visible and
- * the panel reads as an extension of it. Creating has no row to sit next to, so
- * it stays centred. Every form in the app follows that same rule — this lived
- * inside project-form-dialog until the companies form needed the identical
- * behaviour, at which point one copy was better than two that could drift.
+ * Editing slides in beside the page it updates, so the existing record remains
+ * visible as context. Creating has no existing record to sit beside, so it stays
+ * centred. Every form in the app follows that same rule.
  *
  * Both shells are the same `@base-ui/react/dialog` primitive underneath —
  * sheet.tsx imports it as `SheetPrimitive` — which is why a form inside can

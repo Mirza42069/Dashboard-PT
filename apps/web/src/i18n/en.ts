@@ -205,6 +205,18 @@ export const en = {
     remainingContractValue: "Remaining contract value",
     noBaselineYet: "No active baseline yet",
     siteProgress: "Site progress",
+    workProgress: "Work progress",
+    complete: "Complete",
+    incomplete: "Incomplete",
+    plannedProgress: "Planned",
+    workStages: "Work stages",
+    workStagesHint: "Top-level work sections from the active baseline.",
+    noWorkStages: "No active work stages yet",
+    stageComplete: "Complete",
+    stageInProgress: "In progress",
+    stageNotStarted: "Not started",
+    financialOverview: "Financial overview",
+    projectDetails: "Project details",
     targetCompletion: "Target completion",
     tabTickets: "Tickets",
     tabBoq: "Bill of Quantities",
@@ -794,6 +806,7 @@ export const en = {
   },
   activity: {
     title: "Recent activity",
+    loading: "Loading recent activity",
     empty: "Nothing recorded yet",
     // Templates, not stored text — the log renders in the reader's language and
     // old rows follow wording changes.

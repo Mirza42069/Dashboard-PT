@@ -1,49 +1,49 @@
 "use client";
 
 import { Button } from "@DashboardV2/ui/components/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-} from "@DashboardV2/ui/components/card";
+import { Card, CardContent } from "@DashboardV2/ui/components/card";
 import { Empty, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft } from "@DashboardV2/ui/components/icons";
+import { ArrowLeft, Pencil } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
+import { useState } from "react";
 
-import { DeviationBadge } from "@/components/deviation-badge";
-import { Meter } from "@/components/meter";
+import ProjectBuildingScene from "@/components/project-building-scene";
 import { StatusBadge } from "@/components/status-badge";
-import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
-import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import BaselineTab from "./baseline-tab";
 import DailyReportsTab from "./daily-reports-tab";
 import NotesTab from "./notes-tab";
+import ProjectOverview from "./project-overview";
 import ProgressTab from "./progress-tab";
 import TeamTab from "./team-tab";
 import TicketsTab from "./tickets-tab";
+import ProjectFormDialog, {
+  projectToFormValues,
+  type ProjectFormValues,
+} from "../project-form-dialog";
 
 export default function ProjectDetail({
   projectId,
-  canEdit,
+  canUpdateProject,
+  canWrite,
   canManageMembers,
   canReview,
   canLock,
 }: {
   projectId: string;
-  canEdit: boolean;
+  canUpdateProject: boolean;
+  canWrite: boolean;
   canManageMembers: boolean;
   canReview: boolean;
   canLock: boolean;
 }) {
   const t = useT();
-  const { money, percent, formatDate } = useFormat();
+  const [editValues, setEditValues] = useState<ProjectFormValues | null>(null);
 
   const projectQuery = useQuery(trpc.project.get.queryOptions({ id: projectId }));
 
@@ -65,7 +65,7 @@ export default function ProjectDetail({
 
   return (
     <div className="space-y-4">
-      <div>
+      <div className="flex items-center justify-between gap-3">
         <Link
           href="/projects"
           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
@@ -73,113 +73,70 @@ export default function ProjectDetail({
           <ArrowLeft className="size-3.5" />
           {t.projects.allProjects}
         </Link>
+        {canUpdateProject && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEditValues(projectToFormValues(project))}
+          >
+            <Pencil />
+            {t.projects.editProject}
+          </Button>
+        )}
       </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-semibold tracking-tight">{project.name}</h1>
-            <StatusBadge kind="project" value={project.status} />
+      <Card className="h-[120px] overflow-hidden bg-[linear-gradient(112deg,color-mix(in_oklab,var(--card),#f2ebff_42%)_0%,color-mix(in_oklab,var(--card),#eaf7fa_52%)_100%)] py-0">
+        <CardContent className="grid h-full grid-cols-[minmax(0,1fr)_minmax(7.5rem,42%)] px-0 sm:grid-cols-[minmax(0,0.85fr)_minmax(16rem,1.15fr)]">
+          <div className="relative z-20 flex min-w-0 flex-col justify-center gap-1 px-4 py-3 md:px-6">
+            <p className="font-mono text-xs tracking-[0.12em] text-muted-foreground uppercase">
+              {project.code}
+            </p>
+            <div className="flex min-w-0 items-center gap-2">
+              <h1
+                className="truncate text-lg font-semibold tracking-tight md:text-xl"
+                title={project.name}
+              >
+                {project.name}
+              </h1>
+              <span className="shrink-0">
+                <StatusBadge kind="project" value={project.status} />
+              </span>
+            </div>
+            {(project.client || project.location) && (
+              <p className="truncate text-xs text-muted-foreground max-[420px]:hidden">
+                {[project.client, project.location].filter(Boolean).join(" - ")}
+              </p>
+            )}
           </div>
-          <p className="text-xs text-muted-foreground">
-            <span className="font-mono">{project.code}</span>
-            {project.client && ` - ${project.client}`}
-            {project.location && ` - ${project.location}`}
-          </p>
+          <ProjectBuildingScene seed={project.code} className="h-full min-h-0" />
+        </CardContent>
+      </Card>
+
+      <Tabs defaultValue="overview">
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <TabsList variant="line" className="min-w-max">
+            <TabsTrigger value="overview">{t.nav.overview}</TabsTrigger>
+            <TabsTrigger value="tickets">{t.projects.tabTickets}</TabsTrigger>
+            <TabsTrigger value="baseline">{t.projects.tabBaseline}</TabsTrigger>
+            <TabsTrigger value="progress">{t.projects.tabProgress}</TabsTrigger>
+            <TabsTrigger value="daily">{t.daily.tab}</TabsTrigger>
+            <TabsTrigger value="notes">{t.notes.tab}</TabsTrigger>
+            {canManageMembers && <TabsTrigger value="team">{t.projects.teamTab}</TabsTrigger>}
+          </TabsList>
         </div>
-      </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Card size="sm">
-          <CardHeader>
-            <CardDescription>{t.projects.contractValueTile}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xl font-semibold tabular-nums">
-              {project.contractValue === null ? "—" : money(project.contractValue)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card size="sm">
-          <CardHeader>
-            <CardDescription>{t.projects.workCompleted}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <p className="text-xl font-semibold tabular-nums">
-              {project.workCompletedValue === null ? "—" : money(project.workCompletedValue)}
-            </p>
-            {project.workCompletedValue !== null && project.contractValue !== null && (
-              <Meter
-                value={project.workCompletedValue}
-                max={project.contractValue}
-                label={percent(project.valueCompletionPercent)}
-              />
-            )}
-          </CardContent>
-        </Card>
-        <Card size="sm">
-          <CardHeader>
-            <CardDescription>{t.projects.remainingContractValue}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xl font-semibold tabular-nums">
-              {project.remainingContractValue === null
-                ? "—"
-                : money(project.remainingContractValue)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card size="sm">
-          <CardHeader>
-            <CardDescription>{t.projects.siteProgress}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <p className="text-xl font-semibold tabular-nums">
-              {project.progressPercent.toFixed(project.progressSource === "boq" ? 1 : 0)}%
-            </p>
-            <Meter value={project.progressPercent} max={100} />
-            {/* With a baseline the figure is measured; without one there is no
-                physical-progress source to report. */}
-            {project.progressSource === "boq" ? (
-              <div className="space-y-0.5">
-                <DeviationBadge value={project.deviation} className="text-xs" />
-                <p className="text-xs text-muted-foreground">
-                  {project.dataDate
-                    ? interpolate(t.projects.asOf, { date: formatDate(project.dataDate) })
-                    : t.projects.progressFromBoq}
-                </p>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">{t.projects.noBaselineYet}</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Detail label={t.projects.startDate} value={formatDate(project.startDate)} />
-        <Detail label={t.projects.targetCompletion} value={formatDate(project.endDate)} />
-        <Detail label={t.projects.manager} value={project.manager?.name ?? t.common.unassigned} />
-      </div>
-
-      <Tabs defaultValue="tickets">
-        <TabsList>
-          <TabsTrigger value="tickets">{t.projects.tabTickets}</TabsTrigger>
-          <TabsTrigger value="baseline">{t.projects.tabBaseline}</TabsTrigger>
-          <TabsTrigger value="progress">{t.projects.tabProgress}</TabsTrigger>
-          <TabsTrigger value="daily">{t.daily.tab}</TabsTrigger>
-          <TabsTrigger value="notes">{t.notes.tab}</TabsTrigger>
-          {canManageMembers && <TabsTrigger value="team">{t.projects.teamTab}</TabsTrigger>}
-        </TabsList>
+        <TabsContent value="overview">
+          <ProjectOverview project={project} />
+        </TabsContent>
 
         <TabsContent value="baseline">
-          <BaselineTab projectId={projectId} canEdit={canEdit} />
+          <BaselineTab projectId={projectId} canEdit={canWrite} />
         </TabsContent>
 
         <TabsContent value="progress">
           <ProgressTab
             projectId={projectId}
-            canEdit={canEdit}
+            canEdit={canWrite}
             canReview={canReview}
             canLock={canLock}
           />
@@ -192,14 +149,14 @@ export default function ProjectDetail({
         <TabsContent value="daily">
           <DailyReportsTab
             projectId={projectId}
-            canEdit={canEdit}
+            canEdit={canWrite}
             canReview={canReview}
             canLock={canLock}
           />
         </TabsContent>
 
         <TabsContent value="notes">
-          <NotesTab projectId={projectId} canEdit={canEdit} />
+          <NotesTab projectId={projectId} canEdit={canWrite} />
         </TabsContent>
 
         {canManageMembers && (
@@ -208,17 +165,18 @@ export default function ProjectDetail({
           </TabsContent>
         )}
       </Tabs>
-    </div>
-  );
-}
 
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <Card size="sm">
-      <CardContent>
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="font-medium">{value}</p>
-      </CardContent>
-    </Card>
+      {canUpdateProject && editValues && (
+        <ProjectFormDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setEditValues(null);
+          }}
+          editingId={project.id}
+          initialValues={editValues}
+          progressLocked={project.progressSource === "boq"}
+        />
+      )}
+    </div>
   );
 }

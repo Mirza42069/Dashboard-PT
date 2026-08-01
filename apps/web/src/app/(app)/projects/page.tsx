@@ -15,12 +15,16 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function ProjectsPage() {
   const session = await requireSession();
   const dict = getDictionary(await getLocale());
+  const role = roleOf(session.user);
 
   return (
     <div className="space-y-4 p-4 md:p-6">
       <h1 className="sr-only">{dict.projects.title}</h1>
 
-      <ProjectsTable canManage={hasPermission(roleOf(session.user), "project:create")} />
+      <ProjectsTable
+        canCreate={hasPermission(role, "project:create")}
+        canDelete={hasPermission(role, "project:delete")}
+      />
     </div>
   );
 }

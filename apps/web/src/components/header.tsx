@@ -1,6 +1,6 @@
 "use client";
 
-import { roleOf } from "@DashboardV2/api/lib/permissions";
+import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
@@ -9,6 +9,7 @@ import { ChevronLeft } from "@DashboardV2/ui/components/icons";
 import { useT } from "@/i18n/provider";
 
 import type { ShellUser } from "./app-shell";
+import ActivityPopover from "./activity-popover";
 import CompanySwitcher from "./company-switcher";
 import MobileNav from "./mobile-nav";
 import UserMenu from "./user-menu";
@@ -23,12 +24,13 @@ export default function Header({
   onToggleSidebar: () => void;
 }) {
   const t = useT();
+  const role = roleOf(user);
   const label = collapsed ? t.nav.expandSidebar : t.nav.collapseSidebar;
 
   return (
     <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b bg-card px-3 md:px-4">
       <div className="flex items-center gap-1">
-        <MobileNav role={roleOf(user)} />
+        <MobileNav role={role} />
         {/* Desktop only — on mobile the Sheet is the navigation. */}
         <Tooltip>
           <TooltipTrigger
@@ -61,10 +63,10 @@ export default function Header({
           <TooltipContent side="bottom">{label}</TooltipContent>
         </Tooltip>
       </div>
-      {/* Which company you are looking at sits beside who you are signed in as —
-          the two things that scope everything else on the page. */}
+      {/* Global controls stay together at the trailing edge of the top bar. */}
       <div className="flex items-center gap-2">
-        <CompanySwitcher />
+        {hasPermission(role, "activity:read") && <ActivityPopover />}
+        {hasPermission(role, "company:switch") && <CompanySwitcher />}
         <UserMenu user={user} />
       </div>
     </header>

@@ -32,15 +32,13 @@ import {
   TableRow,
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Loader2, Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
+import { Download, Loader2, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
-import { DeviationBadge } from "@/components/deviation-badge";
-import { Meter } from "@/components/meter";
 import { QueryError } from "@/components/query-error";
 import { TableEmptyState } from "@/components/table-empty-state";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
@@ -53,21 +51,23 @@ import { useFormat } from "@/lib/use-format";
 import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
-import ProjectFormDialog, {
-  EMPTY_PROJECT,
-  projectToFormValues,
-  type ProjectFormValues,
-} from "./project-form-dialog";
+import ProjectFormDialog, { EMPTY_PROJECT } from "./project-form-dialog";
 
 const PAGE_SIZE = 25;
 const STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
 const ALL = "all";
 
 
-export default function ProjectsTable({ canManage }: { canManage: boolean }) {
+export default function ProjectsTable({
+  canCreate,
+  canDelete,
+}: {
+  canCreate: boolean;
+  canDelete: boolean;
+}) {
   const t = useT();
   const { locale } = useLocale();
-  const { money, percent, formatDate } = useFormat();
+  const { formatDate } = useFormat();
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
   const statusOptions = [
@@ -89,22 +89,12 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
   });
   const [page, setPage] = useState(0);
   const [formOpen, setFormOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [initialValues, setInitialValues] = useState<ProjectFormValues>(EMPTY_PROJECT);
-  // An active BoQ baseline supplies the progress figure, so the dialog's manual
-  // field would be ignored — it says so rather than accepting a number quietly.
-  const [progressLocked, setProgressLocked] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   const debouncedSearch = useDebounced(search);
 
-  // Counted once, from the same `canManage` that decides whether the columns
-  // render. It was written out by hand at each of the three full-width rows
-  // below as `canManage ? 9 : 8` — but a manager sees ten columns, not nine, so
-  // the skeleton, error and empty rows all stopped one short and left a stray
-  // cell at the end of the row.
-  const COLUMNS = canManage ? 10 : 8;
+  const COLUMNS = canDelete ? 5 : 4;
 
   // What the empty state needs to know: is this list empty because nothing
   // exists, or because the filters hid it?
@@ -134,22 +124,6 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
   const selection = useRowSelection(projects);
 
   function openCreate() {
-    setEditingId(null);
-    setInitialValues(EMPTY_PROJECT);
-    setProgressLocked(false);
-    setFormOpen(true);
-  }
-
-  /**
-   * The panel opens on whichever row's edit button was pressed. It covers the
-   * actions column while it is open, so there is no way to press a second row's
-   * button without closing it first — which is also why the panel never has to
-   * swap targets underneath a half-typed form.
-   */
-  function openEdit(row: (typeof projects)[number]) {
-    setEditingId(row.id);
-    setInitialValues(projectToFormValues(row));
-    setProgressLocked(row.progressSource === "boq");
     setFormOpen(true);
   }
 
@@ -231,7 +205,7 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
           <TooltipContent side="bottom">{t.projects.exportLabel}</TooltipContent>
         </Tooltip>
 
-        {canManage && (
+        {canCreate && (
           <Button size="sm" className="ml-auto" onClick={openCreate}>
             <Plus />
             {t.projects.newProject}
@@ -239,7 +213,7 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
         )}
       </div>
 
-      {canManage && (
+      {canDelete && (
         <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
           <Button variant="outline" size="sm" onClick={() => setBulkDeleteOpen(true)}>
             <Trash2 />
@@ -253,7 +227,7 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
           <Table>
             <TableHeader>
               <TableRow>
-                {canManage && (
+                {canDelete && (
                   <TableHead className="w-10 pl-4">
                     <Checkbox
                       checked={selection.allSelected}
@@ -263,15 +237,10 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
                     />
                   </TableHead>
                 )}
-                <TableHead className={canManage ? undefined : "pl-4"}>{t.projects.project}</TableHead>
+                <TableHead className={canDelete ? undefined : "pl-4"}>{t.projects.project}</TableHead>
                 <TableHead>{t.projects.statusLabel}</TableHead>
                 <TableHead>{t.projects.client}</TableHead>
-                <TableHead className="w-56">{t.projects.workCompleted}</TableHead>
-                <TableHead className="w-44">{t.projects.siteProgress}</TableHead>
-                <TableHead className="text-right">{t.projects.contract}</TableHead>
-                <TableHead>{t.projects.dueColumn}</TableHead>
-                <TableHead className="text-right">{t.projects.openTicketsColumn}</TableHead>
-                {canManage && <TableHead className="pr-4 text-right">{t.common.actions}</TableHead>}
+                <TableHead className="pr-4">{t.projects.dueColumn}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -302,7 +271,7 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
                     <TableEmptyState
                       filtered={filtered}
                       onClearFilters={clearFilters}
-                      onCreate={canManage ? openCreate : undefined}
+                      onCreate={canCreate ? openCreate : undefined}
                       createLabel={t.projects.newProject}
                       title={filtered ? t.projects.noMatch : t.projects.empty}
                       description={filtered ? t.projects.noMatchHint : t.projects.emptyHint}
@@ -314,10 +283,11 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
               {projects.map((row) => (
                 <TableRow
                   key={row.id}
+                  className="relative cursor-pointer"
                   data-state={selection.isSelected(row.id) ? "selected" : undefined}
                 >
-                  {canManage && (
-                    <TableCell className="pl-4">
+                  {canDelete && (
+                    <TableCell className="relative z-10 pl-4">
                       <Checkbox
                         checked={selection.isSelected(row.id)}
                         onCheckedChange={() => selection.toggle(row.id)}
@@ -325,8 +295,11 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
                       />
                     </TableCell>
                   )}
-                  <TableCell className={canManage ? undefined : "pl-4"}>
-                    <Link href={`/projects/${row.id}`} className="font-medium hover:underline">
+                  <TableCell className={canDelete ? undefined : "pl-4"}>
+                    <Link
+                      href={`/projects/${row.id}`}
+                      className="font-medium outline-none after:absolute after:inset-0 after:content-[''] hover:underline focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
+                    >
                       {row.name}
                     </Link>
                     <p className="font-mono text-muted-foreground">{row.code}</p>
@@ -335,58 +308,9 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
                     <StatusBadge kind="project" value={row.status} />
                   </TableCell>
                   <TableCell className="text-muted-foreground">{row.client ?? "—"}</TableCell>
-                  <TableCell>
-                    {row.workCompletedValue === null || row.contractValue === null ? (
-                      <span className="text-muted-foreground">—</span>
-                    ) : (
-                      <>
-                        <Meter
-                          value={row.workCompletedValue}
-                          max={row.contractValue}
-                        />
-                        <p className="mt-1 text-muted-foreground">
-                          {money(row.workCompletedValue)} - {percent(row.valueCompletionPercent)}
-                        </p>
-                      </>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Meter value={row.progressPercent} max={100} />
-                    <p className="mt-1 text-muted-foreground">
-                      {row.progressPercent.toFixed(row.progressSource === "boq" ? 1 : 0)}%
-                      {/* A deviation only exists against a baseline. Without one
-                          the figure stands on its own, unlabelled — where the
-                          number came from is not the reader's problem. */}
-                      {row.progressSource === "boq" && (
-                        <span className="ml-1.5">
-                          <DeviationBadge value={row.deviation} />
-                        </span>
-                      )}
-                    </p>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-right tabular-nums">
-                    {row.contractValue === null ? "—" : money(row.contractValue)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground">
+                  <TableCell className="pr-4 whitespace-nowrap text-muted-foreground">
                     {formatDate(row.endDate)}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-right tabular-nums">
-                    {row.openTickets}
-                  </TableCell>
-                  {canManage && (
-                    <TableCell className="pr-4 text-right">
-                      {/* Edit is the only per-row action left; deleting happens
-                          through the selection checkboxes. */}
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={interpolate(t.projects.editLabel, { name: row.name })}
-                        onClick={() => openEdit(row)}
-                      >
-                        <Pencil />
-                      </Button>
-                    </TableCell>
-                  )}
                 </TableRow>
               ))}
             </TableBody>
@@ -424,51 +348,52 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
         </div>
       </div>
 
-      {canManage && (
+      {canCreate && (
         <ProjectFormDialog
           // No `key` on purpose: the dialog resets itself from initialValues, so
           // remounting it would only throw away the mounted form to build an
           // identical one.
           open={formOpen}
           onOpenChange={setFormOpen}
-          editingId={editingId}
-          initialValues={initialValues}
-          progressLocked={progressLocked}
+          editingId={null}
+          initialValues={EMPTY_PROJECT}
         />
       )}
 
-      <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {plural(t.common.bulkDeleteTitle, selection.selectedCount)}
-            </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              <span className="block">{t.projects.bulkDeleteDescription}</span>
-              <span className="block font-medium text-foreground">
-                {summarizeSelection(
-                  projects
-                    .filter((row) => selection.isSelected(row.id))
-                    .map((row) => `${row.code} - ${row.name}`),
-                  t,
-                )}
-              </span>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                setBulkDeleteOpen(false);
-                void confirmBulkDelete();
-              }}
-            >
-              {t.common.delete}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {canDelete && (
+        <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {plural(t.common.bulkDeleteTitle, selection.selectedCount)}
+              </AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <span className="block">{t.projects.bulkDeleteDescription}</span>
+                <span className="block font-medium text-foreground">
+                  {summarizeSelection(
+                    projects
+                      .filter((row) => selection.isSelected(row.id))
+                      .map((row) => `${row.code} - ${row.name}`),
+                    t,
+                  )}
+                </span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                onClick={() => {
+                  setBulkDeleteOpen(false);
+                  void confirmBulkDelete();
+                }}
+              >
+                {t.common.delete}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </>
   );
 }

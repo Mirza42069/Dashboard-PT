@@ -9,3 +9,17 @@
 local.db
 local.db-*
 .alchemy/
+
+# Local tooling and design references are not runtime inputs.
+.agents/
+.claude/
+reference/
+
+# Build outputs are recreated by each Vercel service build.
+dist/
+**/dist/
+.next/
+**/.next/
+*.tsbuildinfo
+**/*.tsbuildinfo
+coverage/

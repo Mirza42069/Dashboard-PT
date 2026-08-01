@@ -91,10 +91,9 @@ export const EMPTY_PROJECT: ProjectFormValues = {
 };
 
 /**
- * A row from `project.list`/`project.get` as the form wants it. Exported because
- * the table opens this dialog and would otherwise keep its own copy of the
- * mapping — which is how the six fields added here would go missing from the
- * edit path.
+ * A row from `project.list`/`project.get` as the form wants it. Exported so the
+ * project detail can open this shared form without maintaining a second mapping
+ * that drifts when fields are added.
  */
 export function projectToFormValues(row: {
   code: string;

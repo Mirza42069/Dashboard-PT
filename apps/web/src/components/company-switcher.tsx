@@ -19,9 +19,8 @@ import { trpc } from "@/utils/trpc";
 /**
  * Which company the dashboard is currently showing.
  *
- * Admins get a picker; everyone else gets their company's name as plain text,
- * because a regular account cannot switch — the server ignores the cookie for
- * them and scopes by user.companyId regardless.
+ * System accounts get a picker. The header does not mount this control for
+ * company-pinned User or Admin accounts.
  */
 export default function CompanySwitcher() {
   const t = useT();

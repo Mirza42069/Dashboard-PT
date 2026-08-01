@@ -70,10 +70,16 @@ const GRANTS: Record<Role, readonly Permission[]> = {
       p !== "user:setRole" &&
       p !== "user:setCompany",
   ),
-  // A site user records progress and submits it; the review and the lock belong
-  // to whoever the report goes to. Granting both here would make the workflow a
-  // formality anyone could complete alone.
-  user: ["project:read", "project:update", "project:write"],
+  // Management runs projects day to day, including creating them and following
+  // the company activity feed. Review, lock, deletion and account/team control
+  // remain supervisor responsibilities.
+  user: [
+    "project:create",
+    "project:read",
+    "project:update",
+    "project:write",
+    "activity:read",
+  ],
 };
 
 export function hasPermission(role: Role, permission: Permission): boolean {

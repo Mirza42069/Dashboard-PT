@@ -14,8 +14,10 @@ import z from "zod";
 
 import { companyPermissionProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
+import { runBatch } from "../lib/batch";
 import { type BoqMetrics, boqMetricsByProject, projectExceptions } from "../lib/boq-metrics";
 import { percentOf, toAmount } from "../lib/money";
+import { roleOf } from "../lib/permissions";
 import { assertProjectAccess, assertUserAssignable, projectAccessFilter } from "../lib/scope";
 
 const statusSchema = z.enum(PROJECT_STATUSES);
@@ -381,25 +383,27 @@ export const projectRouter = router({
       await assertUserAssignable(ctx.companyId, input.managerId);
     }
 
-    const [created] = await db
-      .insert(project)
-      .values({
+    const projectId = crypto.randomUUID();
+    await runBatch([
+      db.insert(project).values({
+        id: projectId,
         ...input,
         code,
         companyId: ctx.companyId,
-      })
-      .returning({ id: project.id });
+      }),
+      ...(roleOf(ctx.session.user) === "user"
+        ? [db.insert(projectMember).values({ projectId, userId: ctx.session.user.id })]
+        : []),
+    ]);
 
-    if (created) {
-      await recordActivity(ctx, {
-        action: "created",
-        entityType: "project",
-        entityId: created.id,
-        entityLabel: `${code} - ${input.name}`,
-      });
-    }
+    await recordActivity(ctx, {
+      action: "created",
+      entityType: "project",
+      entityId: projectId,
+      entityLabel: `${code} - ${input.name}`,
+    });
 
-    return { id: created?.id };
+    return { id: projectId };
   }),
 
   update: companyPermissionProcedure("project:update")

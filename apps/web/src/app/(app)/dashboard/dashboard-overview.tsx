@@ -13,13 +13,11 @@ import { useT } from "@/i18n/provider";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
-import ActivityFeed from "./activity-feed";
 import BehindSchedule from "./behind-schedule";
-import Exceptions from "./exceptions";
 
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
 
-export default function DashboardOverview({ showActivity }: { showActivity: boolean }) {
+export default function DashboardOverview() {
   const t = useT();
   const { money, moneyCompact, percent } = useFormat();
   const summary = useQuery(trpc.project.summary.queryOptions());
@@ -91,10 +89,6 @@ export default function DashboardOverview({ showActivity }: { showActivity: bool
 
   return (
     <div className="space-y-4">
-      {/* Exceptions lead. The portfolio totals below are context for them —
-          nobody opens this page to find out how many projects exist. */}
-      <Exceptions />
-
       {/* One bar rather than four cards: these are peers read together, and a
           single surface with dividers reads as one summary instead of four
           competing objects. */}
@@ -143,12 +137,6 @@ export default function DashboardOverview({ showActivity }: { showActivity: bool
 
         <BehindSchedule />
       </div>
-
-      {showActivity && (
-        <div className="grid gap-3 lg:grid-cols-2">
-          <ActivityFeed />
-        </div>
-      )}
     </div>
   );
 }

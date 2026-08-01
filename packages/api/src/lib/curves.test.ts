@@ -152,6 +152,7 @@ test("nested BoQ trees expose only their deepest leaves to scheduling", () => {
 
   const built = scheduleRows(items);
   expect(built.map((row) => row.leaf.id)).toEqual(["a", "b"]);
+  expect(built.map((row) => row.sectionId)).toEqual(["s", "s"]);
   expect(built.map((row) => row.section)).toEqual(["Structure", "Structure"]);
 });
 
