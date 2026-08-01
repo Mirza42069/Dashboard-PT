@@ -17,19 +17,26 @@ import { useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
+import { MonthBandRow } from "@/components/month-band-row";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import {
+  buildPeriodSummary,
   computeActualCurve,
   computePlannedCurve,
   distributionMap,
   latestPosition,
   scheduleRows,
 } from "@/lib/boq/curves";
+import { buildPeriodHeader } from "@/lib/period-header";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
+import PeriodSummaryTable from "./period-summary-table";
 import SCurveChart from "./s-curve-chart";
+
+/** Ties the chart to the table that carries its figures for assistive tech. */
+const SUMMARY_TABLE_ID = "period-summary";
 
 const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
 
@@ -41,7 +48,8 @@ export default function ProgressTab({
   canEdit: boolean;
 }) {
   const t = useT();
-  const { formatDate } = useFormat();
+  const format = useFormat();
+  const { formatDate } = format;
   const queryClient = useQueryClient();
 
   /**
@@ -82,15 +90,23 @@ export default function ProgressTab({
 
   const rows = scheduleRows(items);
   const entries = report?.entries ?? [];
-  const planned = computePlannedCurve(rows, periods, distributionMap(report?.distribution ?? []));
+  const cells = distributionMap(report?.distribution ?? []);
+  const planned = computePlannedCurve(rows, periods, cells);
   const actual = computeActualCurve(rows, periods, entries, dataDate);
   const position = latestPosition(actual.cumulative, planned.cumulative);
 
+  // The chart and the table below it are built from this one call, so the line
+  // someone is looking at and the figure they are about to quote cannot
+  // disagree.
+  const summary = buildPeriodSummary(rows, periods, cells, entries, dataDate);
+  const header = buildPeriodHeader(format, periods, dataDate);
+
   const chartData = periods.map((period, index) => ({
-    label: period.label ?? `#${period.periodIndex}`,
+    label: String(period.periodIndex),
     planned: planned.cumulative[index] ?? 0,
     actual: actual.cumulative[index] ?? null,
   }));
+  const currentPeriod = summary.find((row) => row.isCurrent);
 
   const entryByKey = new Map(
     entries.map((entry) => [cellKey(entry.boqItemId, entry.periodId), entry]),
@@ -173,7 +189,11 @@ export default function ProgressTab({
             {periods.length === 0 ? (
               <p className="py-10 text-center text-muted-foreground">{t.schedule.noPeriods}</p>
             ) : (
-              <SCurveChart data={chartData} />
+              <SCurveChart
+                data={chartData}
+                describedById={SUMMARY_TABLE_ID}
+                dataDateLabel={currentPeriod ? String(currentPeriod.period.periodIndex) : null}
+              />
             )}
           </CardContent>
         </Card>
@@ -220,6 +240,18 @@ export default function ProgressTab({
       {periods.length > 0 && (
         <Card>
           <CardHeader>
+            <CardTitle>{t.periodSummary.title}</CardTitle>
+            <CardDescription>{t.periodSummary.description}</CardDescription>
+          </CardHeader>
+          <CardContent className="px-0">
+            <PeriodSummaryTable id={SUMMARY_TABLE_ID} summary={summary} dataDate={dataDate} />
+          </CardContent>
+        </Card>
+      )}
+
+      {periods.length > 0 && (
+        <Card>
+          <CardHeader>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <CardTitle>{t.progress.matrixTitle}</CardTitle>
@@ -242,19 +274,35 @@ export default function ProgressTab({
           </CardHeader>
 
           <CardContent className="px-0">
-            <div className="overflow-x-auto">
+            <div className="relative">
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-card to-transparent"
+              />
+              <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
+                  <MonthBandRow header={header} leadingLabel={t.schedule.line} />
                   <tr className="border-b">
                     <th className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium">
-                      {t.schedule.line}
+                      <span className="sr-only">{t.schedule.line}</span>
                     </th>
-                    {periods.map((period) => (
-                      <th key={period.id} className="min-w-24 px-2 py-2 text-right font-medium">
-                        {period.label ?? `#${period.periodIndex}`}
-                        {period.status === "locked" && (
+                    {header.columns.map((column) => (
+                      <th
+                        key={column.period.id}
+                        scope="col"
+                        aria-current={column.isCurrent ? "true" : undefined}
+                        className={`min-w-24 px-2 py-2 text-right font-medium ${
+                          column.isCurrent ? "border-b-2 border-b-[var(--chart-3)]" : ""
+                        }`}
+                      >
+                        <span className="block tabular-nums">{column.number}</span>
+                        <span className="block text-xs font-normal text-muted-foreground tabular-nums">
+                          {column.range}
+                        </span>
+                        {(column.isCurrent || column.period.status === "locked") && (
                           <span className="block text-xs font-normal text-muted-foreground">
-                            {t.progress.locked}
+                            {column.isCurrent ? t.periodSummary.current : t.progress.locked}
                           </span>
                         )}
                       </th>
@@ -283,7 +331,7 @@ export default function ProgressTab({
                         </span>
                       </th>
 
-                      {periods.map((period) => {
+                      {header.columns.map(({ period, accessibleName }) => {
                         const key = cellKey(row.leaf.id, period.id);
                         const editable = canEdit && period.status !== "locked";
 
@@ -295,7 +343,7 @@ export default function ProgressTab({
                                 min={0}
                                 step="any"
                                 value={cellValue(row.leaf.id, period.id)}
-                                aria-label={`${row.leaf.code} - ${period.label ?? period.periodIndex}`}
+                                aria-label={`${row.leaf.code} - ${accessibleName}`}
                                 className={`h-8 text-right tabular-nums ${
                                   drafts.has(key) ? "border-[var(--chart-3)]" : ""
                                 }`}
@@ -317,6 +365,7 @@ export default function ProgressTab({
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           </CardContent>
         </Card>

@@ -1,4 +1,5 @@
 import { createContext } from "@DashboardV2/api/context";
+import { recordActivity } from "@DashboardV2/api/lib/activity";
 import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
 import { auth } from "@DashboardV2/auth";
@@ -8,9 +9,16 @@ import { notePhoto, project, projectMember, projectNote } from "@DashboardV2/db/
 import { trustedOrigins } from "@DashboardV2/env/server";
 import { trpcServer } from "@hono/trpc-server";
 import { and, eq, exists, sql } from "drizzle-orm";
-import { Hono } from "hono";
+import { Hono, type Context as HonoRequestContext } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+
+/**
+ * Mirrors MAX_IMPORT_BYTES in ./boq-import, which cannot be imported here — that
+ * module pulls exceljs, and naming any of its exports at the top level puts
+ * exceljs back in the boot graph. See the note on the lazy imports below.
+ */
+const MAX_IMPORT_BYTES = 4 * 1024 * 1024;
 
 const app = new Hono();
 
@@ -273,39 +281,36 @@ app.get("/projects/export", async (c) => {
 });
 
 /**
- * One project as a spreadsheet: summary, BoQ, plan, progress, S-curve, tickets
- * and — for those who can see the Team tab — the roster.
+ * Building a BoQ from a spreadsheet: preview, commit, and the error report.
+ *
+ * Plain Hono rather than tRPC for the same reason as the photo upload and the
+ * export — the request body is a binary file, which tRPC's JSON envelope would
+ * turn into base64 in both directions.
  *
  * Access is decided by re-running `projectAccessFilter` as part of the lookup
  * rather than by checking the company after fetching. That filter is the same
- * one the project list and the portfolio export use, so this route cannot drift
- * from them, and it carries the project_member rule for role=user for free. A
- * project outside the caller's scope simply returns no row, and the 404 below
- * is indistinguishable from one that does not exist — which is the rule
- * lib/scope.ts sets out: FORBIDDEN would confirm another tenant's project to
- * whoever asked.
+ * one the project list and the portfolio export use, so these routes cannot
+ * drift from them, and it carries the project_member rule for role=user for
+ * free. A project outside the caller's scope returns no row and the 404 is
+ * indistinguishable from one that does not exist — the rule lib/scope.ts sets
+ * out, since FORBIDDEN would confirm another tenant's project to whoever asked.
  *
- * assertProjectAccess would have been the obvious call here and is the wrong
- * one: it signals by throwing TRPCError, which outside the tRPC pipeline
- * escapes as a bare 500.
+ * assertProjectAccess would have been the obvious call and is the wrong one: it
+ * signals by throwing TRPCError, which outside the tRPC pipeline escapes as a
+ * bare 500.
  */
-app.get("/projects/:id/export", async (c) => {
+async function requireProjectWrite(c: HonoRequestContext, projectId: string) {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session?.user) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-  if (!hasPermission(roleOf(session.user), "project:read")) {
-    return c.json({ error: "Not found" }, 404);
+  if (!session?.user) return { error: "Unauthorized", status: 401 as const };
+  if (!hasPermission(roleOf(session.user), "project:write")) {
+    return { error: "Not found", status: 404 as const };
   }
 
   const scope = await resolveCompany(session.user, c.req.raw.headers);
-  if ("error" in scope) {
-    return c.json({ error: scope.error }, scope.status);
-  }
+  if ("error" in scope) return { error: scope.error, status: scope.status };
 
-  const projectId = c.req.param("id");
   const [visible] = await db
-    .select({ id: project.id })
+    .select({ code: project.code, name: project.name })
     .from(project)
     .where(
       and(
@@ -313,30 +318,112 @@ app.get("/projects/:id/export", async (c) => {
         projectAccessFilter({ companyId: scope.companyId, session: { user: session.user } }),
       ),
     );
-  if (!visible) {
-    return c.json({ error: "Not found" }, 404);
+  if (!visible) return { error: "Not found", status: 404 as const };
+
+  return { session, companyId: scope.companyId, project: visible };
+}
+
+/** Reads the uploaded workbook, refusing anything past the body limit. */
+async function readUpload(bytes: Uint8Array) {
+  if (bytes.byteLength === 0) return { error: "Empty upload", status: 400 as const };
+  if (bytes.byteLength > MAX_IMPORT_BYTES) {
+    return { error: "The workbook exceeds the 4 MB upload limit", status: 413 as const };
+  }
+  return { bytes };
+}
+
+app.post("/projects/:id/boq-import/preview", async (c) => {
+  const projectId = c.req.param("id");
+  const access = await requireProjectWrite(c, projectId);
+  if ("error" in access) return c.json({ error: access.error }, access.status);
+
+  const upload = await readUpload(new Uint8Array(await c.req.arrayBuffer()));
+  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
+
+  // Lazy for the same reason as the portfolio export — this module pulls
+  // exceljs, and an eager import puts it back in the boot graph.
+  const { previewWorkbook } = await import("./boq-import");
+  try {
+    return c.json(await previewWorkbook(upload.bytes));
+  } catch {
+    // A corrupt or non-xlsx upload throws from deep inside the zip reader; the
+    // message is about central directories and helps nobody.
+    return c.json({ error: "That file could not be read as an .xlsx workbook." }, 400);
+  }
+});
+
+app.post("/projects/:id/boq-import/commit", async (c) => {
+  const projectId = c.req.param("id");
+  const access = await requireProjectWrite(c, projectId);
+  if ("error" in access) return c.json({ error: access.error }, access.status);
+
+  const form = await c.req.parseBody();
+  const file = form.file;
+  if (!(file instanceof File)) {
+    return c.json({ error: "No workbook was attached." }, 400);
   }
 
-  // Lazy for the same reason as the portfolio export above — this module pulls
-  // exceljs, and an eager import puts it back in the boot graph.
-  const { buildProjectDetailWorkbook } = await import("./project-detail-export");
+  const upload = await readUpload(new Uint8Array(await file.arrayBuffer()));
+  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
 
-  const built = await buildProjectDetailWorkbook({
+  let plan: { sheetName: string; headerRow: number; mapping: unknown };
+  try {
+    plan = JSON.parse(String(form.plan));
+  } catch {
+    return c.json({ error: "The column mapping could not be read." }, 400);
+  }
+
+  const { commitImport } = await import("./boq-import");
+  const outcome = await commitImport({
     projectId,
-    locale: c.req.query("locale") === "id" ? "id" : "en",
-    // Mirrors the condition that renders the Team tab in
-    // apps/web/src/app/(app)/projects/[id]/page.tsx. The workbook must not be
-    // the way around a permission the UI enforces.
-    includeTeam: hasPermission(roleOf(session.user), "member:manage"),
+    bytes: upload.bytes,
+    filename: file.name || "workbook.xlsx",
+    sheetName: plan.sheetName,
+    headerRow: plan.headerRow,
+    mapping: plan.mapping as Parameters<typeof commitImport>[0]["mapping"],
+    actor: { id: access.session.user.id, name: access.session.user.name },
   });
 
-  if (!built) {
+  if (outcome.status === "rejected") {
+    return c.json({ error: outcome.message }, 409);
+  }
+  if (outcome.status === "failed") {
+    // 422, not 400: the request was well-formed and the file was readable — the
+    // rows in it were not. Nothing was written beyond the record of the attempt.
+    return c.json(outcome, 422);
+  }
+
+  await recordActivity(
+    { session: access.session, companyId: access.companyId },
+    {
+      action: "imported",
+      entityType: "boq",
+      entityId: outcome.versionId,
+      entityLabel: `${access.project.code} - ${access.project.name}`,
+      detail: `Rev ${outcome.versionNo} - ${outcome.rowsImported} line(s) from ${file.name}`,
+    },
+  );
+
+  return c.json(outcome);
+});
+
+app.get("/projects/:id/boq-import/:importId/errors.csv", async (c) => {
+  const projectId = c.req.param("id");
+  const access = await requireProjectWrite(c, projectId);
+  if ("error" in access) return c.json({ error: access.error }, access.status);
+
+  const { errorReportCsv, getImportRecord } = await import("./boq-import");
+  const record = await getImportRecord(c.req.param("importId"));
+  // The id alone is not authority to read it — the import must belong to the
+  // project whose access was just checked.
+  if (!record || record.projectId !== projectId) {
     return c.json({ error: "Not found" }, 404);
   }
 
-  return c.body(built.body, 200, {
-    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "Content-Disposition": `attachment; filename="${built.filename}"`,
+  const errors = record.errors ? (JSON.parse(record.errors) as Parameters<typeof errorReportCsv>[0]) : [];
+  return c.body(errorReportCsv(errors), 200, {
+    "Content-Type": "text/csv; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${record.filename.replace(/\.[^.]+$/, "")}-errors.csv"`,
     "Cache-Control": "no-store",
   });
 });

@@ -81,6 +81,7 @@ import {
   Sun03Icon as HiSun03,
   Tick02Icon as HiTick02,
   TranslateIcon as HiTranslate,
+  Upload01Icon as HiUpload01,
   UserAdd01Icon as HiUserAdd01,
   UserIcon as HiUser,
   UserMultipleIcon as HiUserMultiple,
@@ -193,6 +194,7 @@ export const Trash2 = icon(HiDelete02, "Trash2");
 export const TrendingUp = icon(HiChartUp, "TrendingUp");
 export const TriangleAlert = icon(HiAlert02, "TriangleAlert");
 export const TriangleAlertIcon = icon(HiAlert02, "TriangleAlertIcon");
+export const Upload = icon(HiUpload01, "Upload");
 export const UserPlus = icon(HiUserAdd01, "UserPlus");
 export const UserRound = icon(HiUser, "UserRound");
 export const Users = icon(HiUserMultiple, "Users");

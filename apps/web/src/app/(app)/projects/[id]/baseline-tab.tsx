@@ -21,7 +21,7 @@ import {
 } from "@DashboardV2/ui/components/card";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, CircleAlert, Lock } from "@DashboardV2/ui/components/icons";
+import { CheckCircle2, CircleAlert, Lock, Upload } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
@@ -37,6 +37,7 @@ import {
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
+import BoqImportDialog from "./boq-import-dialog";
 import BoqTab from "./boq-tab";
 import ScheduleTab from "./schedule-tab";
 
@@ -52,6 +53,7 @@ export default function BaselineTab({
 }) {
   const t = useT();
   const [step, setStep] = useState<BaselineStep>("boq");
+  const [importing, setImporting] = useState(false);
   const versionsQuery = useQuery(trpc.boq.listVersions.queryOptions({ projectId }));
 
   if (versionsQuery.isPending) return <Skeleton className="h-64 w-full" />;
@@ -91,7 +93,20 @@ export default function BaselineTab({
                       : t.baseline.activeHint}
                 </CardDescription>
               </div>
-              <div className="flex flex-wrap gap-1 rounded-lg bg-muted p-1">
+              <div className="flex flex-wrap items-center gap-2">
+                {/*
+                 * Offered only while no draft is open. The import creates a
+                 * draft revision, and a project may hold exactly one — so
+                 * showing the button beside an existing draft would promise
+                 * something the server is right to refuse.
+                 */}
+                {canEdit && !setupMode && (
+                  <Button variant="outline" size="sm" onClick={() => setImporting(true)}>
+                    <Upload />
+                    {t.boqImport.trigger}
+                  </Button>
+                )}
+                <div className="flex flex-wrap gap-1 rounded-lg bg-muted p-1">
                 <StepButton
                   number={1}
                   label={t.baseline.stepBoq}
@@ -112,11 +127,14 @@ export default function BaselineTab({
                     onClick={() => setStep("review")}
                   />
                 )}
+                </div>
               </div>
             </div>
           </CardHeader>
         </Card>
       )}
+
+      <BoqImportDialog open={importing} onOpenChange={setImporting} projectId={projectId} />
 
       {step === "boq" && (
         <BoqTab

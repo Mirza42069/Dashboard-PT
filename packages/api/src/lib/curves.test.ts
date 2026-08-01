@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import {
+  buildPeriodSummary,
   computeActualCurve,
   computePlannedCurve,
   distributionMap,
@@ -151,4 +152,94 @@ test("nested BoQ trees expose only their deepest leaves to scheduling", () => {
   const built = scheduleRows(items);
   expect(built.map((row) => row.leaf.id)).toEqual(["a", "b"]);
   expect(built.map((row) => row.section)).toEqual(["Structure", "Structure"]);
+});
+
+/* ------------------------------------------------ the period summary table */
+
+/**
+ * The summary reproduces the block of rows every contractor's S-curve sheet
+ * carries under its grid — planned and actual per period, both cumulatives, and
+ * the two deviations. The rule that matters most is the last one: an
+ * unreported period must stay unreported all the way through, because a zero
+ * there draws a collapse that did not happen.
+ */
+
+const summaryPeriods = [
+  { id: "p1", startDate: "2026-01-01", endDate: "2026-01-07" },
+  { id: "p2", startDate: "2026-01-08", endDate: "2026-01-14" },
+  { id: "p3", startDate: "2026-01-15", endDate: "2026-01-21" },
+];
+
+const evenPlan = distributionMap([
+  { boqItemId: "a", periodId: "p1", plannedPct: 30 },
+  { boqItemId: "a", periodId: "p2", plannedPct: 30 },
+  { boqItemId: "a", periodId: "p3", plannedPct: 40 },
+]);
+
+test("per-period actual is the delta of the cumulative readings", () => {
+  const entries = [entry("a", "p1", 20, 20), entry("a", "p2", 50, 50), entry("a", "p3", 90, 90)];
+  const summary = buildPeriodSummary(rows, summaryPeriods, evenPlan, entries, "2026-01-21");
+
+  expect(summary.map((row) => row.actualPeriod)).toEqual([20, 30, 40]);
+  expect(summary.map((row) => row.actualCumulative)).toEqual([20, 50, 90]);
+  expect(summary.map((row) => row.plannedPeriod)).toEqual([30, 30, 40]);
+  expect(summary.map((row) => row.plannedCumulative)).toEqual([30, 60, 100]);
+});
+
+test("an unreported period is null in every actual and deviation column, never zero", () => {
+  // Reporting stops after p2. p3 must not read as a week of no work.
+  const entries = [entry("a", "p1", 20, 20), entry("a", "p2", 50, 50)];
+  const summary = buildPeriodSummary(rows, summaryPeriods, evenPlan, entries, "2026-01-14");
+
+  const last = summary[2]!;
+  expect(last.actualPeriod).toBeNull();
+  expect(last.actualCumulative).toBeNull();
+  expect(last.deviationPeriod).toBeNull();
+  expect(last.deviationCumulative).toBeNull();
+  // The plan is known for every period regardless — it is the baseline.
+  expect(last.plannedCumulative).toBe(100);
+});
+
+test("a reported zero is a zero, not a gap", () => {
+  const entries = [entry("a", "p1", 0, 0), entry("a", "p2", 0, 0), entry("a", "p3", 0, 0)];
+  const summary = buildPeriodSummary(rows, summaryPeriods, evenPlan, entries, "2026-01-21");
+
+  expect(summary.map((row) => row.actualCumulative)).toEqual([0, 0, 0]);
+  expect(summary.map((row) => row.actualPeriod)).toEqual([0, 0, 0]);
+  // Behind by the whole plan, which is exactly what a zero reading means.
+  expect(summary.map((row) => row.deviationCumulative)).toEqual([-30, -60, -100]);
+});
+
+test("deviation is negative when behind and positive when ahead", () => {
+  const entries = [entry("a", "p1", 40, 40), entry("a", "p2", 45, 45), entry("a", "p3", 100, 100)];
+  const summary = buildPeriodSummary(rows, summaryPeriods, evenPlan, entries, "2026-01-21");
+
+  expect(summary[0]!.deviationCumulative).toBe(10); // ahead
+  expect(summary[1]!.deviationCumulative).toBe(-15); // behind
+  expect(summary[2]!.deviationCumulative).toBe(0); // on plan
+  expect(summary[1]!.deviationPeriod).toBe(-25); // 5 done against 30 planned
+});
+
+test("the current period is the one holding the data date, and only that one", () => {
+  const entries = [entry("a", "p1", 20, 20), entry("a", "p2", 50, 50)];
+  const summary = buildPeriodSummary(rows, summaryPeriods, evenPlan, entries, "2026-01-14");
+
+  expect(summary.map((row) => row.isCurrent)).toEqual([false, true, false]);
+});
+
+test("no data date means no current period, rather than defaulting to the first", () => {
+  const summary = buildPeriodSummary(rows, summaryPeriods, evenPlan, [], null);
+  expect(summary.some((row) => row.isCurrent)).toBe(false);
+});
+
+test("the summary agrees with the curves it is built from", () => {
+  const entries = [entry("a", "p1", 20, 20), entry("a", "p2", 50, 50)];
+  const summary = buildPeriodSummary(rows, summaryPeriods, evenPlan, entries, "2026-01-14");
+  const planned = computePlannedCurve(rows, summaryPeriods, evenPlan);
+  const actual = computeActualCurve(rows, summaryPeriods, entries, "2026-01-14");
+
+  // The table and the chart must be the same numbers — that is the whole
+  // reason buildPeriodSummary composes these rather than recomputing them.
+  expect(summary.map((row) => row.plannedCumulative)).toEqual(planned.cumulative);
+  expect(summary.map((row) => row.actualCumulative)).toEqual(actual.cumulative);
 });

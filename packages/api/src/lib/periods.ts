@@ -80,3 +80,77 @@ export function generatePeriods(
 
   return periods;
 }
+
+/** A run of consecutive periods that belong to the same calendar month. */
+export type MonthGroup = {
+  /** "2026-05". Stable and sortable; the display name is formatted per locale. */
+  monthKey: string;
+  /** Index into the periods array the run starts at. */
+  startIndex: number;
+  /** How many periods the run covers — the header cell's colSpan. */
+  span: number;
+};
+
+/**
+ * Which month a period belongs to, when it straddles two.
+ *
+ * By the month holding **most of its days**, ties going to the month it starts
+ * in. A week running 31 May - 6 June is a week of June work with a Sunday
+ * attached, and filing it under May would put a bar in the wrong month band for
+ * the sake of one day.
+ *
+ * This is not an invention: it is the rule the reference workbook already
+ * follows. Its week 5 (31 May - 6 Jun) sits under JUNI and its week 13
+ * (26 Jul - 1 Aug) under JULI, both of which fall out of counting days and
+ * neither of which falls out of using the start date.
+ */
+export function monthKeyOf(period: { startDate: string; endDate: string }): string {
+  const start = parse(period.startDate);
+  const end = parse(period.endDate);
+  const days = new Map<string, number>();
+
+  // Bounded by MAX_SPAN_DAYS so a corrupt end date cannot spin here. A monthly
+  // period is at most 31 days; anything past 62 spans three months and has no
+  // meaningful "majority" anyway, so the start month is the honest answer.
+  const MAX_SPAN_DAYS = 62;
+  for (let cursor = start, guard = 0; cursor <= end && guard < MAX_SPAN_DAYS; guard++) {
+    const key = iso(cursor).slice(0, 7);
+    days.set(key, (days.get(key) ?? 0) + 1);
+    cursor = addDays(cursor, 1);
+  }
+
+  const startKey = period.startDate.slice(0, 7);
+  let best = startKey;
+  let bestCount = days.get(startKey) ?? 0;
+  for (const [key, count] of days) {
+    if (count > bestCount) {
+      best = key;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/**
+ * Groups periods into the month bands a schedule grid puts above its columns.
+ *
+ * Consecutive runs, not a bucket per month: the grid draws these as spanning
+ * header cells, so what it needs is where each run starts and how wide it is.
+ */
+export function groupPeriodsByMonth(
+  periods: { startDate: string; endDate: string }[],
+): MonthGroup[] {
+  const groups: MonthGroup[] = [];
+
+  periods.forEach((period, index) => {
+    const monthKey = monthKeyOf(period);
+    const last = groups[groups.length - 1];
+    if (last && last.monthKey === monthKey) {
+      last.span++;
+      return;
+    }
+    groups.push({ monthKey, startIndex: index, span: 1 });
+  });
+
+  return groups;
+}

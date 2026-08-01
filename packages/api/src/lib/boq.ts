@@ -23,12 +23,13 @@ import { assertMember, type ProjectScopeCtx } from "./scope";
  */
 
 /**
- * How far the leaf weights may drift from 100% and still be baselined. Weights
- * are stored to six decimal places and rounding across a few hundred lines can
- * legitimately leave a fraction on the table; anything past half a percent is a
- * real modelling error, not rounding.
+ * How far the leaf weights may drift from 100% and still be baselined.
+ *
+ * The same number, and the same reasoning, as the row-total tolerance the
+ * schedule uses — so it is defined once, in ./schedule-plan, which the
+ * spreadsheet importer can reach without importing the database.
  */
-export const WEIGHT_TOLERANCE = 0.5;
+export { PLAN_TOLERANCE as WEIGHT_TOLERANCE } from "./schedule-plan";
 
 /**
  * A *leaf* is a line with no live children. Weight, planned distribution and
@@ -206,6 +207,8 @@ export function serializeItem(row: typeof boqItem.$inferSelect) {
     weightSource: row.weightSource,
     distribution: row.distribution,
     progressMode: row.progressMode,
+    plannedStartPeriodIndex: row.plannedStartPeriodIndex,
+    plannedFinishPeriodIndex: row.plannedFinishPeriodIndex,
     sortOrder: row.sortOrder,
   };
 }

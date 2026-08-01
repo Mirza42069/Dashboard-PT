@@ -5,6 +5,7 @@ import {
   CartesianGrid,
   ComposedChart,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -26,6 +27,11 @@ import { useT } from "@/i18n/provider";
  * - Planned is a dashed area, actual a solid line. The two series are told
  *   apart by shape as well as by hue, so the chart survives greyscale printing
  *   and the common colour deficiencies.
+ *
+ * - The drawing itself is hidden from assistive technology and the figures are
+ *   read from the summary table below instead, via `describedById`. An SVG of
+ *   two polylines has no useful reading order; the table is the same data in a
+ *   form that does.
  */
 
 export type CurvePoint = {
@@ -34,11 +40,26 @@ export type CurvePoint = {
   actual: number | null;
 };
 
-export default function SCurveChart({ data }: { data: CurvePoint[] }) {
+export default function SCurveChart({
+  data,
+  /** id of the table carrying these figures — the chart's text equivalent. */
+  describedById,
+  /** Marks the data date: everything right of it is plan, not record. */
+  dataDateLabel,
+}: {
+  data: CurvePoint[];
+  describedById?: string;
+  dataDateLabel?: string | null;
+}) {
   const t = useT();
 
   return (
-    <div className="h-72 w-full">
+    <div
+      className="h-72 w-full"
+      role="img"
+      aria-label={t.progress.chartLabel}
+      aria-describedby={describedById}
+    >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
           <defs>
@@ -77,6 +98,26 @@ export default function SCurveChart({ data }: { data: CurvePoint[] }) {
               String(name),
             ]}
           />
+
+          {/*
+           * The data date. Without it the actual line simply stops and reads as
+           * a project that halted, rather than one whose reporting has caught
+           * up to a particular Saturday. Drawn behind both series so it never
+           * obscures a reading.
+           */}
+          {dataDateLabel && (
+            <ReferenceLine
+              x={dataDateLabel}
+              stroke="var(--muted-foreground)"
+              strokeDasharray="2 3"
+              label={{
+                value: t.progress.dataDateMarker,
+                position: "insideTopRight",
+                fontSize: 11,
+                fill: "var(--muted-foreground)",
+              }}
+            />
+          )}
 
           <Area
             type="monotone"

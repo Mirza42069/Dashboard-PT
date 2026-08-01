@@ -41,6 +41,16 @@ function createFormatters(intlLocale: string) {
 
   const number = new Intl.NumberFormat(intlLocale, { maximumFractionDigits: 2 });
 
+  /** "2 Mei" / "May 2" — no year, for column headers where the year is context. */
+  const dayMonth = new Intl.DateTimeFormat(intlLocale, {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
+
+  /** "Mei" / "May" — the month band above a schedule grid. */
+  const monthOnly = new Intl.DateTimeFormat(intlLocale, { month: "long", timeZone: "UTC" });
+
   /** Keeps the minus outside the symbol: -Rp50.000, not Rp-50.000. */
   const withPrefix = (value: number, format: Intl.NumberFormat) =>
     `${value < 0 ? "-" : ""}${CURRENCY_PREFIX}${format.format(Math.abs(value))}`;
@@ -80,6 +90,26 @@ function createFormatters(intlLocale: string) {
         day: "numeric",
         timeZone: "UTC",
       });
+    },
+
+    /**
+     * "2 – 9 Mei" / "May 2 – 9". `formatRange` is what collapses the repeated
+     * month rather than printing it twice, and it does so per locale — the
+     * Indonesian form puts the month last, so a hand-built "2 Mei – 9 Mei"
+     * would be both longer and wrong.
+     */
+    formatDateRange(start: string | null | undefined, end: string | null | undefined) {
+      if (!start || !end) return "—";
+      const from = new Date(`${start}T00:00:00Z`);
+      const to = new Date(`${end}T00:00:00Z`);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return "—";
+      return dayMonth.formatRange(from, to);
+    },
+
+    /** The month a period sits in, from its "YYYY-MM" key. */
+    formatMonthKey(monthKey: string) {
+      const date = new Date(`${monthKey}-01T00:00:00Z`);
+      return Number.isNaN(date.getTime()) ? monthKey : monthOnly.format(date);
     },
 
     /** Timestamps (createdAt etc.) are full ISO strings; local time is correct. */

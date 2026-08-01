@@ -182,6 +182,87 @@ export function computeActualCurve(
 }
 
 /**
+ * One row of the plan-versus-actual summary — the six figures a contractor's
+ * S-curve sheet carries under its grid, per period:
+ *
+ *   BOBOT RENCANA MINGGUAN    plannedPeriod
+ *   BOBOT AKTUAL MINGGUAN     actualPeriod
+ *   BOBOT RENCANA KUMULATIF   plannedCumulative
+ *   BOBOT AKTUAL KUMULATIF    actualCumulative
+ *   DEVIASI MINGGUAN          deviationPeriod
+ *   DEVIASI KUMULATIF         deviationCumulative
+ */
+export type PeriodSummary<P> = {
+  period: P;
+  plannedPeriod: number;
+  plannedCumulative: number;
+  /** Null where nothing has been reported — never zero. See the note below. */
+  actualPeriod: number | null;
+  actualCumulative: number | null;
+  deviationPeriod: number | null;
+  deviationCumulative: number | null;
+  /** The period the data date falls inside. False everywhere when there is no data date. */
+  isCurrent: boolean;
+};
+
+/**
+ * The summary table and the S-curve, from one pass over the same inputs.
+ *
+ * Composed from computePlannedCurve and computeActualCurve rather than
+ * recomputing anything: the table sits directly beneath the chart, and two
+ * implementations of "how far along are we" would eventually disagree in front
+ * of the person who has to sign the number.
+ *
+ * The per-period actual is a *delta of the cumulative*, because that is the
+ * only thing the readings can honestly produce — they are recorded cumulative
+ * to date. Where either end of the delta is unknown the result is null, not
+ * zero: an unreported fortnight is not a fortnight of no work, and rendering it
+ * as 0.0 would put a visible dip in the curve that nobody's site actually had.
+ *
+ * (In practice the nulls from computeActualCurve are always a trailing run —
+ * it fills every period up to the last reading and stops — so the delta never
+ * needs to bridge a hole. The check is still written to handle one, because a
+ * change to the carry-forward rules should not silently start inventing
+ * increments here.)
+ */
+export function buildPeriodSummary<P extends PeriodLike & { startDate: string }>(
+  rows: { leaf: LeafLike }[],
+  periods: P[],
+  cells: Map<string, number>,
+  entries: EntryLike[],
+  dataDate: string | null,
+): PeriodSummary<P>[] {
+  const planned = computePlannedCurve(rows, periods, cells);
+  const actual = computeActualCurve(rows, periods, entries, dataDate);
+
+  return periods.map((period, index) => {
+    const actualCumulative = actual.cumulative[index] ?? null;
+    const previousCumulative = index === 0 ? 0 : (actual.cumulative[index - 1] ?? null);
+
+    const actualPeriod =
+      actualCumulative === null || previousCumulative === null
+        ? null
+        : actualCumulative - previousCumulative;
+
+    const plannedPeriod = planned.perPeriod[index] ?? 0;
+    const plannedCumulative = planned.cumulative[index] ?? 0;
+
+    return {
+      period,
+      plannedPeriod,
+      plannedCumulative,
+      actualPeriod,
+      actualCumulative,
+      deviationPeriod: actualPeriod === null ? null : actualPeriod - plannedPeriod,
+      deviationCumulative:
+        actualCumulative === null ? null : actualCumulative - plannedCumulative,
+      isCurrent:
+        dataDate !== null && period.startDate <= dataDate && dataDate <= period.endDate,
+    };
+  });
+}
+
+/**
  * The headline figures, anchored to the last period that has an actual reading.
  *
  * Reading planned at a later period than actual is the single easiest way to

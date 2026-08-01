@@ -3,6 +3,7 @@ import {
   DISTRIBUTION_TYPES,
   PROGRESS_MODES,
   WEIGHT_SOURCES,
+  boqImport,
   boqItem,
   boqItemDistribution,
   boqVersion,
@@ -245,6 +246,8 @@ export const boqRouter = router({
               weightSource: item.weightSource,
               distribution: item.distribution,
               progressMode: item.progressMode,
+              plannedStartPeriodIndex: item.plannedStartPeriodIndex,
+              plannedFinishPeriodIndex: item.plannedFinishPeriodIndex,
               sortOrder: item.sortOrder,
             })),
           ),
@@ -468,6 +471,37 @@ export const boqRouter = router({
       });
 
       return { version: serializeVersion(activated) };
+    }),
+
+  /**
+   * The spreadsheet imports this project has seen — filename, who ran it, when,
+   * and how it went. Read-only history; the import itself is a plain HTTP route
+   * because it carries a binary body (apps/server/src/boq-import.ts).
+   */
+  listImports: companyPermissionProcedure("project:read")
+    .input(z.object({ projectId: z.string().min(1), limit: z.number().int().min(1).max(50).default(10) }))
+    .query(async ({ ctx, input }) => {
+      await assertProjectAccess(ctx, input.projectId);
+
+      const rows = await db
+        .select({
+          id: boqImport.id,
+          filename: boqImport.filename,
+          sheetName: boqImport.sheetName,
+          importedByName: boqImport.importedByName,
+          status: boqImport.status,
+          rowsImported: boqImport.rowsImported,
+          errorCount: boqImport.errorCount,
+          createdAt: boqImport.createdAt,
+          versionNo: boqVersion.versionNo,
+        })
+        .from(boqImport)
+        .leftJoin(boqVersion, eq(boqVersion.id, boqImport.boqVersionId))
+        .where(eq(boqImport.projectId, input.projectId))
+        .orderBy(desc(boqImport.createdAt))
+        .limit(input.limit);
+
+      return rows;
     }),
 
   /** Adds a section (no parentId) or a line under one. */

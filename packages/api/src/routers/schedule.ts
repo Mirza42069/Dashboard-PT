@@ -18,9 +18,20 @@ import { getVersion, leafPredicate } from "../lib/boq";
 import { assertProjectAccess, type ProjectScopeCtx } from "../lib/scope";
 import { PeriodRangeError, generatePeriods } from "../lib/periods";
 import { toAmount } from "../lib/money";
+import { planCells, validatePlanWindow } from "../lib/schedule-plan";
 
 /** Percentages are stored to six decimals, matching the column. */
 const toPctString = (value: number) => value.toFixed(6);
+
+/**
+ * Ceiling on the planned cells one mutation may write.
+ *
+ * A batch goes to Neon as a single HTTP request, so an unbounded bulk apply is
+ * a request-body limit waiting to be hit — 500 lines across 600 periods is
+ * 300,000 rows. Well above any real schedule, and low enough to fail with a
+ * sentence rather than a truncated request.
+ */
+const MAX_PLAN_CELLS = 20_000;
 
 async function requireScheduleDraft(ctx: ProjectScopeCtx, versionId: string) {
   const version = await getVersion(ctx, versionId);
@@ -357,15 +368,42 @@ export const scheduleRouter = router({
     }),
 
   /**
-   * Spreads an item's plan evenly across every period, as a starting point that
-   * is quicker to correct than an empty row is to fill. The remainder lands on
-   * the final period so the row totals exactly 100.
+   * Sets the planning window — start period and finish period — on one or many
+   * lines, and optionally spreads each line's plan evenly across it.
+   *
+   * This is the fast path the whole tab exists for. Filling a 17-week schedule
+   * by hand is 17 numbers per line; stating "weeks 3 to 17" is two, and the
+   * even spread is a starting point that is quicker to correct than an empty
+   * row is to fill.
+   *
+   * `mode: "window"` records the window without touching the cells, which is
+   * what preserving manual fine-tuning needs: someone who has hand-adjusted a
+   * row and then realises the finish date moved should not lose the adjustment
+   * to a silent redistribution.
    */
-  distributeEvenly: companyPermissionProcedure("project:write")
-    .input(z.object({ versionId: z.string().min(1), boqItemId: z.string().min(1) }))
+  setItemPlan: companyPermissionProcedure("project:write")
+    .input(
+      z.object({
+        versionId: z.string().min(1),
+        items: z
+          .array(
+            z.object({
+              boqItemId: z.string().min(1),
+              /** Both null clears the window (and, in "even" mode, the row). */
+              startPeriodIndex: z.number().int().nullable(),
+              finishPeriodIndex: z.number().int().nullable(),
+            }),
+          )
+          .min(1)
+          .max(500),
+        mode: z.enum(["even", "window"]).default("even"),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const version = await requireScheduleDraft(ctx, input.versionId);
-      await assertLeavesOfVersion(input.versionId, [input.boqItemId]);
+
+      const itemIds = [...new Set(input.items.map((item) => item.boqItemId))];
+      await assertLeavesOfVersion(input.versionId, itemIds);
 
       const periods = await listPeriodsFor(version.projectId);
       if (periods.length === 0) {
@@ -375,47 +413,215 @@ export const scheduleRouter = router({
         });
       }
 
-      const share = Number((100 / periods.length).toFixed(6));
-      const cells = periods.map((period, index) => ({
-        boqItemId: input.boqItemId,
-        periodId: period.id,
-        plannedPct:
-          index === periods.length - 1
-            ? Number((100 - share * (periods.length - 1)).toFixed(6))
-            : share,
-      }));
+      const periodIndexes = periods.map((period) => period.periodIndex);
+      const periodIdByIndex = new Map(periods.map((period) => [period.periodIndex, period.id]));
 
-      await runBatch([
-        db
-          .insert(boqItemDistribution)
-          .values(
-            cells.map((cell) => ({
-              boqItemId: cell.boqItemId,
-              periodId: cell.periodId,
+      // Every window is checked before anything is written. A bulk apply that
+      // took the first eight lines and rejected the ninth would leave the user
+      // to work out which eight moved.
+      const windows = input.items.map((item) => {
+        const hasWindow = item.startPeriodIndex !== null && item.finishPeriodIndex !== null;
+        if (!hasWindow) {
+          if (item.startPeriodIndex !== null || item.finishPeriodIndex !== null) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "A planning window needs both a start and a finish period.",
+            });
+          }
+          return { boqItemId: item.boqItemId, window: null };
+        }
+
+        const window = {
+          startIndex: item.startPeriodIndex as number,
+          finishIndex: item.finishPeriodIndex as number,
+        };
+        const problem = validatePlanWindow(window, periodIndexes);
+        if (problem?.kind === "finish_before_start") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "The finish period cannot come before the start period.",
+          });
+        }
+        if (problem?.kind === "out_of_range") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Periods run from ${problem.firstIndex} to ${problem.lastIndex}.`,
+          });
+        }
+        return { boqItemId: item.boqItemId, window };
+      });
+
+      const statements: Parameters<typeof runBatch>[0] = [];
+
+      if (input.mode === "even") {
+        // The whole row is rewritten, so the old cells go in one statement
+        // rather than as an (item, period) pair list — at 500 lines against 600
+        // periods that list would be 300,000 tuples in a single query.
+        statements.push(
+          db.delete(boqItemDistribution).where(inArray(boqItemDistribution.boqItemId, itemIds)),
+        );
+
+        const values = windows.flatMap(({ boqItemId, window }) => {
+          if (!window) return [];
+          return planCells(periodIndexes, window)
+            .filter((cell) => cell.plannedPct > 0)
+            .map((cell) => ({
+              boqItemId,
+              periodId: periodIdByIndex.get(cell.periodIndex)!,
               plannedPct: toPctString(cell.plannedPct),
-            })),
-          )
-          .onConflictDoUpdate({
-            target: [boqItemDistribution.boqItemId, boqItemDistribution.periodId],
-            set: { plannedPct: sql`excluded.planned_pct` },
-          }),
-        db.update(boqItem).set({ distribution: "linear" }).where(eq(boqItem.id, input.boqItemId)),
-      ]);
+            }));
+        });
+
+        // Neon sends a batch as one request; an unbounded insert here is how a
+        // wide schedule applied to every line would blow the body limit.
+        if (values.length > MAX_PLAN_CELLS) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `That would write ${values.length} planned cells at once. Apply the plan to fewer lines.`,
+          });
+        }
+        if (values.length > 0) {
+          statements.push(db.insert(boqItemDistribution).values(values));
+        }
+      }
+
+      const windowRows = sql.join(
+        windows.map(
+          ({ boqItemId, window }) =>
+            sql`(${boqItemId}::text, ${window?.startIndex ?? null}::int, ${window?.finishIndex ?? null}::int)`,
+        ),
+        sql`, `,
+      );
+
+      statements.push(
+        db.execute(sql`
+          update boq_item
+          set planned_start_period_index = plan.start_index,
+              planned_finish_period_index = plan.finish_index,
+              ${input.mode === "even" ? sql`distribution = 'linear',` : sql``}
+              updated_at = now()
+          from (values ${windowRows}) as plan(id, start_index, finish_index)
+          where boq_item.id = plan.id
+            and boq_item.boq_version_id = ${input.versionId}
+        `),
+      );
+
+      await runBatch(statements);
 
       return { success: true };
     }),
 
-  /** Clears every planned cell for one item. */
-  clearItemDistribution: companyPermissionProcedure("project:write")
-    .input(z.object({ versionId: z.string().min(1), boqItemId: z.string().min(1) }))
+  /**
+   * Copies one line's plan onto others — the schedule equivalent of filling a
+   * column down. Lines that run to the same programme (every floor of the same
+   * slab, say) are the common case, and retyping the window for each is exactly
+   * the spreadsheet drudgery this tab replaces.
+   */
+  copyDistribution: companyPermissionProcedure("project:write")
+    .input(
+      z.object({
+        versionId: z.string().min(1),
+        sourceItemId: z.string().min(1),
+        targetItemIds: z.array(z.string().min(1)).min(1).max(500),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       await requireScheduleDraft(ctx, input.versionId);
-      await assertLeavesOfVersion(input.versionId, [input.boqItemId]);
 
-      await db
-        .delete(boqItemDistribution)
-        .where(eq(boqItemDistribution.boqItemId, input.boqItemId));
+      const targetIds = [...new Set(input.targetItemIds)].filter((id) => id !== input.sourceItemId);
+      if (targetIds.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Choose at least one line to copy the plan onto.",
+        });
+      }
+      await assertLeavesOfVersion(input.versionId, [input.sourceItemId, ...targetIds]);
 
-      return { success: true };
+      const [[source], sourceCells] = await Promise.all([
+        db
+          .select({
+            distribution: boqItem.distribution,
+            plannedStartPeriodIndex: boqItem.plannedStartPeriodIndex,
+            plannedFinishPeriodIndex: boqItem.plannedFinishPeriodIndex,
+          })
+          .from(boqItem)
+          .where(eq(boqItem.id, input.sourceItemId)),
+        db
+          .select({
+            periodId: boqItemDistribution.periodId,
+            plannedPct: boqItemDistribution.plannedPct,
+          })
+          .from(boqItemDistribution)
+          .where(eq(boqItemDistribution.boqItemId, input.sourceItemId)),
+      ]);
+
+      if (!source) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "BoQ line not found" });
+      }
+
+      const cellCount = sourceCells.length * targetIds.length;
+      if (cellCount > MAX_PLAN_CELLS) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `That would write ${cellCount} planned cells at once. Copy onto fewer lines.`,
+        });
+      }
+
+      const statements: Parameters<typeof runBatch>[0] = [
+        db.delete(boqItemDistribution).where(inArray(boqItemDistribution.boqItemId, targetIds)),
+      ];
+
+      if (sourceCells.length > 0) {
+        statements.push(
+          db.insert(boqItemDistribution).values(
+            targetIds.flatMap((boqItemId) =>
+              sourceCells.map((cell) => ({
+                boqItemId,
+                periodId: cell.periodId,
+                plannedPct: cell.plannedPct,
+              })),
+            ),
+          ),
+        );
+      }
+
+      statements.push(
+        db
+          .update(boqItem)
+          .set({
+            distribution: source.distribution,
+            plannedStartPeriodIndex: source.plannedStartPeriodIndex,
+            plannedFinishPeriodIndex: source.plannedFinishPeriodIndex,
+          })
+          .where(inArray(boqItem.id, targetIds)),
+      );
+
+      await runBatch(statements);
+
+      return { copied: targetIds.length };
+    }),
+
+  /** Clears the planned cells and the planning window on one or many lines. */
+  clearItemDistribution: companyPermissionProcedure("project:write")
+    .input(
+      z.object({
+        versionId: z.string().min(1),
+        boqItemIds: z.array(z.string().min(1)).min(1).max(500),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await requireScheduleDraft(ctx, input.versionId);
+      const itemIds = [...new Set(input.boqItemIds)];
+      await assertLeavesOfVersion(input.versionId, itemIds);
+
+      await runBatch([
+        db.delete(boqItemDistribution).where(inArray(boqItemDistribution.boqItemId, itemIds)),
+        db
+          .update(boqItem)
+          .set({ plannedStartPeriodIndex: null, plannedFinishPeriodIndex: null })
+          .where(inArray(boqItem.id, itemIds)),
+      ]);
+
+      return { cleared: itemIds.length };
     }),
 });

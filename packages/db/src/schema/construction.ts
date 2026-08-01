@@ -66,6 +66,13 @@ export const DISTRIBUTION_TYPES = ["linear", "manual"] as const;
 export const PROGRESS_MODES = ["by_quantity", "by_percent"] as const;
 export const PERIOD_TYPES = ["weekly", "biweekly", "monthly"] as const;
 export const PERIOD_STATUSES = ["open", "locked"] as const;
+/**
+ * An import either lands whole or not at all, so there is no "pending" — the
+ * row is written once the outcome is known. Failed attempts are recorded too:
+ * the error report has to survive the request that produced it, or "download
+ * the failed rows" has nothing to read.
+ */
+export const BOQ_IMPORT_STATUSES = ["succeeded", "failed"] as const;
 
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -76,6 +83,7 @@ export type DistributionType = (typeof DISTRIBUTION_TYPES)[number];
 export type ProgressMode = (typeof PROGRESS_MODES)[number];
 export type PeriodType = (typeof PERIOD_TYPES)[number];
 export type PeriodStatus = (typeof PERIOD_STATUSES)[number];
+export type BoqImportStatus = (typeof BOQ_IMPORT_STATUSES)[number];
 
 const companyId = () =>
   text("company_id")
@@ -270,6 +278,24 @@ export const boqItem = pgTable(
     weightSource: text("weight_source").$type<WeightSource>().default("derived").notNull(),
     distribution: text("distribution").$type<DistributionType>().default("linear").notNull(),
     progressMode: text("progress_mode").$type<ProgressMode>().default("by_quantity").notNull(),
+    /**
+     * The planning window — "MINGGU 3 → MINGGU 17" on a contractor's schedule.
+     *
+     * Stored as `reporting_period.period_index`, not a foreign key: items are
+     * deep-copied into every new revision (see boq.getOrCreateDraft) and an
+     * index copies across as a plain column, where an id would have to be
+     * remapped. Periods belong to the project rather than the revision, so the
+     * index means the same thing in both.
+     *
+     * Duration and the per-period share are *derived* from this pair and never
+     * stored. What is stored is the intent, which is why this is not simply
+     * inferred from the first and last non-zero distribution cell: a line
+     * planned across weeks 3-17 with a hand-zeroed week 9 would otherwise be
+     * indistinguishable from one planned 3-8 and 10-17, and clearing the row
+     * would erase the window along with the cells.
+     */
+    plannedStartPeriodIndex: integer("planned_start_period_index"),
+    plannedFinishPeriodIndex: integer("planned_finish_period_index"),
     sortOrder: integer("sort_order").default(0).notNull(),
     /** Soft delete: a removed line still has progress history pointing at it. */
     deletedAt: timestamp("deleted_at"),
@@ -374,6 +400,50 @@ export const progressEntry = pgTable(
   ],
 );
 
+/**
+ * One attempt at building a BoQ from a spreadsheet.
+ *
+ * Written once, at the end of the attempt, and never updated. A successful
+ * import names the draft revision it produced; a failed one names none, because
+ * a failed import writes no items at all — the validation runs to completion
+ * first and a single bad row stops the whole commit. That is the difference
+ * between this and a job queue: there is no half-imported state to model.
+ *
+ * `errors` holds the rejected rows as JSON so the error report can be
+ * downloaded after the request that produced it has gone. `mapping` records
+ * which spreadsheet column was read as which field, which is the first thing
+ * anyone asks when an import produced the wrong numbers.
+ */
+export const boqImport = pgTable(
+  "boq_import",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    /** Null on a failed attempt, and if the draft it created is later discarded. */
+    boqVersionId: text("boq_version_id").references(() => boqVersion.id, { onDelete: "set null" }),
+    filename: text("filename").notNull(),
+    sheetName: text("sheet_name").notNull(),
+    importedById: text("imported_by_id").references(() => user.id, { onDelete: "set null" }),
+    /** Snapshot retained if the account is later removed — same rule as activityLog. */
+    importedByName: text("imported_by_name").notNull(),
+    status: text("status").$type<BoqImportStatus>().notNull(),
+    rowsTotal: integer("rows_total").default(0).notNull(),
+    rowsImported: integer("rows_imported").default(0).notNull(),
+    errorCount: integer("error_count").default(0).notNull(),
+    /** JSON: { field: columnHeader }. */
+    mapping: text("mapping"),
+    /** JSON: { row, column, message }[]. */
+    errors: text("errors"),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index("boqImport_projectId_idx").on(table.projectId),
+    index("boqImport_createdAt_idx").on(table.createdAt),
+  ],
+);
+
 /** Site diary entries. Each can carry photos as evidence — see notePhoto. */
 export const projectNote = pgTable(
   "project_note",
@@ -446,6 +516,7 @@ export const ACTIVITY_ACTIONS = [
   "baselined",
   "generated",
   "progress_recorded",
+  "imported",
 ] as const;
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
 
@@ -496,6 +567,13 @@ export const projectRelations = relations(project, ({ one, many }) => ({
   reportingPeriods: many(reportingPeriod),
   progressEntries: many(progressEntry),
   members: many(projectMember),
+  boqImports: many(boqImport),
+}));
+
+export const boqImportRelations = relations(boqImport, ({ one }) => ({
+  project: one(project, { fields: [boqImport.projectId], references: [project.id] }),
+  version: one(boqVersion, { fields: [boqImport.boqVersionId], references: [boqVersion.id] }),
+  importedBy: one(user, { fields: [boqImport.importedById], references: [user.id] }),
 }));
 
 export const projectMemberRelations = relations(projectMember, ({ one }) => ({

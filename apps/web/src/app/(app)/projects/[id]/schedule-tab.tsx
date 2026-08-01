@@ -1,5 +1,6 @@
 "use client";
 
+import { planDuration, weightPerPeriod } from "@DashboardV2/api/lib/schedule-plan";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Badge } from "@DashboardV2/ui/components/badge";
 import {
@@ -9,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@DashboardV2/ui/components/card";
+import { Checkbox } from "@DashboardV2/ui/components/checkbox";
 import { DatePicker } from "@DashboardV2/ui/components/date-picker";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Input } from "@DashboardV2/ui/components/input";
@@ -22,21 +24,38 @@ import {
 } from "@DashboardV2/ui/components/select";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarRange, Save } from "@DashboardV2/ui/components/icons";
+import {
+  CalendarRange,
+  ChevronRight,
+  Copy,
+  Save,
+  Trash2,
+} from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
+import { BulkActionsBar } from "@/components/bulk-actions-bar";
+import { MonthBandRow } from "@/components/month-band-row";
 import { interpolate } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
 import { computePlannedCurve, distributionMap, scheduleRows } from "@/lib/boq/curves";
 import { datePickerLabels } from "@/lib/date-picker-labels";
+import { buildPeriodHeader } from "@/lib/period-header";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 /** A row is "complete" when its cells total 100, within rounding. */
 const ROW_TOLERANCE = 0.5;
 
+/** Columns before the period grid: select, line, start, finish, duration, rate. */
+const LEADING_COLUMNS = 6;
+/** Columns after it: row total and the row menu. */
+const TRAILING_COLUMNS = 2;
+
 const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
+
+/** A start/finish pair being typed, before it is applied. */
+type PlanDraft = { start: string; finish: string };
 
 export default function ScheduleTab({
   projectId,
@@ -52,16 +71,26 @@ export default function ScheduleTab({
   onReview?: () => void;
 }) {
   const t = useT();
+  const format = useFormat();
   const queryClient = useQueryClient();
 
   const [drafts, setDrafts] = useState<Map<string, string>>(new Map());
+  const [planDrafts, setPlanDrafts] = useState<Map<string, PlanDraft>>(new Map());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** The line whose plan the bulk bar will paste. Set from a row's menu. */
+  const [copySource, setCopySource] = useState<string | null>(null);
+  const [bulkPlan, setBulkPlan] = useState<PlanDraft>({ start: "", finish: "" });
   const [saving, setSaving] = useState(false);
+  const [applying, setApplying] = useState(false);
 
   const reportQuery = useQuery(
     trpc.progress.report.queryOptions({ projectId, versionId: targetVersionId }),
   );
   const generatePeriods = useMutation(trpc.schedule.generatePeriods.mutationOptions());
   const setCells = useMutation(trpc.schedule.setDistributionCells.mutationOptions());
+  const setItemPlan = useMutation(trpc.schedule.setItemPlan.mutationOptions());
+  const copyPlan = useMutation(trpc.schedule.copyDistribution.mutationOptions());
+  const clearPlan = useMutation(trpc.schedule.clearItemDistribution.mutationOptions());
 
   if (reportQuery.isPending) return <Skeleton className="h-64 w-full" />;
 
@@ -143,6 +172,9 @@ export default function ScheduleTab({
   }
 
   const rows = scheduleRows(items);
+  const header = buildPeriodHeader(format, periods, report?.project.dataDate ?? null);
+  const firstIndex = periods[0]?.periodIndex ?? 1;
+  const lastIndex = periods[periods.length - 1]?.periodIndex ?? 1;
 
   const cells = distributionMap(report?.distribution ?? []);
   for (const [key, value] of drafts) {
@@ -151,6 +183,80 @@ export default function ScheduleTab({
   }
 
   const planned = computePlannedCurve(rows, periods, cells);
+
+  const rowTotal = (itemId: string) =>
+    periods.reduce((total, period) => total + (cells.get(cellKey(itemId, period.id)) ?? 0), 0);
+
+  /** What the start/finish inputs show: the pending edit, else what is stored. */
+  function planValue(leaf: (typeof rows)[number]["leaf"]): PlanDraft {
+    const draft = planDrafts.get(leaf.id);
+    if (draft) return draft;
+    return {
+      start: leaf.plannedStartPeriodIndex === null ? "" : String(leaf.plannedStartPeriodIndex),
+      finish: leaf.plannedFinishPeriodIndex === null ? "" : String(leaf.plannedFinishPeriodIndex),
+    };
+  }
+
+  function parseWindow(draft: PlanDraft): { start: number | null; finish: number | null } {
+    const start = draft.start.trim() === "" ? null : Number(draft.start);
+    const finish = draft.finish.trim() === "" ? null : Number(draft.finish);
+    return {
+      start: start !== null && Number.isInteger(start) ? start : null,
+      finish: finish !== null && Number.isInteger(finish) ? finish : null,
+    };
+  }
+
+  async function refresh() {
+    await queryClient.invalidateQueries(trpc.progress.pathFilter());
+    await queryClient.invalidateQueries(trpc.schedule.pathFilter());
+  }
+
+  /**
+   * Applies a window and spreads the plan evenly across it.
+   *
+   * Written straight through rather than held as a draft: this is the one
+   * gesture the tab exists for, and the whole point is seeing the row fill in.
+   * Cell edits stay batched behind Save because those come many at a time.
+   */
+  async function applyPlan(
+    entries: { boqItemId: string; startPeriodIndex: number | null; finishPeriodIndex: number | null }[],
+  ) {
+    setApplying(true);
+    try {
+      await setItemPlan.mutateAsync({ versionId, items: entries, mode: "even" });
+      setPlanDrafts(new Map());
+      await refresh();
+      toast.success(interpolate(t.schedule.spreadDone, { count: entries.length }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.schedule.saveFailed);
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  /**
+   * Repeats the start period's value across the rest of the line's window.
+   *
+   * A draft edit, not a write — it lands in the same unsaved batch as anything
+   * typed by hand, so it can be reviewed and discarded like one.
+   */
+  function fillRight(leaf: (typeof rows)[number]["leaf"]) {
+    const { start, finish } = parseWindow(planValue(leaf));
+    const from = start ?? firstIndex;
+    const to = finish ?? lastIndex;
+    const source = periods.find((period) => period.periodIndex === from);
+    if (!source) return;
+
+    const value = cells.get(cellKey(leaf.id, source.id)) ?? 0;
+    setDrafts((current) => {
+      const next = new Map(current);
+      for (const period of periods) {
+        if (period.periodIndex < from || period.periodIndex > to) continue;
+        next.set(cellKey(leaf.id, period.id), String(value));
+      }
+      return next;
+    });
+  }
 
   async function save(afterSave?: () => void) {
     const changes = [...drafts].flatMap(([key, raw]) => {
@@ -168,8 +274,7 @@ export default function ScheduleTab({
     try {
       await setCells.mutateAsync({ versionId, cells: changes });
       setDrafts(new Map());
-      await queryClient.invalidateQueries(trpc.progress.pathFilter());
-      await queryClient.invalidateQueries(trpc.schedule.pathFilter());
+      await refresh();
       toast.success(t.schedule.saved);
       afterSave?.();
     } catch (error) {
@@ -179,188 +284,518 @@ export default function ScheduleTab({
     }
   }
 
-  const allComplete = rows.every((row) => {
-    const total = periods.reduce(
-      (sum, period) => sum + (cells.get(cellKey(row.leaf.id, period.id)) ?? 0),
-      0,
-    );
-    return Math.abs(total - 100) <= ROW_TOLERANCE;
-  });
+  const allComplete = rows.every((row) => Math.abs(rowTotal(row.leaf.id) - 100) <= ROW_TOLERANCE);
+  const selectedRows = rows.filter((row) => selected.has(row.leaf.id));
+  const sourceRow = rows.find((row) => row.leaf.id === copySource);
 
   return (
     <div className="space-y-3">
       {settings}
-      <Card>
-      <CardHeader>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              {t.schedule.title}
-              <Badge variant={isDraft ? "outline" : "secondary"}>
-                {isDraft ? t.boq.draft : t.boq.active}
-              </Badge>
-            </CardTitle>
-            <CardDescription>
-              {editable ? t.schedule.description : t.schedule.lockedNote}
-            </CardDescription>
-          </div>
-          {editable && (
-            <div className="flex flex-wrap gap-2">
-              {drafts.size > 0 && (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => setDrafts(new Map())}>
-                    {t.schedule.discard}
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={saving}
-                    onClick={() => void save(setupMode ? onReview : undefined)}
-                  >
-                    <Save />
-                    {saving
-                      ? t.schedule.saving
-                      : setupMode
-                        ? t.baseline.saveReview
-                        : interpolate(t.schedule.save, { count: drafts.size })}
-                  </Button>
-                </>
-              )}
-              {setupMode && drafts.size === 0 && onReview && (
-                <Button size="sm" disabled={!allComplete} onClick={onReview}>
-                  {t.baseline.reviewBaseline}
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-      </CardHeader>
 
-      <CardContent className="px-0">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b">
-                <th className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium">
-                  {t.schedule.line}
-                </th>
-                {periods.map((period) => (
-                  <th key={period.id} className="min-w-20 px-2 py-2 text-right font-medium">
-                    {period.label ?? `#${period.periodIndex}`}
-                  </th>
-                ))}
-                <th className="px-3 py-2 text-right font-medium">{t.schedule.rowTotal}</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {rows.map((row) => {
-                const rowTotal = periods.reduce(
-                  (total, period) => total + (cells.get(cellKey(row.leaf.id, period.id)) ?? 0),
-                  0,
+      {editable && (
+        <BulkActionsBar count={selected.size} onClear={() => setSelected(new Set())}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Label htmlFor="bulk-start" className="text-xs text-muted-foreground">
+              {t.schedule.planStart}
+            </Label>
+            <Input
+              id="bulk-start"
+              type="number"
+              inputMode="numeric"
+              min={firstIndex}
+              max={lastIndex}
+              value={bulkPlan.start}
+              className="h-8 w-16 text-right tabular-nums"
+              onChange={(e) => setBulkPlan((current) => ({ ...current, start: e.target.value }))}
+            />
+            <Label htmlFor="bulk-finish" className="text-xs text-muted-foreground">
+              {t.schedule.planFinish}
+            </Label>
+            <Input
+              id="bulk-finish"
+              type="number"
+              inputMode="numeric"
+              min={firstIndex}
+              max={lastIndex}
+              value={bulkPlan.finish}
+              className="h-8 w-16 text-right tabular-nums"
+              onChange={(e) => setBulkPlan((current) => ({ ...current, finish: e.target.value }))}
+            />
+            <Button
+              size="sm"
+              disabled={applying || bulkPlan.start === "" || bulkPlan.finish === ""}
+              onClick={() => {
+                const { start, finish } = parseWindow(bulkPlan);
+                if (start === null || finish === null) return;
+                void applyPlan(
+                  selectedRows.map((row) => ({
+                    boqItemId: row.leaf.id,
+                    startPeriodIndex: start,
+                    finishPeriodIndex: finish,
+                  })),
                 );
-                const isComplete = Math.abs(rowTotal - 100) <= ROW_TOLERANCE;
+              }}
+            >
+              <ChevronRight />
+              {t.schedule.spreadSelected}
+            </Button>
 
-                return (
-                  <tr key={row.leaf.id} className="border-b last:border-0">
-                    <th
-                      scope="row"
-                      className="sticky left-0 z-10 max-w-64 truncate bg-card px-4 py-1.5 text-left font-normal"
-                      title={`${row.section} - ${row.leaf.description}`}
+            {sourceRow && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={copyPlan.isPending}
+                onClick={async () => {
+                  try {
+                    const result = await copyPlan.mutateAsync({
+                      versionId,
+                      sourceItemId: sourceRow.leaf.id,
+                      targetItemIds: selectedRows.map((row) => row.leaf.id),
+                    });
+                    await refresh();
+                    toast.success(interpolate(t.schedule.copyDone, { count: result.copied }));
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : t.schedule.saveFailed);
+                  }
+                }}
+              >
+                <Copy />
+                {`${t.schedule.copyFrom} ${sourceRow.leaf.code}`}
+              </Button>
+            )}
+
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={clearPlan.isPending}
+              onClick={async () => {
+                try {
+                  const result = await clearPlan.mutateAsync({
+                    versionId,
+                    boqItemIds: selectedRows.map((row) => row.leaf.id),
+                  });
+                  await refresh();
+                  toast.success(interpolate(t.schedule.clearDone, { count: result.cleared }));
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : t.schedule.saveFailed);
+                }
+              }}
+            >
+              <Trash2 />
+              {t.schedule.clearSelected}
+            </Button>
+          </div>
+        </BulkActionsBar>
+      )}
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                {t.schedule.title}
+                <Badge variant={isDraft ? "outline" : "secondary"}>
+                  {isDraft ? t.boq.draft : t.boq.active}
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                {editable ? t.schedule.planHint : t.schedule.lockedNote}
+              </CardDescription>
+            </div>
+            {editable && (
+              <div className="flex flex-wrap gap-2">
+                {drafts.size > 0 && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => setDrafts(new Map())}>
+                      {t.schedule.discard}
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={saving}
+                      onClick={() => void save(setupMode ? onReview : undefined)}
                     >
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {row.leaf.code}
-                      </span>{" "}
-                      {row.leaf.description}
-                    </th>
+                      <Save />
+                      {saving
+                        ? t.schedule.saving
+                        : setupMode
+                          ? t.baseline.saveReview
+                          : interpolate(t.schedule.save, { count: drafts.size })}
+                    </Button>
+                  </>
+                )}
+                {setupMode && drafts.size === 0 && onReview && (
+                  <Button size="sm" disabled={!allComplete} onClick={onReview}>
+                    {t.baseline.reviewBaseline}
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        </CardHeader>
 
-                    {periods.map((period) => {
-                      const value = cells.get(cellKey(row.leaf.id, period.id)) ?? 0;
-                      return (
-                        <td key={period.id} className="px-1 py-1">
-                          {editable ? (
-                            <Input
-                              type="number"
-                              min={0}
-                              max={100}
-                              step="any"
-                              value={drafts.get(cellKey(row.leaf.id, period.id)) ?? (value === 0 ? "" : String(value))}
-                              aria-label={`${row.leaf.code} - ${period.label ?? period.periodIndex}`}
-                              className="h-8 text-right tabular-nums"
-                              onChange={(e) =>
-                                setDrafts((current) =>
-                                  new Map(current).set(cellKey(row.leaf.id, period.id), e.target.value),
-                                )
+        <CardContent className="px-0">
+          <div className="relative">
+            {/* Overflow cue — see the note in period-summary-table.tsx. */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-card to-transparent"
+            />
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <MonthBandRow
+                    header={header}
+                    leadingLabel={t.schedule.line}
+                    leadingColSpan={LEADING_COLUMNS}
+                    trailingColSpan={TRAILING_COLUMNS}
+                  />
+                  <tr className="border-b">
+                    <th className="sticky left-0 z-10 bg-card px-2 py-2">
+                      {editable && (
+                        <Checkbox
+                          aria-label={t.schedule.selectAll}
+                          checked={selected.size > 0 && selected.size === rows.length}
+                          indeterminate={selected.size > 0 && selected.size < rows.length}
+                          onCheckedChange={(checked) =>
+                            setSelected(
+                              checked ? new Set(rows.map((row) => row.leaf.id)) : new Set(),
+                            )
+                          }
+                        />
+                      )}
+                    </th>
+                    <th scope="col" className="px-2 py-2 text-left font-medium">
+                      {t.schedule.line}
+                    </th>
+                    <th scope="col" className="px-2 py-2 text-right font-medium">
+                      {t.schedule.planStart}
+                    </th>
+                    <th scope="col" className="px-2 py-2 text-right font-medium">
+                      {t.schedule.planFinish}
+                    </th>
+                    <th scope="col" className="px-2 py-2 text-right font-medium">
+                      {t.schedule.planDuration}
+                    </th>
+                    <th scope="col" className="px-2 py-2 text-right font-medium">
+                      {t.schedule.planWeightPerPeriod}
+                    </th>
+                    {header.columns.map((column) => (
+                      <th
+                        key={column.period.id}
+                        scope="col"
+                        aria-current={column.isCurrent ? "true" : undefined}
+                        className={`min-w-20 px-2 py-2 text-right font-medium ${
+                          column.isCurrent ? "border-b-2 border-b-[var(--chart-3)]" : ""
+                        }`}
+                      >
+                        <span className="block tabular-nums">{column.number}</span>
+                        <span className="block text-xs font-normal text-muted-foreground tabular-nums">
+                          {column.range}
+                        </span>
+                      </th>
+                    ))}
+                    <th scope="col" className="px-3 py-2 text-right font-medium">
+                      {t.schedule.rowTotal}
+                    </th>
+                    <th scope="col" className="px-2 py-2">
+                      <span className="sr-only">{t.common.actions}</span>
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {rows.map((row) => {
+                    const total = rowTotal(row.leaf.id);
+                    const isComplete = Math.abs(total - 100) <= ROW_TOLERANCE;
+                    const draft = planValue(row.leaf);
+                    const { start, finish } = parseWindow(draft);
+                    const duration = planDuration(start, finish);
+                    const invertedWindow =
+                      start !== null && finish !== null && finish < start;
+                    const rate = weightPerPeriod(row.leaf.weight, duration);
+                    const errorId = `plan-error-${row.leaf.id}`;
+
+                    const commit = () => {
+                      const stored = {
+                        start: row.leaf.plannedStartPeriodIndex,
+                        finish: row.leaf.plannedFinishPeriodIndex,
+                      };
+                      if (invertedWindow) return;
+                      if (start === stored.start && finish === stored.finish) return;
+                      if ((start === null) !== (finish === null)) return;
+                      void applyPlan([
+                        {
+                          boqItemId: row.leaf.id,
+                          startPeriodIndex: start,
+                          finishPeriodIndex: finish,
+                        },
+                      ]);
+                    };
+
+                    return (
+                      <tr key={row.leaf.id} className="border-b last:border-0">
+                        <td className="sticky left-0 z-10 bg-card px-2 py-1">
+                          {editable && (
+                            <Checkbox
+                              aria-label={interpolate(t.schedule.selectRow, { code: row.leaf.code })}
+                              checked={selected.has(row.leaf.id)}
+                              onCheckedChange={(checked) =>
+                                setSelected((current) => {
+                                  const next = new Set(current);
+                                  if (checked) next.add(row.leaf.id);
+                                  else next.delete(row.leaf.id);
+                                  return next;
+                                })
                               }
                             />
+                          )}
+                        </td>
+
+                        <th
+                          scope="row"
+                          className="max-w-64 truncate px-2 py-1.5 text-left font-normal"
+                          title={`${row.section} - ${row.leaf.description}`}
+                        >
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {row.leaf.code}
+                          </span>{" "}
+                          {row.leaf.description}
+                        </th>
+
+                        <PlanInput
+                          value={draft.start}
+                          label={`${t.schedule.planStart} — ${row.leaf.code}`}
+                          min={firstIndex}
+                          max={lastIndex}
+                          editable={editable}
+                          invalid={invertedWindow}
+                          describedBy={invertedWindow ? errorId : undefined}
+                          onChange={(next) =>
+                            setPlanDrafts((current) =>
+                              new Map(current).set(row.leaf.id, { ...draft, start: next }),
+                            )
+                          }
+                          onCommit={commit}
+                        />
+                        <PlanInput
+                          value={draft.finish}
+                          label={`${t.schedule.planFinish} — ${row.leaf.code}`}
+                          min={firstIndex}
+                          max={lastIndex}
+                          editable={editable}
+                          invalid={invertedWindow}
+                          describedBy={invertedWindow ? errorId : undefined}
+                          onChange={(next) =>
+                            setPlanDrafts((current) =>
+                              new Map(current).set(row.leaf.id, { ...draft, finish: next }),
+                            )
+                          }
+                          onCommit={commit}
+                        />
+
+                        <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">
+                          {invertedWindow ? (
+                            // The message lives in the cell rather than a
+                            // tooltip so it is announced with the field and
+                            // survives a keyboard-only pass.
+                            <span id={errorId} className="text-xs font-medium text-destructive">
+                              {t.schedule.finishBeforeStart}
+                            </span>
+                          ) : duration > 0 ? (
+                            duration
                           ) : (
-                            <span className="block px-2 py-1 text-right tabular-nums text-muted-foreground">
-                              {value === 0 ? "—" : value}
+                            <span className="text-xs">{t.schedule.notScheduled}</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">
+                          {rate === null ? "—" : rate.toFixed(3)}
+                        </td>
+
+                        {header.columns.map(({ period, accessibleName }) => {
+                          const value = cells.get(cellKey(row.leaf.id, period.id)) ?? 0;
+                          const key = cellKey(row.leaf.id, period.id);
+                          return (
+                            <td key={period.id} className="px-1 py-1">
+                              {editable ? (
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  step="any"
+                                  value={drafts.get(key) ?? (value === 0 ? "" : String(value))}
+                                  aria-label={`${row.leaf.code} - ${accessibleName}`}
+                                  className={`h-8 text-right tabular-nums ${
+                                    drafts.has(key) ? "border-[var(--chart-3)]" : ""
+                                  }`}
+                                  onChange={(e) =>
+                                    setDrafts((current) => new Map(current).set(key, e.target.value))
+                                  }
+                                />
+                              ) : (
+                                <span className="block px-2 py-1 text-right tabular-nums text-muted-foreground">
+                                  {value === 0 ? "—" : value}
+                                </span>
+                              )}
+                            </td>
+                          );
+                        })}
+
+                        <td
+                          className={`px-3 py-1 text-right tabular-nums ${
+                            isComplete ? "text-muted-foreground" : "font-medium text-destructive"
+                          }`}
+                        >
+                          {total.toFixed(1)}%
+                          {!isComplete && (
+                            <span className="sr-only">
+                              {" "}
+                              {interpolate(t.schedule.rowIncomplete, {
+                                total: `${total.toFixed(1)}%`,
+                              })}
                             </span>
                           )}
                         </td>
-                      );
-                    })}
 
-                    <td
-                      className={`px-3 py-1 text-right tabular-nums ${
-                        isComplete ? "text-muted-foreground" : "font-medium text-destructive"
-                      }`}
-                      title={
-                        isComplete
-                          ? undefined
-                          : interpolate(t.schedule.rowIncomplete, {
-                              total: `${rowTotal.toFixed(1)}%`,
-                            })
-                      }
+                        <td className="px-2 py-1">
+                          {editable && (
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={`${t.schedule.fillRight} — ${row.leaf.code}`}
+                                title={t.schedule.fillRightHint}
+                                onClick={() => fillRight(row.leaf)}
+                              >
+                                <ChevronRight />
+                              </Button>
+                              <Button
+                                variant={copySource === row.leaf.id ? "secondary" : "ghost"}
+                                size="icon-sm"
+                                aria-label={`${t.schedule.copyFrom} ${row.leaf.code}`}
+                                aria-pressed={copySource === row.leaf.id}
+                                onClick={() =>
+                                  setCopySource((current) =>
+                                    current === row.leaf.id ? null : row.leaf.id,
+                                  )
+                                }
+                              >
+                                <Copy />
+                              </Button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+
+                <tfoot className="border-t-2">
+                  <tr>
+                    <th
+                      scope="row"
+                      colSpan={LEADING_COLUMNS}
+                      className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium"
                     >
-                      {rowTotal.toFixed(1)}%
-                    </td>
+                      {t.schedule.plannedPerPeriod}
+                    </th>
+                    {planned.perPeriod.map((value, index) => (
+                      <td
+                        key={periods[index]?.id ?? index}
+                        className="px-2 py-2 text-right tabular-nums text-muted-foreground"
+                      >
+                        {value.toFixed(1)}
+                      </td>
+                    ))}
+                    <td colSpan={TRAILING_COLUMNS} />
                   </tr>
-                );
-              })}
-            </tbody>
-
-            <tfoot className="border-t-2">
-              <tr>
-                <th
-                  scope="row"
-                  className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium"
-                >
-                  {t.schedule.plannedPerPeriod}
-                </th>
-                {planned.perPeriod.map((value, index) => (
-                  <td
-                    key={periods[index]?.id ?? index}
-                    className="px-2 py-2 text-right tabular-nums text-muted-foreground"
-                  >
-                    {value.toFixed(1)}
-                  </td>
-                ))}
-                <td />
-              </tr>
-              <tr>
-                <th
-                  scope="row"
-                  className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium"
-                >
-                  {t.schedule.plannedCumulative}
-                </th>
-                {planned.cumulative.map((value, index) => (
-                  <td
-                    key={periods[index]?.id ?? index}
-                    className="px-2 py-2 text-right font-medium tabular-nums"
-                  >
-                    {value.toFixed(1)}
-                  </td>
-                ))}
-                <td />
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </CardContent>
+                  <tr>
+                    <th
+                      scope="row"
+                      colSpan={LEADING_COLUMNS}
+                      className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium"
+                    >
+                      {t.schedule.plannedCumulative}
+                    </th>
+                    {planned.cumulative.map((value, index) => (
+                      <td
+                        key={periods[index]?.id ?? index}
+                        className="px-2 py-2 text-right font-medium tabular-nums"
+                      >
+                        {value.toFixed(1)}
+                      </td>
+                    ))}
+                    <td colSpan={TRAILING_COLUMNS} />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * One end of a planning window.
+ *
+ * A number input rather than a period picker: filling a hundred lines means
+ * typing "3", tab, "17", tab, and a listbox of sixty dated options turns that
+ * into sixty scroll-and-click gestures. The dates are one column away in the
+ * header, which is where someone reads them from anyway.
+ */
+function PlanInput({
+  value,
+  label,
+  min,
+  max,
+  editable,
+  invalid,
+  describedBy,
+  onChange,
+  onCommit,
+}: {
+  value: string;
+  label: string;
+  min: number;
+  max: number;
+  editable: boolean;
+  invalid: boolean;
+  describedBy?: string;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+}) {
+  if (!editable) {
+    return (
+      <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{value || "—"}</td>
+    );
+  }
+
+  return (
+    <td className="px-1 py-1">
+      <Input
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        aria-label={label}
+        aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
+        className="h-8 w-16 text-right tabular-nums"
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onCommit}
+        // Enter applies without leaving the cell, so a row can be filled from
+        // the keyboard without reaching for the mouse between lines.
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onCommit();
+          }
+        }}
+      />
+    </td>
   );
 }
 
