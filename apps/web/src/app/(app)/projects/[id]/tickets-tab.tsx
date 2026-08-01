@@ -230,6 +230,10 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                               description: row.description,
                               responsibleName: row.responsibleName,
                               responsibleContactNumber: row.responsibleContactNumber,
+                              type: row.type,
+                              priority: row.priority,
+                              dueDate: row.dueDate ?? "",
+                              assigneeId: row.assigneeId ?? "",
                             },
                           })
                         }

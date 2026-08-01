@@ -23,6 +23,7 @@ import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import BaselineTab from "./baseline-tab";
+import DailyReportsTab from "./daily-reports-tab";
 import NotesTab from "./notes-tab";
 import ProgressTab from "./progress-tab";
 import TeamTab from "./team-tab";
@@ -166,6 +167,7 @@ export default function ProjectDetail({
           <TabsTrigger value="tickets">{t.projects.tabTickets}</TabsTrigger>
           <TabsTrigger value="baseline">{t.projects.tabBaseline}</TabsTrigger>
           <TabsTrigger value="progress">{t.projects.tabProgress}</TabsTrigger>
+          <TabsTrigger value="daily">{t.daily.tab}</TabsTrigger>
           <TabsTrigger value="notes">{t.notes.tab}</TabsTrigger>
           {canManageMembers && <TabsTrigger value="team">{t.projects.teamTab}</TabsTrigger>}
         </TabsList>
@@ -185,6 +187,15 @@ export default function ProjectDetail({
 
         <TabsContent value="tickets">
           <TicketsTab projectId={projectId} />
+        </TabsContent>
+
+        <TabsContent value="daily">
+          <DailyReportsTab
+            projectId={projectId}
+            canEdit={canEdit}
+            canReview={canReview}
+            canLock={canLock}
+          />
         </TabsContent>
 
         <TabsContent value="notes">

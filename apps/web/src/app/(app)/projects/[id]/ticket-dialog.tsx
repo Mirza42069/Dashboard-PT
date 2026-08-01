@@ -17,7 +17,21 @@ import { toast } from "@/lib/toast";
 import z from "zod";
 
 import { FieldError, fieldError } from "@/components/field-error";
-import { useT } from "@/i18n/provider";
+import { DatePicker } from "@DashboardV2/ui/components/date-picker";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@DashboardV2/ui/components/select";
+import { ACTION_PRIORITIES, ACTION_TYPES } from "@DashboardV2/db/schema";
+import type { ActionPriority, ActionType } from "@DashboardV2/db/schema";
+import { useQuery } from "@tanstack/react-query";
+
+import { useLocale, useT } from "@/i18n/provider";
+import { datePickerLabels } from "@/lib/date-picker-labels";
+import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 export type TicketFormValues = {
@@ -25,6 +39,16 @@ export type TicketFormValues = {
   description: string;
   responsibleName: string;
   responsibleContactNumber: string;
+  /**
+   * The action fields. Defaulted rather than optional so the form always has a
+   * value to render: an uncontrolled select that becomes controlled on first
+   * change is React's oldest warning, and "" is not a valid type.
+   */
+  type: ActionType;
+  priority: ActionPriority;
+  dueDate: string;
+  /** "" means nobody with a login owns this — see the note on assigneeId. */
+  assigneeId: string;
 };
 
 export const EMPTY_TICKET: TicketFormValues = {
@@ -32,7 +56,13 @@ export const EMPTY_TICKET: TicketFormValues = {
   description: "",
   responsibleName: "",
   responsibleContactNumber: "",
+  type: "issue",
+  priority: "medium",
+  dueDate: "",
+  assigneeId: "",
 };
+
+const UNASSIGNED = "__unassigned__";
 
 export default function TicketDialog({
   open,
@@ -48,7 +78,12 @@ export default function TicketDialog({
   initialValues: TicketFormValues;
 }) {
   const t = useT();
+  const { intlLocale } = useLocale();
+  const { formatDate } = useFormat();
   const queryClient = useQueryClient();
+  // Only this company's own staff can be assigned — the same list the project
+  // manager picker uses, which already excludes super admins.
+  const assignees = useQuery(trpc.project.managerOptions.queryOptions());
   const createTicket = useMutation(trpc.ticket.create.mutationOptions());
   const updateTicket = useMutation(trpc.ticket.update.mutationOptions());
   const schema = z.object({
@@ -61,17 +96,46 @@ export default function TicketDialog({
       .min(5, t.tickets.contactRequired)
       .max(50)
       .regex(/^[+0-9() .-]+$/, t.tickets.contactInvalid),
+    type: z.enum(ACTION_TYPES),
+    priority: z.enum(ACTION_PRIORITIES),
+    dueDate: z.string(),
+    assigneeId: z.string(),
   });
+
+  const typeOptions = [
+    { value: "issue", label: t.actions.typeIssue },
+    { value: "rfi", label: t.actions.typeRfi },
+    { value: "punch", label: t.actions.typePunch },
+    { value: "safety", label: t.actions.typeSafety },
+    { value: "quality", label: t.actions.typeQuality },
+    { value: "delay", label: t.actions.typeDelay },
+    { value: "general", label: t.actions.typeGeneral },
+  ];
+  const priorityOptions = [
+    { value: "low", label: t.actions.priorityLow },
+    { value: "medium", label: t.actions.priorityMedium },
+    { value: "high", label: t.actions.priorityHigh },
+    { value: "critical", label: t.actions.priorityCritical },
+  ];
 
   const form = useForm({
     defaultValues: initialValues,
     validators: { onSubmit: schema },
     onSubmit: async ({ value }) => {
       try {
+        const payload = {
+          ...value,
+          type: value.type as ActionType,
+          priority: value.priority as ActionPriority,
+          // "" is the form's way of saying unset; the column is nullable and
+          // null is what "no due date" and "nobody assigned" actually mean.
+          dueDate: value.dueDate || null,
+          assigneeId: value.assigneeId || null,
+        };
         if (editingId) {
-          await updateTicket.mutateAsync({ id: editingId, ...value });
+          await updateTicket.mutateAsync({ id: editingId, ...payload });
         } else {
-          await createTicket.mutateAsync({ projectId, ...value });
+          await createTicket.mutateAsync({ projectId, ...payload });
         }
         await queryClient.invalidateQueries(trpc.ticket.pathFilter());
         await queryClient.invalidateQueries(trpc.project.pathFilter());
@@ -107,6 +171,65 @@ export default function TicketDialog({
               <DescriptionField field={field} label={t.tickets.description} />
             )}
           </form.Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <form.Field name="type">
+              {(field) => (
+                <ChoiceField
+                  label={t.actions.type}
+                  value={field.state.value}
+                  options={typeOptions}
+                  onChange={(value) => field.handleChange(value as ActionType)}
+                />
+              )}
+            </form.Field>
+            <form.Field name="priority">
+              {(field) => (
+                <ChoiceField
+                  label={t.actions.priority}
+                  value={field.state.value}
+                  options={priorityOptions}
+                  onChange={(value) => field.handleChange(value as ActionPriority)}
+                />
+              )}
+            </form.Field>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <form.Field name="dueDate">
+              {(field) => (
+                <div className="space-y-2">
+                  <Label htmlFor="ticket-due">{t.actions.dueDate}</Label>
+                  <DatePicker
+                    id="ticket-due"
+                    value={field.state.value || null}
+                    locale={intlLocale}
+                    formatValue={formatDate}
+                    labels={datePickerLabels(t)}
+                    onValueChange={(next) => field.handleChange(next ?? "")}
+                  />
+                </div>
+              )}
+            </form.Field>
+            <form.Field name="assigneeId">
+              {(field) => (
+                <ChoiceField
+                  label={t.actions.assignee}
+                  value={field.state.value || UNASSIGNED}
+                  options={[
+                    { value: UNASSIGNED, label: t.actions.unassigned },
+                    ...(assignees.data ?? []).map((person) => ({
+                      value: person.id,
+                      label: person.name,
+                    })),
+                  ]}
+                  onChange={(value) =>
+                    field.handleChange(value === UNASSIGNED ? "" : value)
+                  }
+                />
+              )}
+            </form.Field>
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <form.Field name="responsibleName">
               {(field) => <TextField label={t.tickets.responsibleName} field={field} />}
@@ -173,6 +296,38 @@ function DescriptionField({ label, field }: { label: string; field: any }) {
         }
       />
       <FieldError {...error} />
+    </div>
+  );
+}
+
+/** A labelled select for the small closed sets an action is classified by. */
+function ChoiceField({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
+  const id = `choice-${label.replace(/\s+/g, "-").toLowerCase()}`;
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Select items={options} value={value} onValueChange={(next) => next && onChange(next)}>
+        <SelectTrigger id={id} className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
