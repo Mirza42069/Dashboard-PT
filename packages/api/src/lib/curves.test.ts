@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   buildPeriodSummary,
   computeActualCurve,
+  delayContributors,
   computePlannedCurve,
   distributionMap,
   latestPosition,
@@ -242,4 +243,165 @@ test("the summary agrees with the curves it is built from", () => {
   // reason buildPeriodSummary composes these rather than recomputing them.
   expect(summary.map((row) => row.plannedCumulative)).toEqual(planned.cumulative);
   expect(summary.map((row) => row.actualCumulative)).toEqual(actual.cumulative);
+});
+
+/* ------------------------------------------------- delay contributors */
+
+/**
+ * Which lines are driving the project's position.
+ *
+ * Everything is in *project* percentage points, so a contributor's variance can
+ * be read straight against the headline deviation. The two rules that matter:
+ * lines that are ahead never offset lines that are behind, and a line nobody
+ * has reported is unknown rather than assumed to be at zero.
+ */
+
+const contributorItems: BoqItemLike[] = [
+  { id: "s", parentId: null, code: "1", description: "Structure", weight: 0, sortOrder: 1 },
+  { id: "frame", parentId: "s", code: "1.1", description: "Steel frame", weight: 60, sortOrder: 1 },
+  { id: "fitout", parentId: "s", code: "1.2", description: "Fitout", weight: 40, sortOrder: 2 },
+];
+
+const contributorPeriods = [
+  { id: "p1", periodIndex: 1, endDate: "2026-01-07" },
+  { id: "p2", periodIndex: 2, endDate: "2026-01-14" },
+];
+
+// Both lines fully planned by p2.
+const contributorCells = distributionMap([
+  { boqItemId: "frame", periodId: "p1", plannedPct: 50 },
+  { boqItemId: "frame", periodId: "p2", plannedPct: 50 },
+  { boqItemId: "fitout", periodId: "p1", plannedPct: 50 },
+  { boqItemId: "fitout", periodId: "p2", plannedPct: 50 },
+]);
+
+test("variance is weighted into project points, not percent of the line", () => {
+  // Frame is 60% of the contract and half done against a plan of fully done:
+  // 30 points achieved against 60 planned, so 30 points behind.
+  const entries = [entry("frame", "p2", 50, 50), entry("fitout", "p2", 100, 100)];
+  const ranked = delayContributors(
+    scheduleRows(contributorItems),
+    contributorPeriods,
+    contributorCells,
+    entries,
+    "2026-01-14",
+  );
+
+  const frame = ranked.find((row) => row.leaf.id === "frame")!;
+  expect(frame.plannedContribution).toBe(60);
+  expect(frame.actualContribution).toBe(30);
+  expect(frame.variance).toBe(-30);
+});
+
+test("lines that are ahead do not offset lines that are behind", () => {
+  // Fitout is ahead of nothing here — it is exactly on plan — but the share is
+  // computed against the shortfall alone, so frame owns all of it.
+  const entries = [entry("frame", "p2", 50, 50), entry("fitout", "p2", 100, 100)];
+  const ranked = delayContributors(
+    scheduleRows(contributorItems),
+    contributorPeriods,
+    contributorCells,
+    entries,
+    "2026-01-14",
+  );
+
+  expect(ranked[0]!.leaf.id).toBe("frame");
+  expect(ranked[0]!.shareOfDelay).toBe(100);
+  expect(ranked.find((row) => row.leaf.id === "fitout")!.shareOfDelay).toBeNull();
+});
+
+test("shares of the shortfall are proportional and total 100", () => {
+  // Frame 30 points behind, fitout 20 points behind: 60/40 of a 50-point hole.
+  const entries = [entry("frame", "p2", 50, 50), entry("fitout", "p2", 50, 50)];
+  const ranked = delayContributors(
+    scheduleRows(contributorItems),
+    contributorPeriods,
+    contributorCells,
+    entries,
+    "2026-01-14",
+  );
+
+  const shares = ranked.map((row) => row.shareOfDelay ?? 0);
+  expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(100, 9);
+  expect(ranked[0]!.leaf.id).toBe("frame");
+  expect(ranked[0]!.shareOfDelay).toBeCloseTo(60, 9);
+});
+
+test("a line nobody has reported is unknown, not assumed to be at zero", () => {
+  const entries = [entry("frame", "p2", 100, 100)];
+  const ranked = delayContributors(
+    scheduleRows(contributorItems),
+    contributorPeriods,
+    contributorCells,
+    entries,
+    "2026-01-14",
+  );
+
+  const fitout = ranked.find((row) => row.leaf.id === "fitout")!;
+  expect(fitout.actualContribution).toBeNull();
+  expect(fitout.variance).toBeNull();
+  expect(fitout.shareOfDelay).toBeNull();
+  // The freshness column is what tells the manager which it is.
+  expect(fitout.lastReadingIndex).toBeNull();
+});
+
+test("reporting freshness is the period of the most recent reading", () => {
+  const entries = [entry("frame", "p1", 40, 40), entry("fitout", "p2", 20, 20)];
+  const ranked = delayContributors(
+    scheduleRows(contributorItems),
+    contributorPeriods,
+    contributorCells,
+    entries,
+    "2026-01-14",
+  );
+
+  expect(ranked.find((row) => row.leaf.id === "frame")!.lastReadingIndex).toBe(1);
+  expect(ranked.find((row) => row.leaf.id === "fitout")!.lastReadingIndex).toBe(2);
+});
+
+test("readings after the data date are ignored, so both sides are measured together", () => {
+  const entries = [entry("frame", "p1", 50, 50), entry("frame", "p2", 100, 100)];
+  const ranked = delayContributors(
+    scheduleRows(contributorItems),
+    contributorPeriods,
+    contributorCells,
+    entries,
+    // Data date at p1: the p2 reading has not happened as far as this is concerned.
+    "2026-01-07",
+  );
+
+  const frame = ranked.find((row) => row.leaf.id === "frame")!;
+  expect(frame.plannedContribution).toBe(30);
+  expect(frame.actualContribution).toBe(30);
+  expect(frame.variance).toBe(0);
+});
+
+test("behind lines rank above unreported ones, which rank above healthy ones", () => {
+  const items: BoqItemLike[] = [
+    { id: "s", parentId: null, code: "1", description: "S", weight: 0, sortOrder: 1 },
+    { id: "behind", parentId: "s", code: "1.1", description: "Behind", weight: 40, sortOrder: 1 },
+    { id: "quiet", parentId: "s", code: "1.2", description: "Quiet", weight: 30, sortOrder: 2 },
+    { id: "fine", parentId: "s", code: "1.3", description: "Fine", weight: 30, sortOrder: 3 },
+  ];
+  const cells = distributionMap([
+    { boqItemId: "behind", periodId: "p1", plannedPct: 100 },
+    { boqItemId: "quiet", periodId: "p1", plannedPct: 100 },
+    { boqItemId: "fine", periodId: "p1", plannedPct: 100 },
+  ]);
+  const entries = [entry("behind", "p1", 10, 10), entry("fine", "p1", 100, 100)];
+
+  const ranked = delayContributors(scheduleRows(items), contributorPeriods, cells, entries, "2026-01-07");
+  expect(ranked.map((row) => row.leaf.id)).toEqual(["behind", "quiet", "fine"]);
+});
+
+test("with no data date nothing is planned yet, so nothing is behind", () => {
+  const ranked = delayContributors(
+    scheduleRows(contributorItems),
+    contributorPeriods,
+    contributorCells,
+    [],
+    null,
+  );
+  expect(ranked.every((row) => row.plannedContribution === 0)).toBe(true);
+  expect(ranked.every((row) => row.shareOfDelay === null)).toBe(true);
 });

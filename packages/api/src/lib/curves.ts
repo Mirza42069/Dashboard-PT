@@ -286,6 +286,117 @@ export function latestPosition(
   };
 }
 
+/**
+ * What one line contributes to the project's position at the data date.
+ *
+ * All three figures are in *project* percentage points, not percentages of the
+ * line — so they sum to the headline numbers and can be read against each
+ * other. A line weighing 16% of the contract that is half done contributes 8
+ * points; if the plan wanted it finished, it is 8 points behind, and that is
+ * the number worth arguing about.
+ */
+export type DelayContributor<T> = {
+  leaf: T;
+  section: string;
+  /** The line's share of the contract, 0-100. */
+  weight: number;
+  /** Weighted points the plan expected by the data date. */
+  plannedContribution: number;
+  /** Weighted points actually achieved. Null where the line was never reported. */
+  actualContribution: number | null;
+  /** actual − planned, in project points. Negative is behind. */
+  variance: number | null;
+  /** This line's share of the project's total shortfall, 0-100. Null unless behind. */
+  shareOfDelay: number | null;
+  /** Index of the last period holding a reading for this line — reporting freshness. */
+  lastReadingIndex: number | null;
+};
+
+/**
+ * Ranks the lines driving a project's position, worst first.
+ *
+ * Measured at the data date and nowhere else, for the reason `latestPosition`
+ * exists: comparing an actual that stops at week 6 against a plan that runs to
+ * week 20 makes every line look catastrophic. Both sides here are summed over
+ * exactly the periods that end on or before the data date.
+ *
+ * `shareOfDelay` is a share of the *shortfall*, not of the project. Lines that
+ * are ahead do not offset it — netting them off would let a fortnight gained on
+ * cheap fitout hide a month lost on the frame, which is the specific lie this
+ * table exists to prevent. A line that has never been reported has a null
+ * variance rather than a variance equal to its whole plan: unknown and behind
+ * are different, and only the reporting-freshness column can tell you which.
+ */
+export function delayContributors<T extends BoqItemLike>(
+  rows: ScheduleRow<T>[],
+  periods: (PeriodLike & { periodIndex: number })[],
+  cells: Map<string, number>,
+  entries: EntryLike[],
+  dataDate: string | null,
+): DelayContributor<T>[] {
+  const inScope = dataDate
+    ? periods.filter((period) => period.endDate <= dataDate)
+    : ([] as (PeriodLike & { periodIndex: number })[]);
+
+  // Latest reading per leaf up to the data date, and which period it came from.
+  const latest = new Map<string, { pct: number; periodIndex: number }>();
+  const byPeriod = new Map(periods.map((period) => [period.id, period]));
+
+  for (const entry of entries) {
+    if (entry.cumulativePercent === null && entry.cumulativeQuantity === null) continue;
+    const period = byPeriod.get(entry.periodId);
+    if (!period) continue;
+    if (dataDate && period.endDate > dataDate) continue;
+
+    const current = latest.get(entry.boqItemId);
+    if (!current || period.periodIndex > current.periodIndex) {
+      latest.set(entry.boqItemId, { pct: entry.pctComplete, periodIndex: period.periodIndex });
+    }
+  }
+
+  const contributors = rows.map(({ leaf, section }) => {
+    const plannedPct = inScope.reduce(
+      (total, period) => total + (cells.get(cellKey(leaf.id, period.id)) ?? 0),
+      0,
+    );
+    const plannedContribution = (leaf.weight * plannedPct) / 100;
+
+    const reading = latest.get(leaf.id);
+    const actualContribution = reading ? (leaf.weight * reading.pct) / 100 : null;
+
+    return {
+      leaf,
+      section,
+      weight: leaf.weight,
+      plannedContribution,
+      actualContribution,
+      variance: actualContribution === null ? null : actualContribution - plannedContribution,
+      shareOfDelay: null as number | null,
+      lastReadingIndex: reading?.periodIndex ?? null,
+    };
+  });
+
+  const shortfall = contributors.reduce(
+    (total, row) => total + (row.variance !== null && row.variance < 0 ? -row.variance : 0),
+    0,
+  );
+
+  for (const row of contributors) {
+    row.shareOfDelay =
+      shortfall > 0 && row.variance !== null && row.variance < 0
+        ? (-row.variance / shortfall) * 100
+        : null;
+  }
+
+  return contributors.sort((a, b) => {
+    // Behind first, worst at the top; then unreported lines, which are the
+    // other thing a manager needs to chase; then everything else.
+    const rank = (row: (typeof contributors)[number]) =>
+      row.variance !== null && row.variance < 0 ? 0 : row.variance === null ? 1 : 2;
+    return rank(a) - rank(b) || (a.variance ?? 0) - (b.variance ?? 0) || b.weight - a.weight;
+  });
+}
+
 /** Sum of a section's line values — or its own, when it has no lines. */
 export function sectionAmount<T extends BoqItemLike & { value: number | null }>(
   section: Section<T>,

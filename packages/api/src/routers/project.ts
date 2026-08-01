@@ -14,11 +14,18 @@ import z from "zod";
 
 import { companyPermissionProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
-import { type BoqMetrics, boqMetricsByProject } from "../lib/boq-metrics";
+import { type BoqMetrics, boqMetricsByProject, projectExceptions } from "../lib/boq-metrics";
 import { percentOf, toAmount } from "../lib/money";
 import { assertProjectAccess, assertUserAssignable, projectAccessFilter } from "../lib/scope";
 
 const statusSchema = z.enum(PROJECT_STATUSES);
+
+/**
+ * How long a project may go without a reading before the dashboard calls it
+ * stale. Two weeks covers a missed weekly report and the week it takes someone
+ * to notice; past that, silence is the finding.
+ */
+const STALE_AFTER_DAYS = 14;
 
 /**
  * Every nullable column is `nullish()`, not `optional()`, and the difference is
@@ -248,6 +255,54 @@ export const projectRouter = router({
         })
         .sort((a, b) => a.deviation - b.deviation)
         .slice(0, input.limit);
+    }),
+
+  /**
+   * The portfolio ranked by what needs attention, plus the counts behind the
+   * dashboard's cards.
+   *
+   * Deliberately one procedure rather than a card-per-query: every figure here
+   * is derived from the same set of projects, and splitting them would mean the
+   * "3 reports due" tile and the list underneath it could disagree by a refetch.
+   *
+   * Ordering puts the worst deviation first, then projects that have gone quiet.
+   * A project nobody has reported on has a null deviation and cannot be ranked
+   * by it — but silence is itself the exception worth surfacing, which is what
+   * `reportAgeDays` is for.
+   */
+  exceptions: companyPermissionProcedure("project:read")
+    .input(z.object({ limit: z.number().int().min(1).max(50).default(10) }).optional())
+    .query(async ({ ctx, input }) => {
+      const rows = await projectExceptions(projectAccessFilter(ctx));
+
+      // Cancelled and completed projects are not exceptions — nobody is going to
+      // act on a variance from a job that finished.
+      const live = rows.filter((row) => row.status !== "completed" && row.status !== "cancelled");
+
+      const behind = live.filter((row) => row.deviation !== null && row.deviation < 0);
+      const stale = live.filter((row) => row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS);
+      const unreported = live.filter((row) => row.dataDate === null);
+
+      const ranked = [...live].sort((a, b) => {
+        const aBehind = a.deviation !== null && a.deviation < 0;
+        const bBehind = b.deviation !== null && b.deviation < 0;
+        if (aBehind !== bBehind) return aBehind ? -1 : 1;
+        if (aBehind && bBehind) return (a.deviation ?? 0) - (b.deviation ?? 0);
+        return (b.reportAgeDays ?? -1) - (a.reportAgeDays ?? -1);
+      });
+
+      return {
+        counts: {
+          live: live.length,
+          behind: behind.length,
+          stale: stale.length,
+          unreported: unreported.length,
+          reportsDue: live.reduce((total, row) => total + row.reportsDue, 0),
+          awaitingReview: live.reduce((total, row) => total + row.reportsAwaitingReview, 0),
+          openTickets: live.reduce((total, row) => total + row.openTickets, 0),
+        },
+        projects: ranked.slice(0, input?.limit ?? 10),
+      };
     }),
 
   /** Everything the dashboard needs, in one round trip. */

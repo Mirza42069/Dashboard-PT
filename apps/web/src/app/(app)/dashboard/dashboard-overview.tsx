@@ -15,6 +15,7 @@ import { trpc } from "@/utils/trpc";
 
 import ActivityFeed from "./activity-feed";
 import BehindSchedule from "./behind-schedule";
+import Exceptions from "./exceptions";
 
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
 
@@ -90,6 +91,10 @@ export default function DashboardOverview({ showActivity }: { showActivity: bool
 
   return (
     <div className="space-y-4">
+      {/* Exceptions lead. The portfolio totals below are context for them —
+          nobody opens this page to find out how many projects exist. */}
+      <Exceptions />
+
       {/* One bar rather than four cards: these are peers read together, and a
           single surface with dividers reads as one summary instead of four
           competing objects. */}

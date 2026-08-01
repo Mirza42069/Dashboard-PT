@@ -29,6 +29,11 @@ export default async function ProjectDetailPage({
         projectId={id}
         canEdit
         canManageMembers={hasPermission(roleOf(session.user), "member:manage")}
+        // Resolved here, on the server, from the same permission map the API
+        // gates the transitions with. The UI hiding a button is a courtesy; the
+        // procedure refusing the move is the control.
+        canReview={hasPermission(roleOf(session.user), "progress:review")}
+        canLock={hasPermission(roleOf(session.user), "progress:lock")}
       />
     </div>
   );

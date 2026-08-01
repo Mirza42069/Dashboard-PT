@@ -18,21 +18,26 @@ import { toast } from "@/lib/toast";
 
 import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
 import { MonthBandRow } from "@/components/month-band-row";
+import { statusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import {
   buildPeriodSummary,
   computeActualCurve,
   computePlannedCurve,
+  delayContributors,
   distributionMap,
   latestPosition,
   scheduleRows,
 } from "@/lib/boq/curves";
+import { isEditable } from "@DashboardV2/api/lib/progress-workflow";
 import { buildPeriodHeader } from "@/lib/period-header";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
+import DelayContributors from "./delay-contributors";
 import PeriodSummaryTable from "./period-summary-table";
+import ReportingWorkflow from "./reporting-workflow";
 import SCurveChart from "./s-curve-chart";
 
 /** Ties the chart to the table that carries its figures for assistive tech. */
@@ -43,9 +48,15 @@ const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
 export default function ProgressTab({
   projectId,
   canEdit,
+  canReview,
+  canLock,
 }: {
   projectId: string;
   canEdit: boolean;
+  /** Mark reviewed, approve, or return a submitted report. */
+  canReview: boolean;
+  /** Lock an approved period, or reopen one for correction. */
+  canLock: boolean;
 }) {
   const t = useT();
   const format = useFormat();
@@ -59,6 +70,8 @@ export default function ProgressTab({
    */
   const [drafts, setDrafts] = useState<Map<string, string>>(new Map());
   const [saving, setSaving] = useState(false);
+  /** Which period the workflow panel is showing. Null follows its own default. */
+  const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
 
   const reportQuery = useQuery(trpc.progress.report.queryOptions({ projectId }));
   const bulkSave = useMutation(trpc.progress.bulkSave.mutationOptions());
@@ -100,6 +113,7 @@ export default function ProgressTab({
   // disagree.
   const summary = buildPeriodSummary(rows, periods, cells, entries, dataDate);
   const header = buildPeriodHeader(format, periods, dataDate);
+  const contributors = delayContributors(rows, periods, cells, entries, dataDate);
 
   const chartData = periods.map((period, index) => ({
     label: String(period.periodIndex),
@@ -177,6 +191,15 @@ export default function ProgressTab({
 
   return (
     <div className="space-y-3">
+      <ReportingWorkflow
+        projectId={projectId}
+        canEdit={canEdit}
+        canReview={canReview}
+        canLock={canLock}
+        selectedPeriodId={selectedPeriodId}
+        onSelectPeriod={setSelectedPeriodId}
+      />
+
       <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
         <Card>
           <CardHeader>
@@ -250,6 +273,14 @@ export default function ProgressTab({
       )}
 
       {periods.length > 0 && (
+        <DelayContributors
+          contributors={contributors}
+          dataDate={dataDate}
+          totalDeviation={hasReadings ? position.deviation : null}
+        />
+      )}
+
+      {periods.length > 0 && (
         <Card>
           <CardHeader>
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -300,9 +331,14 @@ export default function ProgressTab({
                         <span className="block text-xs font-normal text-muted-foreground tabular-nums">
                           {column.range}
                         </span>
-                        {(column.isCurrent || column.period.status === "locked") && (
+                        {column.isCurrent && (
                           <span className="block text-xs font-normal text-muted-foreground">
-                            {column.isCurrent ? t.periodSummary.current : t.progress.locked}
+                            {t.periodSummary.current}
+                          </span>
+                        )}
+                        {!isEditable(column.period.status) && (
+                          <span className="block text-xs font-normal text-muted-foreground">
+                            {statusLabel(t, "period", column.period.status)}
                           </span>
                         )}
                       </th>
@@ -333,7 +369,10 @@ export default function ProgressTab({
 
                       {header.columns.map(({ period, accessibleName }) => {
                         const key = cellKey(row.leaf.id, period.id);
-                        const editable = canEdit && period.status !== "locked";
+                        // The workflow decides, not a status string compared in
+                        // place — a submitted report is frozen for the reviewer
+                        // just as firmly as a locked one is.
+                        const editable = canEdit && isEditable(period.status);
 
                         return (
                           <td key={period.id} className="px-1 py-1">
@@ -356,6 +395,17 @@ export default function ProgressTab({
                             ) : (
                               <span className="block px-2 py-1 text-right tabular-nums text-muted-foreground">
                                 {cellValue(row.leaf.id, period.id) || "—"}
+                              </span>
+                            )}
+                            {/*
+                             * An explicit "nothing moved here" is not the same
+                             * as an empty cell, and the grid has to say so — it
+                             * is the difference between a report that can be
+                             * submitted and one that cannot.
+                             */}
+                            {entryByKey.get(key)?.noProgress && (
+                              <span className="mt-0.5 block text-center text-[10px] text-muted-foreground">
+                                {t.reporting.noProgressShort}
                               </span>
                             )}
                           </td>

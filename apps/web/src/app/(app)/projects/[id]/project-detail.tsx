@@ -32,10 +32,14 @@ export default function ProjectDetail({
   projectId,
   canEdit,
   canManageMembers,
+  canReview,
+  canLock,
 }: {
   projectId: string;
   canEdit: boolean;
   canManageMembers: boolean;
+  canReview: boolean;
+  canLock: boolean;
 }) {
   const t = useT();
   const { money, percent, formatDate } = useFormat();
@@ -171,7 +175,12 @@ export default function ProjectDetail({
         </TabsContent>
 
         <TabsContent value="progress">
-          <ProgressTab projectId={projectId} canEdit={canEdit} />
+          <ProgressTab
+            projectId={projectId}
+            canEdit={canEdit}
+            canReview={canReview}
+            canLock={canLock}
+          />
         </TabsContent>
 
         <TabsContent value="tickets">

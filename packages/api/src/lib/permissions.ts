@@ -43,6 +43,19 @@ export const PERMISSIONS = [
   /** Assign users to a project's member list. */
   "member:manage",
   "activity:read",
+  /**
+   * Judge a submitted progress report: mark it reviewed, approve it, or send it
+   * back. Deliberately separate from `project:write` — the point of the
+   * workflow is that the person who enters the figures is not the person who
+   * signs them off.
+   */
+  "progress:review",
+  /**
+   * Lock an approved period, and reopen a locked one for correction. The
+   * narrower of the two reporting grants: locking is what makes a period the
+   * agreed record, and reopening is what un-agrees it.
+   */
+  "progress:lock",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -57,6 +70,9 @@ const GRANTS: Record<Role, readonly Permission[]> = {
       p !== "user:setRole" &&
       p !== "user:setCompany",
   ),
+  // A site user records progress and submits it; the review and the lock belong
+  // to whoever the report goes to. Granting both here would make the workflow a
+  // formality anyone could complete alone.
   user: ["project:read", "project:update", "project:write"],
 };
 

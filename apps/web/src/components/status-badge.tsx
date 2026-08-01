@@ -2,13 +2,17 @@
 
 import { Badge } from "@DashboardV2/ui/components/badge";
 import {
+  CircleAlert,
   CircleCheck,
   CircleDashed,
   CircleDot,
   CircleSlash,
   Hammer,
+  Lock,
   OctagonX,
   PauseCircle,
+  Pencil,
+  Send,
 } from "@DashboardV2/ui/components/icons";
 
 import type { Dictionary } from "@/i18n";
@@ -40,6 +44,23 @@ const STYLES: Record<string, Record<string, Descriptor>> = {
     in_progress: { variant: "default", icon: CircleDot },
     resolved: { variant: "secondary", icon: CircleCheck },
     closed: { variant: "ghost", icon: CircleSlash },
+  },
+  /**
+   * Where a progress report stands. Seven states, each with its own glyph — the
+   * distinctions this workflow turns on (untouched vs being written, returned
+   * vs merely unfinished) are exactly the ones a shared icon would erase.
+   *
+   * `returned` is the only destructive variant. It is the one state that is
+   * somebody else waiting on you, and it should read that way at a glance.
+   */
+  period: {
+    open: { variant: "outline", icon: CircleDashed },
+    draft: { variant: "outline", icon: Pencil },
+    submitted: { variant: "default", icon: Send },
+    reviewed: { variant: "default", icon: CircleDot },
+    approved: { variant: "secondary", icon: CircleCheck },
+    locked: { variant: "ghost", icon: Lock },
+    returned: { variant: "destructive", icon: CircleAlert },
   },
 };
 

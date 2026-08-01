@@ -34,6 +34,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2, Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
@@ -75,7 +76,17 @@ export default function ProjectsTable({ canManage }: { canManage: boolean }) {
   ];
 
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<string>(ALL);
+  /**
+   * Seeded from the URL so a dashboard card can link straight to "the projects
+   * this number counted". Read once as the initial value rather than kept in
+   * sync — after landing, the dropdown owns the filter, and a URL that fought
+   * the control would make clearing the filter impossible.
+   */
+  const searchParams = useSearchParams();
+  const [status, setStatus] = useState<string>(() => {
+    const requested = searchParams.get("status");
+    return requested && (STATUSES as readonly string[]).includes(requested) ? requested : ALL;
+  });
   const [page, setPage] = useState(0);
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);

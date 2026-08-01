@@ -1,6 +1,7 @@
 import { relations, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
+  boolean,
   customType,
   date,
   index,
@@ -65,7 +66,31 @@ export const WEIGHT_SOURCES = ["derived", "manual"] as const;
 export const DISTRIBUTION_TYPES = ["linear", "manual"] as const;
 export const PROGRESS_MODES = ["by_quantity", "by_percent"] as const;
 export const PERIOD_TYPES = ["weekly", "biweekly", "monthly"] as const;
-export const PERIOD_STATUSES = ["open", "locked"] as const;
+/**
+ * The reporting workflow a period moves through.
+ *
+ * `open` is a period nobody has touched; `draft` starts the moment someone
+ * saves a figure into it. The two are kept apart because "not started" and
+ * "being worked on" are different answers to "where is this week's report",
+ * and a manager chasing submissions needs to tell them apart.
+ *
+ * `returned` is a first-class state rather than a flag on `draft`: the comment
+ * explaining *why* it came back has to stay attached to the period, and a
+ * returned report is more urgent than one nobody has opened.
+ *
+ * Order here is not the transition order — see lib/progress-workflow.ts, which
+ * owns the state machine. This array only tells the database what a valid value
+ * looks like.
+ */
+export const PERIOD_STATUSES = [
+  "open",
+  "draft",
+  "submitted",
+  "reviewed",
+  "approved",
+  "locked",
+  "returned",
+] as const;
 /**
  * An import either lands whole or not at all, so there is no "pending" — the
  * row is written once the outcome is known. Failed attempts are recorded too:
@@ -328,12 +353,70 @@ export const reportingPeriod = pgTable(
     startDate: date("start_date").notNull(),
     endDate: date("end_date").notNull(),
     status: text("status").$type<PeriodStatus>().default("open").notNull(),
+    /**
+     * Who moved this period, and when.
+     *
+     * Denormalised onto the period rather than read back from the event log
+     * below because "who approved week 12" is asked on every row of the
+     * reporting table, and answering it from history would be a lateral join
+     * per period. The log stays the record of *how* it got here; these columns
+     * are the answer to where it is now.
+     *
+     * Each is cleared when the period moves back before the step it records —
+     * a returned report has no approver.
+     */
+    submittedById: text("submitted_by_id").references(() => user.id, { onDelete: "set null" }),
+    submittedAt: timestamp("submitted_at"),
+    reviewedById: text("reviewed_by_id").references(() => user.id, { onDelete: "set null" }),
+    reviewedAt: timestamp("reviewed_at"),
+    approvedById: text("approved_by_id").references(() => user.id, { onDelete: "set null" }),
+    approvedAt: timestamp("approved_at"),
+    lockedById: text("locked_by_id").references(() => user.id, { onDelete: "set null" }),
+    lockedAt: timestamp("locked_at"),
+    /** Why a reviewer sent it back. Shown beside the figures it refers to. */
+    returnReason: text("return_reason"),
+    /** A reviewer's note that is not a rejection. */
+    reviewComment: text("review_comment"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (table) => [
     uniqueIndex("reportingPeriod_project_index_idx").on(table.projectId, table.periodIndex),
     index("reportingPeriod_project_endDate_idx").on(table.projectId, table.endDate),
+    index("reportingPeriod_project_status_idx").on(table.projectId, table.status),
+  ],
+);
+
+/**
+ * Every move a reporting period has made, in order.
+ *
+ * Append-only and never updated. The columns on `reportingPeriod` say where a
+ * period stands; this says how it got there — including the paths that leave no
+ * trace up there, like a report submitted, returned, corrected and submitted
+ * again, which ends with the same `submittedAt` it would have had first time.
+ *
+ * `actorName` is a snapshot for the same reason activityLog keeps one: the
+ * person who approved a period must still be named after their account is
+ * removed.
+ */
+export const reportingPeriodEvent = pgTable(
+  "reporting_period_event",
+  {
+    id: id(),
+    periodId: text("period_id")
+      .notNull()
+      .references(() => reportingPeriod.id, { onDelete: "cascade" }),
+    fromStatus: text("from_status").$type<PeriodStatus>().notNull(),
+    toStatus: text("to_status").$type<PeriodStatus>().notNull(),
+    actorId: text("actor_id").references(() => user.id, { onDelete: "set null" }),
+    actorName: text("actor_name").notNull(),
+    /** The return reason, review note, or correction justification. */
+    comment: text("comment"),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index("reportingPeriodEvent_periodId_idx").on(table.periodId),
+    index("reportingPeriodEvent_createdAt_idx").on(table.createdAt),
   ],
 );
 
@@ -388,6 +471,22 @@ export const progressEntry = pgTable(
     cumulativePercent: numeric("cumulative_percent", { precision: 9, scale: 4 }),
     /** Whichever of the two above applies, resolved to 0-100 at write time. */
     pctComplete: numeric("pct_complete", { precision: 9, scale: 4 }).default("0").notNull(),
+    /**
+     * "No progress this period" — said out loud.
+     *
+     * The third state this table needs, and the reason it cannot be inferred:
+     * a row with both cumulative columns null already means *cleared*, which
+     * behaves like no reading at all. That is indistinguishable from a line
+     * nobody looked at, and a report cannot be submitted on lines nobody looked
+     * at. This flag is somebody stating that the line was checked and did not
+     * move.
+     *
+     * It carries no reading, so it changes no curve — it is a completeness
+     * marker, not a measurement. Recording it as a cumulative equal to last
+     * period's would have been the tempting shortcut and would have quietly
+     * turned an assertion about this week into a fabricated reading.
+     */
+    noProgress: boolean("no_progress").default(false).notNull(),
     note: text("note"),
     recordedById: text("recorded_by_id").references(() => user.id, { onDelete: "set null" }),
     createdAt: createdAt(),
@@ -517,6 +616,12 @@ export const ACTIVITY_ACTIONS = [
   "generated",
   "progress_recorded",
   "imported",
+  "submitted",
+  "reviewed",
+  "approved",
+  "returned",
+  "locked",
+  "reopened",
 ] as const;
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
 
@@ -603,6 +708,15 @@ export const reportingPeriodRelations = relations(reportingPeriod, ({ one, many 
   project: one(project, { fields: [reportingPeriod.projectId], references: [project.id] }),
   distribution: many(boqItemDistribution),
   progressEntries: many(progressEntry),
+  events: many(reportingPeriodEvent),
+}));
+
+export const reportingPeriodEventRelations = relations(reportingPeriodEvent, ({ one }) => ({
+  period: one(reportingPeriod, {
+    fields: [reportingPeriodEvent.periodId],
+    references: [reportingPeriod.id],
+  }),
+  actor: one(user, { fields: [reportingPeriodEvent.actorId], references: [user.id] }),
 }));
 
 export const boqItemDistributionRelations = relations(boqItemDistribution, ({ one }) => ({
