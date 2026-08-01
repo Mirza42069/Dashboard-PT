@@ -38,13 +38,13 @@ import { company } from "./company";
  *    packages/api/src/lib/money.ts, never ad hoc in a component.
  */
 
-const id = () =>
+export const id = () =>
   text("id")
     .primaryKey()
     .$defaultFn(() => crypto.randomUUID());
 
-const createdAt = () => timestamp("created_at").defaultNow().notNull();
-const updatedAt = () =>
+export const createdAt = () => timestamp("created_at").defaultNow().notNull();
+export const updatedAt = () =>
   timestamp("updated_at")
     .defaultNow()
     .$onUpdate(() => new Date())
@@ -58,6 +58,24 @@ export const PROJECT_STATUSES = [
   "cancelled",
 ] as const;
 export const TICKET_STATUSES = ["open", "in_progress", "resolved", "closed"] as const;
+
+/**
+ * Action classification. Declared here rather than in ./field.ts because the
+ * columns that use them live on `ticket`, and a schema file should be readable
+ * without following an import to find out what a column can hold.
+ */
+export const ACTION_TYPES = [
+  "issue",
+  "rfi",
+  "punch",
+  "safety",
+  "quality",
+  "delay",
+  "general",
+] as const;
+export const ACTION_PRIORITIES = ["low", "medium", "high", "critical"] as const;
+export type ActionType = (typeof ACTION_TYPES)[number];
+export type ActionPriority = (typeof ACTION_PRIORITIES)[number];
 
 export const BOQ_VERSION_STATUSES = ["draft", "active", "superseded"] as const;
 export const SCHEDULE_VERSION_STATUSES = ["draft", "active"] as const;
@@ -197,6 +215,31 @@ export const ticket = pgTable(
     responsibleName: text("responsible_name").notNull(),
     responsibleContactNumber: text("responsible_contact_number").notNull(),
     status: text("status").$type<TicketStatus>().default("open").notNull(),
+    /**
+     * What this action is. Every row that existed before this column becomes
+     * `issue`, which is what a ticket already was — the widening keeps the
+     * table, its ids and every query that reads it, so nothing has to be
+     * migrated anywhere.
+     */
+    type: text("type").$type<ActionType>().default("issue").notNull(),
+    priority: text("priority").$type<ActionPriority>().default("medium").notNull(),
+    dueDate: date("due_date"),
+    /**
+     * The account the action is assigned to, alongside the free-text
+     * `responsibleName` that predates it. Both are kept: an action can be owned
+     * by a subcontractor's foreman who has no login, and losing that was not an
+     * acceptable price for structured assignment.
+     */
+    assigneeId: text("assignee_id").references(() => user.id, { onDelete: "set null" }),
+    closedAt: timestamp("closed_at"),
+    resolution: text("resolution"),
+    /** What the action was raised from, where it was raised from something. */
+    boqItemId: text("boq_item_id").references((): AnyPgColumn => boqItem.id, {
+      onDelete: "set null",
+    }),
+    periodId: text("period_id").references((): AnyPgColumn => reportingPeriod.id, {
+      onDelete: "set null",
+    }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -204,6 +247,10 @@ export const ticket = pgTable(
     index("ticket_projectId_idx").on(table.projectId),
     index("ticket_issuerId_idx").on(table.issuerId),
     index("ticket_status_idx").on(table.status),
+    index("ticket_assigneeId_idx").on(table.assigneeId),
+    // The overdue query: open actions with a due date, per project.
+    index("ticket_project_due_idx").on(table.projectId, table.dueDate),
+    index("ticket_project_type_idx").on(table.projectId, table.type),
   ],
 );
 
@@ -569,7 +616,7 @@ export const projectNote = pgTable(
  * fromDriver only needs to pass it through — re-parsing it as hex would eat
  * the first two bytes of every image.
  */
-const bytea = customType<{ data: Buffer; driverData: Buffer | string }>({
+export const bytea = customType<{ data: Buffer; driverData: Buffer | string }>({
   dataType: () => "bytea",
   toDriver: (value) => `\\x${value.toString("hex")}`,
   fromDriver: (value) =>
@@ -600,6 +647,7 @@ export const ACTIVITY_ENTITIES = [
   "boq",
   "period",
   "progress",
+  "daily_report",
 ] as const;
 export type ActivityEntity = (typeof ACTIVITY_ENTITIES)[number];
 
