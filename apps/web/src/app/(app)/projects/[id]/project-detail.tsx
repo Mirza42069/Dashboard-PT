@@ -7,10 +7,13 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Pencil } from "@DashboardV2/ui/components/icons";
+import type { Route } from "next";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import ProjectBuildingScene from "@/components/project-building-scene";
+import { QueryError } from "@/components/query-error";
 import { StatusBadge } from "@/components/status-badge";
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
@@ -26,6 +29,8 @@ import ProjectFormDialog, {
   projectToFormValues,
   type ProjectFormValues,
 } from "../project-form-dialog";
+
+const PROJECT_TABS = ["overview", "tickets", "baseline", "progress", "daily", "notes", "team"] as const;
 
 export default function ProjectDetail({
   projectId,
@@ -43,7 +48,27 @@ export default function ProjectDetail({
   canLock: boolean;
 }) {
   const t = useT();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [editValues, setEditValues] = useState<ProjectFormValues | null>(null);
+
+  const requestedTab = searchParams.get("tab");
+  const activeTab =
+    requestedTab &&
+    (PROJECT_TABS as readonly string[]).includes(requestedTab) &&
+    (requestedTab !== "team" || canManageMembers)
+      ? requestedTab
+      : "overview";
+
+  function selectTab(value: string) {
+    const next = new URLSearchParams(searchParams.toString());
+    if (value === "overview") next.delete("tab");
+    else next.set("tab", value);
+    if (value !== "tickets") next.delete("action");
+    const query = next.toString();
+    router.replace((query ? `${pathname}?${query}` : pathname) as Route, { scroll: false });
+  }
 
   const projectQuery = useQuery(trpc.project.get.queryOptions({ id: projectId }));
 
@@ -51,6 +76,15 @@ export default function ProjectDetail({
 
   if (projectQuery.isPending) {
     return <Skeleton className="h-64 w-full" />;
+  }
+
+  if (projectQuery.isError) {
+    return (
+      <QueryError
+        error={projectQuery.error}
+        onRetry={() => void projectQuery.refetch()}
+      />
+    );
   }
 
   if (!project) {
@@ -112,7 +146,7 @@ export default function ProjectDetail({
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={activeTab} onValueChange={selectTab}>
         <div className="-mx-1 overflow-x-auto px-1 pb-1">
           <TabsList variant="line" className="min-w-max">
             <TabsTrigger value="overview">{t.nav.overview}</TabsTrigger>

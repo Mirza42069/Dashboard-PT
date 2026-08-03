@@ -10,6 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@DashboardV2/ui/components/alert-dialog";
+import { Badge } from "@DashboardV2/ui/components/badge";
 import { Button } from "@DashboardV2/ui/components/button";
 import {
   Card,
@@ -36,9 +37,12 @@ import {
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
-import { useDeferredValue, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 
+import { QueryError } from "@/components/query-error";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -55,9 +59,12 @@ type DeleteTarget = { id: string; title: string };
 
 export default function TicketsTab({ projectId }: { projectId: string }) {
   const t = useT();
+  const searchParams = useSearchParams();
+  const requestedAction = searchParams.get("action");
   const { formatDateTime } = useFormat();
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
+  const linkedRowRef = useRef<HTMLTableRowElement>(null);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [status, setStatus] = useState<string>(ALL);
@@ -108,7 +115,15 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
   }
 
   const rows = query.data?.tickets ?? [];
+  const orderedRows = requestedAction
+    ? [...rows].sort((a, b) => Number(b.id === requestedAction) - Number(a.id === requestedAction))
+    : rows;
+  const requestedActionFound = rows.some((row) => row.id === requestedAction);
   const filtering = search.trim() !== "" || status !== ALL;
+
+  useEffect(() => {
+    if (requestedActionFound) linkedRowRef.current?.focus();
+  }, [requestedActionFound, requestedAction]);
 
   return (
     <>
@@ -145,6 +160,19 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
           </div>
         </CardHeader>
         <CardContent className="px-0">
+          {!query.isPending && !query.isError && requestedAction && !requestedActionFound && (
+            <div role="status" className="mx-4 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/35 bg-muted/30 p-3">
+              <p className="text-sm">{t.actions.linkedActionMissing}</p>
+              <Button
+                nativeButton={false}
+                variant="outline"
+                size="sm"
+                render={<Link href={`/projects/${projectId}?tab=tickets`} />}
+              >
+                {t.actions.showAll}
+              </Button>
+            </div>
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -165,17 +193,35 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                     </TableCell>
                   </TableRow>
                 ))}
-              {!query.isPending && rows.length === 0 && (
+              {query.isError && (
+                <TableRow>
+                  <TableCell colSpan={6} className="p-4">
+                    <QueryError error={query.error} onRetry={() => void query.refetch()} />
+                  </TableCell>
+                </TableRow>
+              )}
+              {!query.isPending && !query.isError && rows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
                     {filtering ? t.tickets.noMatch : t.tickets.empty}
                   </TableCell>
                 </TableRow>
               )}
-              {rows.map((row) => (
-                <TableRow key={row.id}>
+              {orderedRows.map((row) => (
+                <TableRow
+                  key={row.id}
+                  ref={row.id === requestedAction ? linkedRowRef : undefined}
+                  tabIndex={row.id === requestedAction ? -1 : undefined}
+                  aria-current={row.id === requestedAction ? "true" : undefined}
+                  data-state={row.id === requestedAction ? "selected" : undefined}
+                >
                   <TableCell className="pl-4">
-                    <p className="font-medium">{row.title}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium">{row.title}</p>
+                      {row.id === requestedAction && (
+                        <Badge variant="secondary">{t.actions.linkedAction}</Badge>
+                      )}
+                    </div>
                     <p className="max-w-md whitespace-pre-wrap text-muted-foreground">
                       {row.description}
                     </p>

@@ -23,12 +23,15 @@ export function Meter({
   value,
   max,
   label,
+  ariaLabel,
   segments = SEGMENTS,
   className,
 }: {
   value: number;
   max: number;
   label?: string;
+  /** Accessible context when several meters appear together. */
+  ariaLabel?: string;
   /** Lower this where the meter sits in a narrow column. */
   segments?: number;
   className?: string;
@@ -47,7 +50,7 @@ export function Meter({
         aria-valuenow={Math.round(value)}
         aria-valuemin={0}
         aria-valuemax={Math.round(max)}
-        aria-label={label ?? t.projects.progressMeter}
+        aria-label={ariaLabel ?? label ?? t.projects.progressMeter}
         // The segments are decoration over a value the meter role already
         // reports, so nothing inside here is exposed separately — a screen
         // reader announcing ten cells would be ten times the noise for the same

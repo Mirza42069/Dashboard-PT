@@ -19,7 +19,12 @@ import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { roleOf } from "../lib/permissions";
-import { assertMember, assertProjectAccess, type ProjectScopeCtx } from "../lib/scope";
+import {
+  assertMember,
+  assertProjectAccess,
+  assertUserAssignable,
+  type ProjectScopeCtx,
+} from "../lib/scope";
 
 /**
  * Tickets, widened into the general construction action they were already
@@ -185,6 +190,7 @@ export const ticketRouter = router({
     .input(fieldsSchema.extend({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
+      if (input.assigneeId) await assertUserAssignable(ctx.companyId, input.assigneeId);
       const [target] = await db
         .select({ code: project.code, name: project.name })
         .from(project)
@@ -233,6 +239,9 @@ export const ticketRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...fields } = input;
       const current = await ticketInScope(ctx, id);
+      if (fields.assigneeId && fields.assigneeId !== current.ticket.assigneeId) {
+        await assertUserAssignable(ctx.companyId, fields.assigneeId);
+      }
 
       // The history rows are computed before the write, from the row that was
       // read in the same request — comparing afterwards would record no change
@@ -501,10 +510,11 @@ export const ticketRouter = router({
         })
         .from(ticket)
         .innerJoin(project, eq(project.id, ticket.projectId))
-        .leftJoin(user, eq(user.id, ticket.assigneeId))
+        .leftJoin(user, and(eq(user.id, ticket.assigneeId), eq(user.companyId, ctx.companyId)))
         .where(
           and(
             eq(project.companyId, ctx.companyId),
+            sql`${project.status} not in ('completed', 'cancelled')`,
             input.projectId ? eq(ticket.projectId, input.projectId) : undefined,
             sql`${ticket.status} not in ('resolved', 'closed')`,
             roleOf(ctx.session.user) === "user"

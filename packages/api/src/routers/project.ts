@@ -17,7 +17,7 @@ import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { type BoqMetrics, boqMetricsByProject, projectExceptions } from "../lib/boq-metrics";
 import { percentOf, toAmount } from "../lib/money";
-import { roleOf } from "../lib/permissions";
+import { hasPermission, roleOf } from "../lib/permissions";
 import { assertProjectAccess, assertUserAssignable, projectAccessFilter } from "../lib/scope";
 
 const statusSchema = z.enum(PROJECT_STATUSES);
@@ -272,10 +272,9 @@ export const projectRouter = router({
    * by it — but silence is itself the exception worth surfacing, which is what
    * `reportAgeDays` is for.
    */
-  exceptions: companyPermissionProcedure("project:read")
-    .input(z.object({ limit: z.number().int().min(1).max(50).default(10) }).optional())
-    .query(async ({ ctx, input }) => {
+  exceptions: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
       const rows = await projectExceptions(projectAccessFilter(ctx));
+      const canReview = hasPermission(roleOf(ctx.session.user), "progress:review");
 
       // Cancelled and completed projects are not exceptions — nobody is going to
       // act on a variance from a job that finished.
@@ -284,8 +283,16 @@ export const projectRouter = router({
       const behind = live.filter((row) => row.deviation !== null && row.deviation < 0);
       const stale = live.filter((row) => row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS);
       const unreported = live.filter((row) => row.dataDate === null);
-
-      const ranked = [...live].sort((a, b) => {
+      const needsAttention = live.filter(
+        (row) =>
+          (row.deviation !== null && row.deviation < 0) ||
+          row.dataDate === null ||
+          (row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS) ||
+          row.reportsDue > 0 ||
+          (canReview && row.reportsAwaitingReview > 0) ||
+          row.openTickets > 0,
+      );
+      const ranked = [...needsAttention].sort((a, b) => {
         const aBehind = a.deviation !== null && a.deviation < 0;
         const bBehind = b.deviation !== null && b.deviation < 0;
         if (aBehind !== bBehind) return aBehind ? -1 : 1;
@@ -303,7 +310,7 @@ export const projectRouter = router({
           awaitingReview: live.reduce((total, row) => total + row.reportsAwaitingReview, 0),
           openTickets: live.reduce((total, row) => total + row.openTickets, 0),
         },
-        projects: ranked.slice(0, input?.limit ?? 10),
+        projects: ranked,
       };
     }),
 
@@ -356,6 +363,8 @@ export const projectRouter = router({
       projects: {
         total: Object.values(byStatus).reduce((a, b) => a + b, 0),
         byStatus,
+        baselined: boq.size,
+        measured: measured.length,
       },
       portfolioValue,
       workCompletedValue,

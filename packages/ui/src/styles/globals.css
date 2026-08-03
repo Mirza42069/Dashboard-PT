@@ -31,6 +31,9 @@
    */
   --success: oklch(0.5200 0.1300 155);
   --success-foreground: oklch(1 0 0);
+  /* Semantic caution state; chart tokens remain reserved for data magnitude. */
+  --warning: oklch(0.4800 0.1050 68);
+  --warning-foreground: oklch(1 0 0);
   --border: oklch(0.9013 0.0156 257.2001);
   --input: oklch(0.9013 0.0156 257.2001);
   --ring: oklch(0.6503 0.0220 257.4949);
@@ -115,6 +118,8 @@
   --destructive: oklch(0.7040 0.1910 22.2160);
   --success: oklch(0.7600 0.1500 155);
   --success-foreground: oklch(0.2494 0.0304 256.8623);
+  --warning: oklch(0.7800 0.1400 75);
+  --warning-foreground: oklch(0.2494 0.0304 256.8623);
   --border: oklch(0.3299 0.0322 257.6775);
   --input: oklch(0.3205 0.0336 253.9373);
   --ring: oklch(0.5805 0.0297 251.8232);
@@ -241,6 +246,8 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
 }
 
 @layer base {
