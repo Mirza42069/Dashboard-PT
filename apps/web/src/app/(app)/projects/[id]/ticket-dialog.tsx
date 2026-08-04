@@ -10,9 +10,10 @@ import {
 } from "@DashboardV2/ui/components/dialog";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
+import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Textarea } from "@DashboardV2/ui/components/textarea";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
 import z from "zod";
 
@@ -27,8 +28,8 @@ import {
 } from "@DashboardV2/ui/components/select";
 import { ACTION_PRIORITIES, ACTION_TYPES } from "@DashboardV2/db/schema";
 import type { ActionPriority, ActionType } from "@DashboardV2/db/schema";
-import { useQuery } from "@tanstack/react-query";
 
+import { QueryError } from "@/components/query-error";
 import { useLocale, useT } from "@/i18n/provider";
 import { datePickerLabels } from "@/lib/date-picker-labels";
 import { useFormat } from "@/lib/use-format";
@@ -211,22 +212,32 @@ export default function TicketDialog({
               )}
             </form.Field>
             <form.Field name="assigneeId">
-              {(field) => (
-                <ChoiceField
-                  label={t.actions.assignee}
-                  value={field.state.value || UNASSIGNED}
-                  options={[
-                    { value: UNASSIGNED, label: t.actions.unassigned },
-                    ...(assignees.data ?? []).map((person) => ({
-                      value: person.id,
-                      label: person.name,
-                    })),
-                  ]}
-                  onChange={(value) =>
-                    field.handleChange(value === UNASSIGNED ? "" : value)
-                  }
-                />
-              )}
+              {(field) =>
+                assignees.isPending ? (
+                  <Skeleton className="mt-7 h-9 w-full" />
+                ) : assignees.isError ? (
+                  <QueryError
+                    error={assignees.error}
+                    onRetry={() => void assignees.refetch()}
+                    className="px-3 py-4"
+                  />
+                ) : (
+                  <ChoiceField
+                    label={t.actions.assignee}
+                    value={field.state.value || UNASSIGNED}
+                    options={[
+                      { value: UNASSIGNED, label: t.actions.unassigned },
+                      ...assignees.data.map((person) => ({
+                        value: person.id,
+                        label: person.name,
+                      })),
+                    ]}
+                    onChange={(value) =>
+                      field.handleChange(value === UNASSIGNED ? "" : value)
+                    }
+                  />
+                )
+              }
             </form.Field>
           </div>
 

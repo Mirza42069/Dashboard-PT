@@ -18,6 +18,7 @@ import { toast } from "@/lib/toast";
 
 import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
 import { MonthBandRow } from "@/components/month-band-row";
+import { QueryError } from "@/components/query-error";
 import { statusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -77,6 +78,9 @@ export default function ProgressTab({
   const bulkSave = useMutation(trpc.progress.bulkSave.mutationOptions());
 
   if (reportQuery.isPending) return <Skeleton className="h-64 w-full" />;
+  if (reportQuery.isError) {
+    return <QueryError error={reportQuery.error} onRetry={() => void reportQuery.refetch()} />;
+  }
 
   const report = reportQuery.data;
   const version = report?.version ?? null;
@@ -145,7 +149,8 @@ export default function ProgressTab({
     return stored === null ? "" : String(stored);
   }
 
-  async function save() {
+  async function save(showSuccess = true) {
+    if (drafts.size === 0) return true;
     // Group by period — the API records one period at a time, which is also how
     // a site engineer works: this week's figures, then next week's.
     const byPeriod = new Map<string, { boqItemId: string; value: string }[]>();
@@ -179,9 +184,11 @@ export default function ProgressTab({
       setDrafts(new Map());
       await queryClient.invalidateQueries(trpc.progress.pathFilter());
       await queryClient.invalidateQueries(trpc.project.pathFilter());
-      toast.success(t.progress.saved);
+      if (showSuccess) toast.success(t.progress.saved);
+      return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.progress.saveFailed);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -198,6 +205,7 @@ export default function ProgressTab({
         canLock={canLock}
         selectedPeriodId={selectedPeriodId}
         onSelectPeriod={setSelectedPeriodId}
+        onBeforeSubmit={() => save(false)}
       />
 
       <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">

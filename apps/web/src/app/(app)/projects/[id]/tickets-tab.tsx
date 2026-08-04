@@ -19,6 +19,7 @@ import {
   CardTitle,
 } from "@DashboardV2/ui/components/card";
 import { Input } from "@DashboardV2/ui/components/input";
+import { Label } from "@DashboardV2/ui/components/label";
 import {
   Select,
   SelectContent,
@@ -27,6 +28,7 @@ import {
   SelectValue,
 } from "@DashboardV2/ui/components/select";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
+import { Textarea } from "@DashboardV2/ui/components/textarea";
 import {
   Table,
   TableBody,
@@ -36,7 +38,7 @@ import {
   TableRow,
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
+import { CircleCheck, Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
@@ -56,6 +58,7 @@ const ALL = "all";
 
 type DialogState = { id: string | null; values: TicketFormValues };
 type DeleteTarget = { id: string; title: string };
+type CloseTarget = { id: string; title: string };
 
 export default function TicketsTab({ projectId }: { projectId: string }) {
   const t = useT();
@@ -70,6 +73,8 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
   const [status, setStatus] = useState<string>(ALL);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
+  const [pendingClose, setPendingClose] = useState<CloseTarget | null>(null);
+  const [resolution, setResolution] = useState("");
   const statusOptions = STATUSES.map((value) => ({
     value,
     label: statusLabel("ticket", value),
@@ -84,6 +89,7 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
     }),
   );
   const setTicketStatus = useMutation(trpc.ticket.setStatus.mutationOptions());
+  const closeTicket = useMutation(trpc.ticket.close.mutationOptions());
   const deleteTicket = useMutation(trpc.ticket.delete.mutationOptions());
 
   async function refresh() {
@@ -111,6 +117,21 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
       toast.success(t.tickets.deleted);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.tickets.deleteFailed);
+    }
+  }
+
+  async function confirmClose() {
+    const target = pendingClose;
+    const trimmedResolution = resolution.trim();
+    if (!target || !trimmedResolution) return;
+    try {
+      await closeTicket.mutateAsync({ id: target.id, resolution: trimmedResolution });
+      setPendingClose(null);
+      setResolution("");
+      await refresh();
+      toast.success(t.actions.closed);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.tickets.statusFailed);
     }
   }
 
@@ -241,7 +262,9 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                   </TableCell>
                   <TableCell>
                     <Select
-                      items={statusOptions}
+                      items={statusOptions.filter(
+                        (option) => option.value !== "closed" || row.status === "closed",
+                      )}
                       value={row.status}
                       onValueChange={(value) =>
                         void changeStatus(
@@ -254,16 +277,31 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {statusOptions.map((option) => (
+                        {statusOptions
+                          .filter((option) => option.value !== "closed" || row.status === "closed")
+                          .map((option) => (
                           <SelectItem key={option.value} value={option.value}>
                             {option.label}
                           </SelectItem>
-                        ))}
+                          ))}
                       </SelectContent>
                     </Select>
                   </TableCell>
                   <TableCell className="pr-4">
                     <div className="flex justify-end gap-1">
+                      {row.status !== "closed" && (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={t.actions.close}
+                          onClick={() => {
+                            setResolution("");
+                            setPendingClose({ id: row.id, title: row.title });
+                          }}
+                        >
+                          <CircleCheck />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -315,6 +353,46 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
           initialValues={dialog.values}
         />
       )}
+
+      <AlertDialog
+        open={pendingClose !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingClose(null);
+            setResolution("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.actions.closeTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{pendingClose?.title}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="grid gap-2">
+            <Label htmlFor="action-resolution">{t.actions.resolution}</Label>
+            <Textarea
+              id="action-resolution"
+              value={resolution}
+              onChange={(event) => setResolution(event.target.value)}
+              placeholder={t.actions.resolutionPlaceholder}
+              maxLength={2000}
+              autoFocus
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!resolution.trim() || closeTicket.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmClose();
+              }}
+            >
+              {t.actions.close}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={pendingDelete !== null}

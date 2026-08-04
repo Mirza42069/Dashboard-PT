@@ -2,6 +2,8 @@ import { db } from "@DashboardV2/db";
 import {
   DAILY_REPORT_STATUSES,
   WEATHER_CONDITIONS,
+  boqItem,
+  boqVersion,
   dailyReport,
   dailyReportDelivery,
   dailyReportEquipment,
@@ -9,17 +11,15 @@ import {
   dailyReportManpower,
   dailyReportPhoto,
   project,
-  reportingPeriod,
   user,
 } from "@DashboardV2/db/schema";
 import type { DailyReportStatus } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { aliasedTable, and, asc, count, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { aliasedTable, and, asc, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
-import { runBatch } from "../lib/batch";
 import {
   canTransition,
   isEditable,
@@ -113,20 +113,25 @@ async function requireEditable(ctx: ProjectScopeCtx, reportId: string) {
   return row;
 }
 
-/** The reporting period a calendar date falls inside, if the axis has one. */
-async function periodForDate(projectId: string, reportDate: string) {
-  const [period] = await db
-    .select({ id: reportingPeriod.id })
-    .from(reportingPeriod)
-    .where(
-      and(
-        eq(reportingPeriod.projectId, projectId),
-        lte(reportingPeriod.startDate, reportDate),
-        gte(reportingPeriod.endDate, reportDate),
-      ),
-    )
-    .limit(1);
-  return period?.id ?? null;
+async function assertDeliveriesInProject(
+  projectId: string,
+  deliveries: z.infer<typeof deliverySchema> | undefined,
+) {
+  const ids = [...new Set(deliveries?.flatMap((row) => (row.boqItemId ? [row.boqItemId] : [])) ?? [])];
+  if (ids.length === 0) return;
+
+  const linkedItems = await db
+    .select({ id: boqItem.id })
+    .from(boqItem)
+    .innerJoin(boqVersion, eq(boqItem.boqVersionId, boqVersion.id))
+    .where(and(inArray(boqItem.id, ids), eq(boqVersion.projectId, projectId)));
+
+  if (linkedItems.length !== ids.length) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Every linked BOQ item must belong to the report's project.",
+    });
+  }
 }
 
 const serialize = (row: typeof dailyReport.$inferSelect) => ({
@@ -292,25 +297,27 @@ export const dailyReportRouter = router({
         );
       if (existing) return { id: existing.id, created: false };
 
-      const [created] = await db
-        .insert(dailyReport)
-        .values({
-          projectId: input.projectId,
-          reportDate: input.reportDate,
-          periodId: await periodForDate(input.projectId, input.reportDate),
-          preparedById: ctx.session.user.id,
-          preparedByName: ctx.session.user.name,
-          status: "draft",
-        })
-        // Belt and braces against the race the get-or-create above narrows but
-        // cannot close: two requests can both read "no row" before either
-        // writes. Doing nothing on conflict turns that into a re-read.
-        .onConflictDoNothing({
-          target: [dailyReport.projectId, dailyReport.reportDate],
-        })
-        .returning({ id: dailyReport.id });
+      const created = await db.execute<{ id: string }>(sql`
+        with locked as materialized (
+          select pg_advisory_xact_lock(hashtextextended(${input.projectId}, 0))
+        )
+        insert into daily_report
+          (id, project_id, report_date, period_id, prepared_by_id, prepared_by_name, status)
+        select
+          ${crypto.randomUUID()}, ${input.projectId}, ${input.reportDate},
+          (
+            select period.id from reporting_period period
+            where period.project_id = ${input.projectId}
+              and ${input.reportDate} between period.start_date and period.end_date
+            limit 1
+          ),
+          ${ctx.session.user.id}, ${ctx.session.user.name}, 'draft'
+        from locked
+        on conflict (project_id, report_date) do nothing
+        returning id
+      `);
 
-      if (created) return { id: created.id, created: true };
+      if (created.rows[0]) return { id: created.rows[0].id, created: true };
 
       const [raced] = await db
         .select({ id: dailyReport.id })
@@ -346,80 +353,107 @@ export const dailyReportRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await requireEditable(ctx, input.id);
+      const current = await requireEditable(ctx, input.id);
       const { id, manpower, equipment, deliveries, rainfallHours, ...narrative } = input;
+      await assertDeliveriesInProject(current.report.projectId, deliveries);
 
-      const statements: Parameters<typeof runBatch>[0] = [
-        db
-          .update(dailyReport)
-          .set({
-            ...narrative,
-            rainfallHours: rainfallHours == null ? null : rainfallHours.toFixed(2),
-          })
-          .where(eq(dailyReport.id, id)),
-      ];
+      const manpowerRows = (manpower ?? []).map((row, index) => ({
+        id: crypto.randomUUID(),
+        trade: row.trade,
+        headcount: row.headcount,
+        hours: row.hours == null ? null : row.hours.toFixed(2),
+        note: row.note ?? null,
+        sortOrder: index,
+      }));
+      const equipmentRows = (equipment ?? []).map((row, index) => ({
+        id: crypto.randomUUID(),
+        name: row.name,
+        quantity: row.quantity,
+        hoursUsed: row.hoursUsed == null ? null : row.hoursUsed.toFixed(2),
+        idle: row.idle,
+        note: row.note ?? null,
+        sortOrder: index,
+      }));
+      const deliveryRows = (deliveries ?? []).map((row, index) => ({
+        id: crypto.randomUUID(),
+        material: row.material,
+        quantity: row.quantity == null ? null : row.quantity.toFixed(4),
+        unit: row.unit ?? null,
+        supplier: row.supplier ?? null,
+        reference: row.reference ?? null,
+        boqItemId: row.boqItemId ?? null,
+        note: row.note ?? null,
+        sortOrder: index,
+      }));
 
-      if (manpower) {
-        statements.push(db.delete(dailyReportManpower).where(eq(dailyReportManpower.reportId, id)));
-        if (manpower.length > 0) {
-          statements.push(
-            db.insert(dailyReportManpower).values(
-              manpower.map((row, index) => ({
-                reportId: id,
-                trade: row.trade,
-                headcount: row.headcount,
-                hours: row.hours == null ? null : row.hours.toFixed(2),
-                note: row.note ?? null,
-                sortOrder: index,
-              })),
-            ),
-          );
-        }
+      // Every child-table write depends on the conditional report update, so a
+      // concurrent submission either waits for this save or makes all of it a no-op.
+      const saved = await db.execute<{ id: string }>(sql`
+        with editable as (
+          update daily_report set
+            weather = case when ${narrative.weather !== undefined} then ${narrative.weather ?? null} else weather end,
+            weather_note = case when ${narrative.weatherNote !== undefined} then ${narrative.weatherNote ?? null} else weather_note end,
+            rainfall_hours = case when ${rainfallHours !== undefined} then ${rainfallHours == null ? null : rainfallHours.toFixed(2)} else rainfall_hours end,
+            work_performed = case when ${narrative.workPerformed !== undefined} then ${narrative.workPerformed ?? null} else work_performed end,
+            delays = case when ${narrative.delays !== undefined} then ${narrative.delays ?? null} else delays end,
+            safety_observations = case when ${narrative.safetyObservations !== undefined} then ${narrative.safetyObservations ?? null} else safety_observations end,
+            quality_observations = case when ${narrative.qualityObservations !== undefined} then ${narrative.qualityObservations ?? null} else quality_observations end,
+            visitors = case when ${narrative.visitors !== undefined} then ${narrative.visitors ?? null} else visitors end,
+            notes = case when ${narrative.notes !== undefined} then ${narrative.notes ?? null} else notes end,
+            updated_at = ${new Date()}
+          where id = ${id} and status in ('draft', 'returned')
+          returning id
+        ), deleted_manpower as (
+          delete from daily_report_manpower
+          where report_id in (select id from editable) and ${manpower !== undefined}
+        ), manpower_rows as (
+          select * from jsonb_to_recordset(${JSON.stringify(manpowerRows)}::jsonb) as value(
+            id text, trade text, headcount integer, hours numeric, note text, "sortOrder" integer
+          )
+        ), inserted_manpower as (
+          insert into daily_report_manpower (id, report_id, trade, headcount, hours, note, sort_order)
+          select rows.id, editable.id, rows.trade, rows.headcount, rows.hours, rows.note, rows."sortOrder"
+          from manpower_rows rows cross join editable
+          where ${manpower !== undefined}
+        ), deleted_equipment as (
+          delete from daily_report_equipment
+          where report_id in (select id from editable) and ${equipment !== undefined}
+        ), equipment_rows as (
+          select * from jsonb_to_recordset(${JSON.stringify(equipmentRows)}::jsonb) as value(
+            id text, name text, quantity integer, "hoursUsed" numeric, idle boolean,
+            note text, "sortOrder" integer
+          )
+        ), inserted_equipment as (
+          insert into daily_report_equipment
+            (id, report_id, name, quantity, hours_used, idle, note, sort_order)
+          select rows.id, editable.id, rows.name, rows.quantity, rows."hoursUsed",
+                 rows.idle, rows.note, rows."sortOrder"
+          from equipment_rows rows cross join editable
+          where ${equipment !== undefined}
+        ), deleted_deliveries as (
+          delete from daily_report_delivery
+          where report_id in (select id from editable) and ${deliveries !== undefined}
+        ), delivery_rows as (
+          select * from jsonb_to_recordset(${JSON.stringify(deliveryRows)}::jsonb) as value(
+            id text, material text, quantity numeric, unit text, supplier text,
+            reference text, "boqItemId" text, note text, "sortOrder" integer
+          )
+        ), inserted_deliveries as (
+          insert into daily_report_delivery
+            (id, report_id, material, quantity, unit, supplier, reference, boq_item_id, note, sort_order)
+          select rows.id, editable.id, rows.material, rows.quantity, rows.unit, rows.supplier,
+                 rows.reference, rows."boqItemId", rows.note, rows."sortOrder"
+          from delivery_rows rows cross join editable
+          where ${deliveries !== undefined}
+        )
+        select id from editable
+      `);
+      if (saved.rows.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This report is no longer editable. Refresh and try again.",
+        });
       }
-
-      if (equipment) {
-        statements.push(
-          db.delete(dailyReportEquipment).where(eq(dailyReportEquipment.reportId, id)),
-        );
-        if (equipment.length > 0) {
-          statements.push(
-            db.insert(dailyReportEquipment).values(
-              equipment.map((row, index) => ({
-                reportId: id,
-                name: row.name,
-                quantity: row.quantity,
-                hoursUsed: row.hoursUsed == null ? null : row.hoursUsed.toFixed(2),
-                idle: row.idle,
-                note: row.note ?? null,
-                sortOrder: index,
-              })),
-            ),
-          );
-        }
-      }
-
-      if (deliveries) {
-        statements.push(db.delete(dailyReportDelivery).where(eq(dailyReportDelivery.reportId, id)));
-        if (deliveries.length > 0) {
-          statements.push(
-            db.insert(dailyReportDelivery).values(
-              deliveries.map((row, index) => ({
-                reportId: id,
-                material: row.material,
-                quantity: row.quantity == null ? null : row.quantity.toFixed(4),
-                unit: row.unit ?? null,
-                supplier: row.supplier ?? null,
-                reference: row.reference ?? null,
-                boqItemId: row.boqItemId ?? null,
-                note: row.note ?? null,
-                sortOrder: index,
-              })),
-            ),
-          );
-        }
-      }
-
-      await runBatch(statements);
       return { success: true };
     }),
 
@@ -456,20 +490,37 @@ export const dailyReportRouter = router({
       }
 
       const now = new Date();
-      await runBatch([
-        db
-          .update(dailyReport)
-          .set({ status: input.to, ...stampFor(input.to, ctx.session.user.id, now, input.comment) })
-          .where(eq(dailyReport.id, input.id)),
-        db.insert(dailyReportEvent).values({
-          reportId: input.id,
-          fromStatus: from,
-          toStatus: input.to,
-          actorId: ctx.session.user.id,
-          actorName: ctx.session.user.name,
-          comment: input.comment ?? null,
-        }),
-      ]);
+      const stamp = stampFor(input.to, ctx.session.user.id, now, input.comment);
+      const assignments = [sql`status = ${input.to}`, sql`updated_at = ${now}`];
+      if ("submittedAt" in stamp) assignments.push(sql`submitted_at = ${stamp.submittedAt}`);
+      if ("reviewedById" in stamp) assignments.push(sql`reviewed_by_id = ${stamp.reviewedById}`);
+      if ("reviewedAt" in stamp) assignments.push(sql`reviewed_at = ${stamp.reviewedAt}`);
+      if ("approvedById" in stamp) assignments.push(sql`approved_by_id = ${stamp.approvedById}`);
+      if ("approvedAt" in stamp) assignments.push(sql`approved_at = ${stamp.approvedAt}`);
+      if ("returnReason" in stamp) assignments.push(sql`return_reason = ${stamp.returnReason}`);
+
+      const eventId = crypto.randomUUID();
+      const changed = await db.execute<{ id: string }>(sql`
+        with changed as (
+          update daily_report
+          set ${sql.join(assignments, sql`, `)}
+          where id = ${input.id} and status = ${from}
+          returning id
+        )
+        insert into daily_report_event
+          (id, report_id, from_status, to_status, actor_id, actor_name, comment)
+        select
+          ${eventId}, id, ${from}, ${input.to}, ${ctx.session.user.id},
+          ${ctx.session.user.name}, ${input.comment ?? null}
+        from changed
+        returning id
+      `);
+      if (changed.rows.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This report changed while you were viewing it. Refresh and try again.",
+        });
+      }
 
       await recordActivity(ctx, {
         action:

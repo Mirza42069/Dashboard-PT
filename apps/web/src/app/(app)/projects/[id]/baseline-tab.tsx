@@ -25,6 +25,7 @@ import { CheckCircle2, CircleAlert, Lock, Upload } from "@DashboardV2/ui/compone
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
+import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import {
@@ -57,6 +58,9 @@ export default function BaselineTab({
   const versionsQuery = useQuery(trpc.boq.listVersions.queryOptions({ projectId }));
 
   if (versionsQuery.isPending) return <Skeleton className="h-64 w-full" />;
+  if (versionsQuery.isError) {
+    return <QueryError error={versionsQuery.error} onRetry={() => void versionsQuery.refetch()} />;
+  }
 
   const versions = versionsQuery.data ?? [];
   const active = versions.find(
@@ -216,6 +220,14 @@ function BaselineReview({
   const activate = useMutation(trpc.boq.activate.mutationOptions());
 
   if (overview.isPending || report.isPending) return <Skeleton className="h-64 w-full" />;
+  if (overview.isError || report.isError) {
+    return (
+      <QueryError
+        error={overview.error ?? report.error}
+        onRetry={() => void Promise.all([overview.refetch(), report.refetch()])}
+      />
+    );
+  }
   const version = overview.data?.version;
   const items = overview.data?.items ?? [];
   const periods = report.data?.periods ?? [];

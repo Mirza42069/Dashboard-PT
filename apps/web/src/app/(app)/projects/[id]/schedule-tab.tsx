@@ -36,6 +36,7 @@ import { toast } from "@/lib/toast";
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { MonthBandRow } from "@/components/month-band-row";
+import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
 import { computePlannedCurve, distributionMap, scheduleRows } from "@/lib/boq/curves";
@@ -93,6 +94,9 @@ export default function ScheduleTab({
   const clearPlan = useMutation(trpc.schedule.clearItemDistribution.mutationOptions());
 
   if (reportQuery.isPending) return <Skeleton className="h-64 w-full" />;
+  if (reportQuery.isError) {
+    return <QueryError error={reportQuery.error} onRetry={() => void reportQuery.refetch()} />;
+  }
 
   const report = reportQuery.data;
   const version = report?.version ?? null;

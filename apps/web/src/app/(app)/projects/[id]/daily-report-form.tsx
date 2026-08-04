@@ -35,6 +35,7 @@ import { ArrowLeft, CircleAlert, Plus, Save, Trash2 } from "@DashboardV2/ui/comp
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { QueryError } from "@/components/query-error";
 import { StatusBadge, statusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -127,12 +128,16 @@ export default function DailyReportForm({
   const [deleting, setDeleting] = useState(false);
 
   if (query.isPending) return <Skeleton className="h-96 w-full" />;
+  if (query.isError) {
+    return <QueryError error={query.error} onRetry={() => void query.refetch()} />;
+  }
   const data = query.data;
   if (!data) return null;
 
   const { report } = data;
   const status = report.status as DailyStatus;
-  const editable = canEdit && isEditableStatus(status);
+  const editable =
+    canEdit && isEditableStatus(status) && !save.isPending && !transition.isPending;
 
   if (loadedFor !== reportId) {
     setLoadedFor(reportId);
@@ -191,7 +196,7 @@ export default function DailyReportForm({
     await queryClient.invalidateQueries(trpc.dailyReport.pathFilter());
   }
 
-  async function persist() {
+  async function persist(showSuccess = true) {
     try {
       await save.mutateAsync({
         id: reportId,
@@ -233,14 +238,19 @@ export default function DailyReportForm({
           })),
       });
       await refresh();
-      toast.success(t.daily.saved);
+      if (showSuccess) toast.success(t.daily.saved);
+      return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.daily.saveFailed);
+      return false;
     }
   }
 
   async function move(to: DailyStatus, successMessage: string) {
     try {
+      // Submission freezes the report. Persist the form first so edits made
+      // since the last explicit Save cannot disappear behind that transition.
+      if (to === "submitted" && editable && !(await persist(false))) return;
       await transition.mutateAsync({ id: reportId, to, comment: reason.trim() || undefined });
       await refresh();
       toast.success(successMessage);
@@ -330,7 +340,7 @@ export default function DailyReportForm({
                   key={item.to + item.label}
                   size="sm"
                   variant={item.destructive ? "outline" : "secondary"}
-                  disabled={transition.isPending}
+                  disabled={transition.isPending || save.isPending}
                   onClick={() => {
                     setReason("");
                     setConfirming(item);

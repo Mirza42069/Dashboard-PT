@@ -17,9 +17,7 @@ import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
-import { runBatch } from "../lib/batch";
 import { computePctComplete, leafPredicate, serializeItem, serializeVersion } from "../lib/boq";
-import { refreshDataDateStatement } from "../lib/boq-metrics";
 import { toAmount } from "../lib/money";
 import { hasPermission, roleOf } from "../lib/permissions";
 import {
@@ -60,6 +58,7 @@ async function findPeriod(ctx: ProjectScopeCtx, periodId: string) {
       periodIndex: reportingPeriod.periodIndex,
       label: reportingPeriod.label,
       status: reportingPeriod.status,
+      updatedAt: reportingPeriod.updatedAt,
     })
     .from(reportingPeriod)
     .innerJoin(project, eq(project.id, reportingPeriod.projectId))
@@ -421,6 +420,7 @@ export const progressRouter = router({
         });
 
         return {
+          id: crypto.randomUUID(),
           projectId: period.projectId,
           periodId: input.periodId,
           boqItemId: entry.boqItemId,
@@ -434,32 +434,73 @@ export const progressRouter = router({
         };
       });
 
-      await runBatch([
-        db
-          .insert(progressEntry)
-          .values(values)
-          .onConflictDoUpdate({
-            target: [progressEntry.periodId, progressEntry.boqItemId],
-            set: {
-              cumulativeQuantity: sql`excluded.cumulative_quantity`,
-              cumulativePercent: sql`excluded.cumulative_percent`,
-              pctComplete: sql`excluded.pct_complete`,
-              noProgress: sql`excluded.no_progress`,
-              note: sql`excluded.note`,
-              recordedById: sql`excluded.recorded_by_id`,
-              updatedAt: new Date(),
-            },
-          }),
-        // Saving a figure starts the report. `open` means nobody has touched
-        // this week; the moment someone has, it is a draft and shows up as one
-        // on the manager's list of what is outstanding.
-        db
-          .update(reportingPeriod)
-          .set({ status: "draft" })
-          .where(and(eq(reportingPeriod.id, input.periodId), eq(reportingPeriod.status, "open"))),
-        db.execute(refreshDataDateStatement(period.projectId)),
+      const [, changed] = await db.batch([
+        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${period.projectId}, 0))`),
+        db.execute<{ id: string }>(sql`
+        with editable as (
+          update reporting_period
+          set status = case when status = 'open' then 'draft' else status end,
+              updated_at = ${new Date()}
+          where id = ${input.periodId} and status in ('open', 'draft', 'returned')
+          returning id
+        ), input_rows as (
+          select * from jsonb_to_recordset(${JSON.stringify(values)}::jsonb) as value(
+            id text, "projectId" text, "periodId" text, "boqItemId" text,
+            "cumulativeQuantity" numeric, "cumulativePercent" numeric,
+            "pctComplete" numeric, "noProgress" boolean, note text, "recordedById" text
+          )
+        ), upserted as (
+          insert into progress_entry
+            (id, project_id, period_id, boq_item_id, cumulative_quantity, cumulative_percent,
+             pct_complete, no_progress, note, recorded_by_id)
+          select
+            input_rows.id, input_rows."projectId", input_rows."periodId", input_rows."boqItemId",
+            input_rows."cumulativeQuantity", input_rows."cumulativePercent", input_rows."pctComplete",
+            input_rows."noProgress", input_rows.note, input_rows."recordedById"
+          from input_rows cross join editable
+          on conflict (period_id, boq_item_id) do update set
+            cumulative_quantity = excluded.cumulative_quantity,
+            cumulative_percent = excluded.cumulative_percent,
+            pct_complete = excluded.pct_complete,
+            no_progress = excluded.no_progress,
+            note = excluded.note,
+            recorded_by_id = excluded.recorded_by_id,
+            updated_at = ${new Date()}
+          returning id
+        ), refreshed as (
+          update project set data_date = (
+            select max(period.end_date)
+            from reporting_period period
+            where period.project_id = ${period.projectId}
+              and (
+                exists (
+                  select 1 from progress_entry entry
+                  where entry.period_id = period.id
+                    and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
+                    and not exists (
+                      select 1 from input_rows input
+                      where input."periodId" = entry.period_id
+                        and input."boqItemId" = entry.boq_item_id
+                    )
+                )
+                or exists (
+                  select 1 from input_rows input
+                  where input."periodId" = period.id
+                    and (input."cumulativePercent" is not null or input."cumulativeQuantity" is not null)
+                )
+              )
+          )
+          where id = ${period.projectId} and exists (select 1 from editable)
+        )
+        select id from upserted
+        `),
       ]);
-
+      if (changed.rows.length !== values.length) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This period is no longer editable. Refresh and try again.",
+        });
+      }
       await recordActivity(ctx, {
         action: "progress_recorded",
         entityType: "progress",
@@ -503,28 +544,48 @@ export const progressRouter = router({
 
       if (leaves.length === 0) return { marked: 0 };
 
-      await runBatch([
-        db
-          .insert(progressEntry)
-          .values(
-            leaves.map((leaf) => ({
-              projectId: period.projectId,
-              periodId: input.periodId,
-              boqItemId: leaf.id,
-              // No reading — that is the point. The cumulative columns stay
-              // null so the curve carries the previous value forward.
-              cumulativeQuantity: null,
-              cumulativePercent: null,
-              pctComplete: "0",
-              noProgress: input.noProgress,
-              recordedById: ctx.session.user.id,
-            })),
+      const values = leaves.map((leaf) => ({
+        id: crypto.randomUUID(),
+        projectId: period.projectId,
+        periodId: input.periodId,
+        boqItemId: leaf.id,
+        noProgress: input.noProgress,
+        recordedById: ctx.session.user.id,
+      }));
+      const [, changed] = await db.batch([
+        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${period.projectId}, 0))`),
+        db.execute<{ id: string }>(sql`
+        with editable as (
+          update reporting_period
+          set status = case when status = 'open' then 'draft' else status end,
+              updated_at = ${new Date()}
+          where id = ${input.periodId} and status in ('open', 'draft', 'returned')
+          returning id
+        ), input_rows as (
+          select * from jsonb_to_recordset(${JSON.stringify(values)}::jsonb) as value(
+            id text, "projectId" text, "periodId" text, "boqItemId" text,
+            "noProgress" boolean, "recordedById" text
           )
-          .onConflictDoUpdate({
-            target: [progressEntry.periodId, progressEntry.boqItemId],
-            set: { noProgress: sql`excluded.no_progress`, updatedAt: new Date() },
-          }),
+        )
+        insert into progress_entry
+          (id, project_id, period_id, boq_item_id, cumulative_quantity, cumulative_percent,
+           pct_complete, no_progress, recorded_by_id)
+        select
+          input_rows.id, input_rows."projectId", input_rows."periodId", input_rows."boqItemId",
+          null, null, 0, input_rows."noProgress", input_rows."recordedById"
+        from input_rows cross join editable
+        on conflict (period_id, boq_item_id) do update set
+          no_progress = excluded.no_progress,
+          updated_at = ${new Date()}
+        returning id
+        `),
       ]);
+      if (changed.rows.length !== values.length) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This period is no longer editable. Refresh and try again.",
+        });
+      }
 
       return { marked: leaves.length };
     }),
@@ -708,20 +769,41 @@ export const progressRouter = router({
       }
 
       const now = new Date();
-      await runBatch([
-        db
-          .update(reportingPeriod)
-          .set({ status: input.to, ...stampFor(input.to, ctx.session.user.id, now, input.comment) })
-          .where(eq(reportingPeriod.id, input.periodId)),
-        db.insert(reportingPeriodEvent).values({
-          periodId: input.periodId,
-          fromStatus: from,
-          toStatus: input.to,
-          actorId: ctx.session.user.id,
-          actorName: ctx.session.user.name,
-          comment: input.comment ?? null,
-        }),
-      ]);
+      const stamp = stampFor(input.to, ctx.session.user.id, now, input.comment);
+      const assignments = [sql`status = ${input.to}`, sql`updated_at = ${now}`];
+      if ("submittedById" in stamp) assignments.push(sql`submitted_by_id = ${stamp.submittedById}`);
+      if ("submittedAt" in stamp) assignments.push(sql`submitted_at = ${stamp.submittedAt}`);
+      if ("reviewedById" in stamp) assignments.push(sql`reviewed_by_id = ${stamp.reviewedById}`);
+      if ("reviewedAt" in stamp) assignments.push(sql`reviewed_at = ${stamp.reviewedAt}`);
+      if ("approvedById" in stamp) assignments.push(sql`approved_by_id = ${stamp.approvedById}`);
+      if ("approvedAt" in stamp) assignments.push(sql`approved_at = ${stamp.approvedAt}`);
+      if ("lockedById" in stamp) assignments.push(sql`locked_by_id = ${stamp.lockedById}`);
+      if ("lockedAt" in stamp) assignments.push(sql`locked_at = ${stamp.lockedAt}`);
+      if ("returnReason" in stamp) assignments.push(sql`return_reason = ${stamp.returnReason}`);
+      if ("reviewComment" in stamp) assignments.push(sql`review_comment = ${stamp.reviewComment}`);
+
+      const eventId = crypto.randomUUID();
+      const changed = await db.execute<{ id: string }>(sql`
+        with changed as (
+          update reporting_period
+          set ${sql.join(assignments, sql`, `)}
+          where id = ${input.periodId} and status = ${from} and updated_at = ${period.updatedAt}
+          returning id
+        )
+        insert into reporting_period_event
+          (id, period_id, from_status, to_status, actor_id, actor_name, comment)
+        select
+          ${eventId}, id, ${from}, ${input.to}, ${ctx.session.user.id},
+          ${ctx.session.user.name}, ${input.comment ?? null}
+        from changed
+        returning id
+      `);
+      if (changed.rows.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This period changed while you were viewing it. Refresh and try again.",
+        });
+      }
 
       const [projectRow] = await db
         .select({ code: project.code, name: project.name })

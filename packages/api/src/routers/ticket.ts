@@ -3,8 +3,11 @@ import {
   ACTION_PRIORITIES,
   ACTION_TYPES,
   TICKET_STATUSES,
+  boqItem,
+  boqVersion,
   notification,
   project,
+  reportingPeriod,
   ticket,
   ticketComment,
   ticketEvent,
@@ -121,6 +124,40 @@ async function ticketInScope(ctx: ProjectScopeCtx, ticketId: string) {
   return row;
 }
 
+async function assertReferencesInProject(
+  projectId: string,
+  boqItemId: string | null | undefined,
+  periodId: string | null | undefined,
+) {
+  const [linkedItem, linkedPeriod] = await Promise.all([
+    boqItemId
+      ? db
+          .select({ id: boqItem.id })
+          .from(boqItem)
+          .innerJoin(boqVersion, eq(boqItem.boqVersionId, boqVersion.id))
+          .where(and(eq(boqItem.id, boqItemId), eq(boqVersion.projectId, projectId)))
+          .limit(1)
+      : Promise.resolve([]),
+    periodId
+      ? db
+          .select({ id: reportingPeriod.id })
+          .from(reportingPeriod)
+          .where(and(eq(reportingPeriod.id, periodId), eq(reportingPeriod.projectId, projectId)))
+          .limit(1)
+      : Promise.resolve([]),
+  ]);
+
+  if (boqItemId && linkedItem.length === 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "The BOQ item is not part of this project." });
+  }
+  if (periodId && linkedPeriod.length === 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "The reporting period is not part of this project.",
+    });
+  }
+}
+
 export const ticketRouter = router({
   listByProject: companyPermissionProcedure("project:read")
     .input(
@@ -190,27 +227,27 @@ export const ticketRouter = router({
     .input(fieldsSchema.extend({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
+      await assertReferencesInProject(input.projectId, input.boqItemId, input.periodId);
       if (input.assigneeId) await assertUserAssignable(ctx.companyId, input.assigneeId);
       const [target] = await db
         .select({ code: project.code, name: project.name })
         .from(project)
         .where(eq(project.id, input.projectId));
-      const [created] = await db
-        .insert(ticket)
-        .values({
+      const createdId = crypto.randomUUID();
+      await runBatch([
+        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.projectId}, 0))`),
+        db.insert(ticket).values({
+          id: createdId,
           ...input,
           issuerId: ctx.session.user.id,
           issuerName: ctx.session.user.name,
           status: "open",
-        })
-        .returning({ id: ticket.id });
-      if (!created) {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create ticket" });
-      }
+        }),
+      ]);
       await recordActivity(ctx, {
         action: "created",
         entityType: "ticket",
-        entityId: created.id,
+        entityId: createdId,
         entityLabel: input.title,
         detail: target ? `${target.code} - ${target.name}` : undefined,
       });
@@ -223,7 +260,7 @@ export const ticketRouter = router({
             projectId: input.projectId,
             kind: "action_assigned",
             entityType: "ticket",
-            entityId: created.id,
+            entityId: createdId,
             entityLabel: input.title,
             actorName: ctx.session.user.name,
             detail: target ? `${target.code} - ${target.name}` : null,
@@ -231,7 +268,7 @@ export const ticketRouter = router({
         ]);
       }
 
-      return { id: created.id };
+      return { id: createdId };
     }),
 
   update: companyPermissionProcedure("project:write")
@@ -239,6 +276,7 @@ export const ticketRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...fields } = input;
       const current = await ticketInScope(ctx, id);
+      await assertReferencesInProject(current.projectId, fields.boqItemId, fields.periodId);
       if (fields.assigneeId && fields.assigneeId !== current.ticket.assigneeId) {
         await assertUserAssignable(ctx.companyId, fields.assigneeId);
       }
@@ -263,6 +301,7 @@ export const ticketRouter = router({
       });
 
       await runBatch([
+        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${current.projectId}, 0))`),
         db.update(ticket).set(fields).where(eq(ticket.id, id)),
         ...(changes.length > 0 ? [db.insert(ticketEvent).values(changes)] : []),
       ]);
@@ -300,7 +339,41 @@ export const ticketRouter = router({
     .input(z.object({ id: z.string().min(1), status: statusSchema }))
     .mutation(async ({ ctx, input }) => {
       const current = await ticketInScope(ctx, input.id);
-      await db.update(ticket).set({ status: input.status }).where(eq(ticket.id, input.id));
+
+      if (input.status === "closed") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Close the action with a resolution instead of changing its status directly.",
+        });
+      }
+      if (current.ticket.status === input.status) return { success: true };
+
+      const reopening = current.ticket.status === "closed";
+      const now = new Date();
+      const assignments = [sql`status = ${input.status}`, sql`updated_at = ${now}`];
+      if (reopening) assignments.push(sql`closed_at = null`, sql`resolution = null`);
+
+      const changed = await db.execute<{ id: string }>(sql`
+        with changed as (
+          update ticket
+          set ${sql.join(assignments, sql`, `)}
+          where id = ${input.id} and status = ${current.ticket.status}
+          returning id
+        )
+        insert into ticket_event
+          (id, ticket_id, field, from_value, to_value, actor_id, actor_name)
+        select
+          ${crypto.randomUUID()}, id, 'status', ${current.ticket.status}, ${input.status},
+          ${ctx.session.user.id}, ${ctx.session.user.name}
+        from changed
+        returning id
+      `);
+      if (changed.rows.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This action changed while you were viewing it. Refresh and try again.",
+        });
+      }
       await recordActivity(ctx, {
         action: "status_changed",
         entityType: "ticket",
@@ -436,22 +509,36 @@ export const ticketRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const current = await ticketInScope(ctx, input.id);
+      if (current.ticket.status === "closed") {
+        throw new TRPCError({ code: "CONFLICT", message: "This action is already closed." });
+      }
       const now = new Date();
 
-      await runBatch([
-        db
-          .update(ticket)
-          .set({ status: "closed", closedAt: now, resolution: input.resolution })
-          .where(eq(ticket.id, input.id)),
-        db.insert(ticketEvent).values({
-          ticketId: input.id,
-          field: "status",
-          fromValue: current.ticket.status,
-          toValue: "closed",
-          actorId: ctx.session.user.id,
-          actorName: ctx.session.user.name,
-        }),
-      ]);
+      const changed = await db.execute<{ id: string }>(sql`
+        with changed as (
+          update ticket
+          set status = 'closed', closed_at = ${now}, resolution = ${input.resolution},
+              updated_at = ${now}
+          where id = ${input.id} and status = ${current.ticket.status}
+          returning id
+        )
+        insert into ticket_event
+          (id, ticket_id, field, from_value, to_value, actor_id, actor_name)
+        select
+          event.id, changed.id, event.field, event.from_value, event.to_value,
+          ${ctx.session.user.id}, ${ctx.session.user.name}
+        from changed cross join (values
+          (${crypto.randomUUID()}, 'status', ${current.ticket.status}, 'closed'),
+          (${crypto.randomUUID()}, 'resolution', null, ${input.resolution})
+        ) as event(id, field, from_value, to_value)
+        returning id
+      `);
+      if (changed.rows.length !== 2) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This action changed while you were viewing it. Refresh and try again.",
+        });
+      }
 
       await recordActivity(ctx, {
         action: "status_changed",

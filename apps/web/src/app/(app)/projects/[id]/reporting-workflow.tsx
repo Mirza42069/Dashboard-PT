@@ -34,6 +34,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Meter } from "@/components/meter";
+import { QueryError } from "@/components/query-error";
 import { StatusBadge } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -94,6 +95,7 @@ export default function ReportingWorkflow({
   canLock,
   selectedPeriodId,
   onSelectPeriod,
+  onBeforeSubmit,
 }: {
   projectId: string;
   canEdit: boolean;
@@ -101,6 +103,7 @@ export default function ReportingWorkflow({
   canLock: boolean;
   selectedPeriodId: string | null;
   onSelectPeriod: (periodId: string) => void;
+  onBeforeSubmit?: () => Promise<boolean>;
 }) {
   const t = useT();
   const { formatDateRange, formatDateTime } = useFormat();
@@ -108,12 +111,16 @@ export default function ReportingWorkflow({
 
   const [pending, setPending] = useState<Move | null>(null);
   const [reason, setReason] = useState("");
+  const [preparing, setPreparing] = useState(false);
 
   const statusQuery = useQuery(trpc.progress.periodStatus.queryOptions({ projectId }));
   const transition = useMutation(trpc.progress.transitionPeriod.mutationOptions());
   const markNoProgress = useMutation(trpc.progress.markNoProgress.mutationOptions());
 
   if (statusQuery.isPending) return <Skeleton className="h-40 w-full" />;
+  if (statusQuery.isError) {
+    return <QueryError error={statusQuery.error} onRetry={() => void statusQuery.refetch()} />;
+  }
 
   const periods = statusQuery.data ?? [];
   if (periods.length === 0) return null;
@@ -196,7 +203,9 @@ export default function ReportingWorkflow({
   const canConfirm = !needsReason || reason.trim().length > 0;
 
   async function run(move: Move) {
+    setPreparing(true);
     try {
+      if (move.to === "submitted" && onBeforeSubmit && !(await onBeforeSubmit())) return;
       await transition.mutateAsync({
         periodId: current.id,
         to: move.to,
@@ -209,6 +218,8 @@ export default function ReportingWorkflow({
       setReason("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.common.somethingWentWrong);
+    } finally {
+      setPreparing(false);
     }
   }
 
@@ -371,7 +382,7 @@ export default function ReportingWorkflow({
                 key={move.to + move.label}
                 size="sm"
                 variant={move.destructive ? "outline" : move.to === "submitted" ? "default" : "secondary"}
-                disabled={transition.isPending}
+                disabled={transition.isPending || preparing}
                 onClick={() => {
                   setReason("");
                   setPending(move);
@@ -425,7 +436,7 @@ export default function ReportingWorkflow({
           <AlertDialogFooter>
             <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
             <AlertDialogAction
-              disabled={!canConfirm || transition.isPending}
+              disabled={!canConfirm || transition.isPending || preparing}
               onClick={(event) => {
                 // The dialog closes on action by default; a blocked confirm has
                 // to stop that or the reason field vanishes with the request.

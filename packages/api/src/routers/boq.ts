@@ -381,7 +381,43 @@ export const boqRouter = router({
         .select({ id: boqVersion.id })
         .from(boqVersion)
         .where(and(eq(boqVersion.projectId, draft.projectId), eq(boqVersion.status, "active")));
-      const statements: Parameters<typeof runBatch>[0] = [];
+      const statements: Parameters<typeof runBatch>[0] = [
+        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${draft.projectId}, 0))`),
+        db.execute(sql`
+          select 1 / case when
+            exists (
+              select 1 from reporting_period
+              where project_id = ${draft.projectId}
+            )
+            and exists (
+              select 1 from boq_item
+              where boq_version_id = ${input.versionId} and deleted_at is null
+                and not exists (
+                  select 1 from boq_item child
+                  where child.parent_id = boq_item.id and child.deleted_at is null
+                )
+            )
+            and not exists (
+              select 1 from boq_item item
+              where item.boq_version_id = ${input.versionId} and item.deleted_at is null
+                and not exists (
+                  select 1 from boq_item child
+                  where child.parent_id = item.id and child.deleted_at is null
+                )
+                and abs(coalesce((
+                  select sum(distribution.planned_pct)
+                  from boq_item_distribution distribution
+                  where distribution.boq_item_id = item.id
+                ), 0) - 100) > ${WEIGHT_TOLERANCE}
+            )
+            and exists (
+              select 1 from boq_version
+              where id = ${input.versionId} and schedule_status = 'draft'
+                and status in ('draft', 'active')
+            )
+          then 1 else 0 end
+        `),
+      ];
 
       if (currentActive && currentActive.id !== input.versionId) {
         const [sourceItems, targetItems, latestProgress] = await Promise.all([
@@ -459,7 +495,17 @@ export const boqRouter = router({
           })
           .where(eq(boqVersion.id, input.versionId)),
       );
-      await runBatch(statements);
+      try {
+        await runBatch(statements);
+      } catch (error) {
+        if (error instanceof Error && error.message.toLowerCase().includes("division by zero")) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "The baseline changed while it was being activated. Review it and try again.",
+          });
+        }
+        throw error;
+      }
       const activated = await getVersion(ctx, input.versionId);
 
       await recordActivity(ctx, {

@@ -12,6 +12,7 @@ import {
 } from "@DashboardV2/ui/components/dialog";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
+import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import {
   Select,
   SelectContent,
@@ -25,6 +26,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { interpolate } from "@/i18n";
+import { QueryError } from "@/components/query-error";
 import { useT } from "@/i18n/provider";
 import { downloadFromServer } from "@/lib/download-file";
 import { getServerUrl } from "@/lib/server-url";
@@ -490,12 +492,21 @@ function guessMapping(
  */
 function ImportHistory({ projectId }: { projectId: string }) {
   const t = useT();
-  const { data } = useQuery(trpc.boq.listImports.queryOptions({ projectId, limit: 5 }));
+  const query = useQuery(trpc.boq.listImports.queryOptions({ projectId, limit: 5 }));
+  const data = query.data;
 
   return (
     <section className="space-y-2">
       <h3 className="font-medium">{t.boqImport.history}</h3>
-      {!data || data.length === 0 ? (
+      {query.isPending ? (
+        <Skeleton className="h-12 w-full" />
+      ) : query.isError ? (
+        <QueryError
+          error={query.error}
+          onRetry={() => void query.refetch()}
+          className="px-3 py-4"
+        />
+      ) : !data || data.length === 0 ? (
         <p className="text-xs text-muted-foreground">{t.boqImport.historyEmpty}</p>
       ) : (
         <ul className="divide-y rounded-lg border text-xs">

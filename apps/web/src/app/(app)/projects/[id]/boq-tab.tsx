@@ -41,6 +41,7 @@ import { ChevronDown, ChevronUp, Lock, Pencil, Plus, Scale, Trash2 } from "@Dash
 import { Fragment, useState } from "react";
 import { toast } from "@/lib/toast";
 
+import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { buildSections, sectionAmount, sectionWeight, totalLeafWeight } from "@/lib/boq/curves";
@@ -107,7 +108,15 @@ export default function BoqTab({
     }
   }
 
-  if (boqQuery.isPending) return <Skeleton className="h-64 w-full" />;
+  if (boqQuery.isPending || versionsQuery.isPending) return <Skeleton className="h-64 w-full" />;
+  if (boqQuery.isError || versionsQuery.isError) {
+    return (
+      <QueryError
+        error={boqQuery.error ?? versionsQuery.error}
+        onRetry={() => void Promise.all([boqQuery.refetch(), versionsQuery.refetch()])}
+      />
+    );
+  }
 
   const version = boqQuery.data?.version ?? null;
   const items = boqQuery.data?.items ?? [];

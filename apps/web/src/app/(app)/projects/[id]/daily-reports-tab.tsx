@@ -23,6 +23,7 @@ import { Plus } from "@DashboardV2/ui/components/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { QueryError } from "@/components/query-error";
 import { StatusBadge } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
@@ -252,6 +253,8 @@ export default function DailyReportsTab({
 
         {listQuery.isPending ? (
           <Skeleton className="h-48 w-full" />
+        ) : listQuery.isError ? (
+          <QueryError error={listQuery.error} onRetry={() => void listQuery.refetch()} />
         ) : reports.length === 0 ? (
           <Empty>
             <EmptyHeader>

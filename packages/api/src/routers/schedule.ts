@@ -3,12 +3,14 @@ import {
   boqItem,
   boqItemDistribution,
   boqVersion,
+  dailyReport,
   progressEntry,
   project,
   reportingPeriod,
+  ticket,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
@@ -209,6 +211,30 @@ export const scheduleRouter = router({
         });
       }
 
+      const [existingReport] = await db
+        .select({ id: dailyReport.id })
+        .from(dailyReport)
+        .where(and(eq(dailyReport.projectId, input.projectId), isNotNull(dailyReport.periodId)))
+        .limit(1);
+      if (existingReport) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Daily reports already use these periods, so they can no longer be rebuilt.",
+        });
+      }
+
+      const [linkedAction] = await db
+        .select({ id: ticket.id })
+        .from(ticket)
+        .where(and(eq(ticket.projectId, input.projectId), isNotNull(ticket.periodId)))
+        .limit(1);
+      if (linkedAction) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Actions already use these periods, so they can no longer be rebuilt.",
+        });
+      }
+
       const [activeSchedule] = await db
         .select({ id: boqVersion.id })
         .from(boqVersion)
@@ -240,18 +266,58 @@ export const scheduleRouter = router({
         });
       }
 
-      await runBatch([
-        db.delete(reportingPeriod).where(eq(reportingPeriod.projectId, input.projectId)),
-        db.insert(reportingPeriod).values(
-          periods.map((period) => ({
-            projectId: input.projectId,
-            periodIndex: period.periodIndex,
-            label: period.label,
-            startDate: period.startDate,
-            endDate: period.endDate,
-          })),
-        ),
-      ]);
+      try {
+        await runBatch([
+          db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.projectId}, 0))`),
+          // Recheck under the project lock. The earlier checks provide specific
+          // messages; this one closes the gap where another request starts using
+          // a period while this request is preparing the replacement axis.
+          db.execute(sql`
+            select 1 / case when
+              exists (select 1 from progress_entry where project_id = ${input.projectId})
+              or exists (
+                select 1 from daily_report
+                where project_id = ${input.projectId} and period_id is not null
+              )
+              or exists (
+                select 1 from ticket
+                where project_id = ${input.projectId} and period_id is not null
+              )
+              or exists (
+                select 1 from boq_version
+                where project_id = ${input.projectId} and schedule_status = 'active'
+              )
+            then 0 else 1 end
+          `),
+          db.delete(reportingPeriod).where(eq(reportingPeriod.projectId, input.projectId)),
+          db.insert(reportingPeriod).values(
+            periods.map((period) => ({
+              projectId: input.projectId,
+              periodIndex: period.periodIndex,
+              label: period.label,
+              startDate: period.startDate,
+              endDate: period.endDate,
+            })),
+          ),
+          db.execute(sql`
+            update daily_report as report
+            set period_id = period.id, updated_at = now()
+            from reporting_period as period
+            where report.project_id = ${input.projectId}
+              and report.period_id is null
+              and period.project_id = report.project_id
+              and report.report_date between period.start_date and period.end_date
+          `),
+        ]);
+      } catch (error) {
+        if (error instanceof Error && error.message.toLowerCase().includes("division by zero")) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "The reporting periods became in use and can no longer be rebuilt.",
+          });
+        }
+        throw error;
+      }
 
       await recordActivity(ctx, {
         action: "generated",
