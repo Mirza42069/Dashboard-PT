@@ -25,13 +25,21 @@ import { trpc } from "@/utils/trpc";
  * appear in the picker — this list is exactly the accounts membership would
  * change anything for.
  */
-export default function TeamTab({ projectId }: { projectId: string }) {
+export default function TeamTab({
+  projectId,
+  managerId,
+}: {
+  projectId: string;
+  managerId: string | null;
+}) {
   const t = useT();
   const queryClient = useQueryClient();
 
   const membersQuery = useQuery(trpc.project.listMembers.queryOptions({ projectId }));
   const optionsQuery = useQuery(trpc.project.memberOptions.queryOptions());
   const setMembers = useMutation(trpc.project.setMembers.mutationOptions());
+  const protectedManagerId =
+    managerId && optionsQuery.data?.some((user) => user.id === managerId) ? managerId : null;
 
   // Local, editable copy of the assignment — null until the current members
   // have loaded once, so a slow request never flashes an "everyone unchecked"
@@ -43,6 +51,16 @@ export default function TeamTab({ projectId }: { projectId: string }) {
       setSelected(new Set(membersQuery.data.map((member) => member.id)));
     }
   }, [membersQuery.data, selected]);
+
+  useEffect(() => {
+    if (!protectedManagerId) return;
+    setSelected((current) => {
+      if (!current || current.has(protectedManagerId)) return current;
+      const next = new Set(current);
+      next.add(protectedManagerId);
+      return next;
+    });
+  }, [protectedManagerId]);
 
   if (membersQuery.isPending || optionsQuery.isPending || selected === null) {
     return <Skeleton className="h-48 w-full" />;
@@ -92,18 +110,25 @@ export default function TeamTab({ projectId }: { projectId: string }) {
             {options.map((user) => (
               <label
                 key={user.id}
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60"
+                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm has-disabled:text-muted-foreground not-has-disabled:hover:bg-muted/60"
               >
                 <Checkbox
                   checked={selected.has(user.id)}
+                  disabled={user.id === protectedManagerId}
                   onCheckedChange={() => toggle(user.id)}
                   aria-label={user.name}
                 />
                 <span className="font-medium">{user.name}</span>
                 <span className="text-muted-foreground">{user.email}</span>
+                {user.id === protectedManagerId && (
+                  <span className="ml-auto text-xs">{t.projects.currentManager}</span>
+                )}
               </label>
             ))}
           </div>
+        )}
+        {protectedManagerId && (
+          <p className="text-xs text-muted-foreground">{t.projects.managerMemberHint}</p>
         )}
         <Button size="sm" disabled={setMembers.isPending} onClick={() => void save()}>
           <Save />

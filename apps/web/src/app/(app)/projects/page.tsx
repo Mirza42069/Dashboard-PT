@@ -24,6 +24,8 @@ export default async function ProjectsPage() {
       <ProjectsTable
         canCreate={hasPermission(role, "project:create")}
         canDelete={hasPermission(role, "project:delete")}
+        canManageMembers={hasPermission(role, "member:manage")}
+        currentUserId={session.user.id}
       />
     </div>
   );

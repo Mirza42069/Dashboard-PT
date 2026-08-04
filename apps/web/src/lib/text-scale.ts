@@ -1,7 +1,7 @@
 export const TEXT_SCALES = ["normal", "large"] as const;
 export type TextScale = (typeof TEXT_SCALES)[number];
 
-export const DEFAULT_TEXT_SCALE: TextScale = "normal";
+export const DEFAULT_TEXT_SCALE: TextScale = "large";
 export const TEXT_SCALE_COOKIE = "v2.textScale";
 
 /**

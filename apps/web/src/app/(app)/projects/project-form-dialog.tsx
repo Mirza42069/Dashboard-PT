@@ -141,12 +141,18 @@ export default function ProjectFormDialog({
   editingId,
   initialValues,
   progressLocked = false,
+  canManageMembers,
+  currentUserId,
+  onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** null = create, otherwise the project being edited. */
   editingId: string | null;
   initialValues: ProjectFormValues;
+  canManageMembers: boolean;
+  currentUserId: string;
+  onCreated?: (projectId: string) => void;
   /**
    * True when an active BoQ baseline supplies this project's progress, in which
    * case the API ignores the `progress` column and typing a figure into it would
@@ -171,14 +177,27 @@ export default function ProjectFormDialog({
    */
   const [codeConflict, setCodeConflict] = useState<string | null>(null);
 
-  const managers = useQuery(trpc.project.managerOptions.queryOptions());
+  const managers = useQuery({
+    ...trpc.project.managerOptions.queryOptions(),
+    enabled: open,
+  });
   const statusOptions = PROJECT_STATUSES.map((value) => ({
     value,
     label: statusLabel("project", value),
   }));
+  const managerChangeLocked =
+    !canManageMembers &&
+    editingId !== null &&
+    initialValues.managerId !== "" &&
+    initialValues.managerId !== currentUserId;
+  const visibleManagers = canManageMembers
+    ? managers.data ?? []
+    : (managers.data ?? []).filter(
+        (manager) => manager.id === currentUserId || manager.id === initialValues.managerId,
+      );
   const managerOptions = [
     { value: UNASSIGNED, label: t.common.unassigned, email: null as string | null },
-    ...(managers.data ?? []).map((manager) => ({
+    ...visibleManagers.map((manager) => ({
       value: manager.id,
       label: manager.name,
       email: manager.email,
@@ -223,27 +242,37 @@ export default function ProjectFormDialog({
   const form = useForm({
     defaultValues: initialValues,
     onSubmit: async ({ value }) => {
-      const payload = {
-        code: value.code,
-        name: value.name,
-        status: value.status,
-        progress: value.progress.trim() === "" ? 0 : Number(value.progress),
-        client: blankToNull(value.client),
-        location: blankToNull(value.location),
-        managerId: blankToNull(value.managerId),
-        startDate: blankToNull(value.startDate),
-        endDate: blankToNull(value.endDate),
-        notes: blankToNull(value.notes),
-      };
-
       try {
         if (editingId) {
-          await updateProject.mutateAsync({ id: editingId, ...payload });
+          await updateProject.mutateAsync({
+            id: editingId,
+            code: value.code,
+            name: value.name,
+            status: value.status,
+            progress: value.progress.trim() === "" ? 0 : Number(value.progress),
+            client: blankToNull(value.client),
+            location: blankToNull(value.location),
+            managerId: blankToNull(value.managerId),
+            startDate: blankToNull(value.startDate),
+            endDate: blankToNull(value.endDate),
+            notes: blankToNull(value.notes),
+          });
         } else {
-          await createProject.mutateAsync(payload);
+          const created = await createProject.mutateAsync({
+            code: value.code,
+            name: value.name,
+            client: blankToNull(value.client),
+            location: blankToNull(value.location),
+            managerId: blankToNull(value.managerId),
+          });
+          await queryClient.invalidateQueries(trpc.project.pathFilter());
+          toast.success(t.projects.created);
+          close();
+          onCreated?.(created.id);
+          return;
         }
         await queryClient.invalidateQueries(trpc.project.pathFilter());
-        toast.success(editingId ? t.projects.updated : t.projects.created);
+        toast.success(t.projects.updated);
         close();
       } catch (error) {
         const message = error instanceof Error ? error.message : t.projects.saveFailed;
@@ -349,7 +378,7 @@ export default function ProjectFormDialog({
               }
             >
               <Group legend={t.projects.groupIdentity}>
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className={editingId ? "grid gap-4 sm:grid-cols-2" : undefined}>
                   <form.Field name="code">
                     {(field) => {
                       const error = fieldError(field.name, [
@@ -387,31 +416,33 @@ export default function ProjectFormDialog({
                     }}
                   </form.Field>
 
-                  <form.Field name="status">
-                    {(field) => (
-                      <div className="space-y-2">
-                        <FieldLabel htmlFor={field.name}>{t.projects.statusLabel}</FieldLabel>
-                        <Select
-                          items={statusOptions}
-                          value={field.state.value}
-                          onValueChange={(value) => {
-                            if (value) field.handleChange(value);
-                          }}
-                        >
-                          <SelectTrigger id={field.name} className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {statusOptions.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    )}
-                  </form.Field>
+                  {editingId && (
+                    <form.Field name="status">
+                      {(field) => (
+                        <div className="space-y-2">
+                          <FieldLabel htmlFor={field.name}>{t.projects.statusLabel}</FieldLabel>
+                          <Select
+                            items={statusOptions}
+                            value={field.state.value}
+                            onValueChange={(value) => {
+                              if (value) field.handleChange(value);
+                            }}
+                          >
+                            <SelectTrigger id={field.name} className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {statusOptions.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                    </form.Field>
+                  )}
                 </div>
 
                 <form.Field name="name">
@@ -432,43 +463,75 @@ export default function ProjectFormDialog({
                 </div>
 
                 <form.Field name="managerId">
-                  {(field) => (
-                    <div className="space-y-2">
-                      <FieldLabel htmlFor={field.name} optional>
-                        {t.projects.manager}
-                      </FieldLabel>
-                      <Select
-                        items={managerOptions}
-                        value={field.state.value === "" ? UNASSIGNED : field.state.value}
-                        onValueChange={(value) =>
-                          field.handleChange(!value || value === UNASSIGNED ? "" : value)
-                        }
-                      >
-                        <SelectTrigger id={field.name} className="w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {managerOptions.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              <span className="flex flex-col items-start">
-                                <span>{option.label}</span>
-                                {/* Two people can share a name; the address is
-                                    what tells them apart. */}
-                                {option.email && (
-                                  <span className="text-muted-foreground">{option.email}</span>
-                                )}
-                              </span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
+                  {(field) => {
+                    const hintId = `${field.name}-hint`;
+                    const errorId = `${field.name}-load-error`;
+                    return (
+                      <div className="space-y-2">
+                        <FieldLabel htmlFor={field.name} optional>
+                          {t.projects.manager}
+                        </FieldLabel>
+                        <Select
+                          items={managerOptions}
+                          value={field.state.value === "" ? UNASSIGNED : field.state.value}
+                          onValueChange={(value) =>
+                            field.handleChange(!value || value === UNASSIGNED ? "" : value)
+                          }
+                        >
+                          <SelectTrigger
+                            id={field.name}
+                            className="w-full"
+                            disabled={managers.isPending || managers.isError || managerChangeLocked}
+                            aria-describedby={managers.isError ? `${hintId} ${errorId}` : hintId}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {managerOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                <span className="flex flex-col items-start">
+                                  <span>{option.label}</span>
+                                  {/* Two people can share a name; the address is
+                                      what tells them apart. */}
+                                  {option.email && (
+                                    <span className="text-muted-foreground">{option.email}</span>
+                                  )}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p id={hintId} className="text-xs text-muted-foreground">
+                          {managerChangeLocked
+                            ? t.projects.managerRestrictedHint
+                            : t.projects.managerAccessHint}
+                        </p>
+                        {managers.isError && (
+                          <div
+                            id={errorId}
+                            role="alert"
+                            className="flex items-center justify-between gap-2 text-xs text-destructive"
+                          >
+                            <span>{t.projects.managerLoadFailed}</span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="xs"
+                              onClick={() => void managers.refetch()}
+                            >
+                              {t.common.retry}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }}
                 </form.Field>
               </Group>
 
-              <Group legend={t.projects.groupSchedule}>
-                <div className="grid gap-4 sm:grid-cols-2">
+              {editingId && (
+                <Group legend={t.projects.groupSchedule}>
+                  <div className="grid gap-4 sm:grid-cols-2">
                   {/* Deliberately unbounded, while the target below is bounded by
                       it. Capping the start at the target too would deadlock the
                       pair: with both set, moving the window later needs a start
@@ -529,19 +592,19 @@ export default function ProjectFormDialog({
                       </form.Field>
                     )}
                   </form.Subscribe>
-                </div>
+                  </div>
 
-                <form.Subscribe
-                  selector={(state) => ({
-                    startDate: state.values.startDate,
-                    endDate: state.values.endDate,
-                  })}
-                >
-                  {({ startDate, endDate }) => <Span start={startDate} end={endDate} />}
-                </form.Subscribe>
+                  <form.Subscribe
+                    selector={(state) => ({
+                      startDate: state.values.startDate,
+                      endDate: state.values.endDate,
+                    })}
+                  >
+                    {({ startDate, endDate }) => <Span start={startDate} end={endDate} />}
+                  </form.Subscribe>
 
-                <form.Field name="progress">
-                  {(field) => {
+                  <form.Field name="progress">
+                    {(field) => {
                     const error = fieldError(field.name, field.state.meta.errors);
                     const hintId = `${field.name}-hint`;
                     return (
@@ -581,12 +644,14 @@ export default function ProjectFormDialog({
                         <FieldError {...error} />
                       </div>
                     );
-                  }}
-                </form.Field>
-              </Group>
+                    }}
+                  </form.Field>
+                </Group>
+              )}
 
-              <form.Field name="notes">
-                {(field) => {
+              {editingId && (
+                <form.Field name="notes">
+                  {(field) => {
                   const error = fieldError(field.name, field.state.meta.errors);
                   const remaining = NOTES_MAX - field.state.value.length;
                   return (
@@ -622,8 +687,9 @@ export default function ProjectFormDialog({
                       <FieldError {...error} />
                     </div>
                   );
-                }}
-              </form.Field>
+                  }}
+                </form.Field>
+              )}
             </div>
 
             <DialogFooter
@@ -644,7 +710,7 @@ export default function ProjectFormDialog({
                       ? t.common.saving
                       : editingId
                         ? t.projects.saveChanges
-                        : t.projects.createProject}
+                        : t.projects.createAndSetup}
                   </Button>
                 )}
               </form.Subscribe>

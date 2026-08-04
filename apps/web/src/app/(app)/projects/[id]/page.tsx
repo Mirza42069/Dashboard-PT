@@ -25,6 +25,7 @@ export default async function ProjectDetailPage({
     <div className="p-4 md:p-6">
       <ProjectDetail
         projectId={id}
+        currentUserId={session.user.id}
         canUpdateProject={hasPermission(role, "project:update")}
         canWrite={hasPermission(role, "project:write")}
         canManageMembers={hasPermission(role, "member:manage")}

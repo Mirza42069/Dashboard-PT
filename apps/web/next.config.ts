@@ -5,6 +5,23 @@ const nextConfig: NextConfig = {
   typedRoutes: true,
   reactCompiler: true,
 
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          {
+            key: "Permissions-Policy",
+            value: "camera=(self), geolocation=(), microphone=()",
+          },
+        ],
+      },
+    ];
+  },
+
   // better-auth resolves its adapters dynamically, so bundling it into the
   // route chunks is wasted work — lib/session.ts only ever runs on the server.
   serverExternalPackages: ["better-auth", "@better-auth/kysely-adapter", "kysely"],

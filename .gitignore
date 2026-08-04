@@ -13,10 +13,11 @@ apps/web/src/routeTree.gen.ts
 
 # Environment variables
 # Broad on purpose: catches .env.local, .env.bak, .env.production and friends.
-# No .env template files are kept in this repo — the required variables are
-# documented in README.md (Database Setup) and enforced by packages/env.
+# Templates are safe to commit; real values remain ignored.
 .env
 .env.*
+!.env.example
+!**/.env.example
 .claude
 
 # IDEs and editors

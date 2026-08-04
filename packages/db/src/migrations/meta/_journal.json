@@ -134,6 +134,20 @@
       "when": 1785559332960,
       "tag": "0018_third_violations",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1785859200000,
+      "tag": "0019_project_manager_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1785945600000,
+      "tag": "0020_project_access_invariants",
+      "breakpoints": true
     }
   ]
 }

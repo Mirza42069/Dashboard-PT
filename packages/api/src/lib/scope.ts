@@ -186,14 +186,23 @@ export async function assertNoteAccess(ctx: ProjectScopeCtx, noteId: string) {
  * explicit role test is here so the intent survives someone later deciding to
  * give the account a companyId.
  */
-export async function assertUserAssignable(companyId: string, userId: string) {
+export async function assertUserAssignable(
+  companyId: string,
+  userId: string,
+): Promise<{ role: "admin" | "user" }> {
   const [row] = await db
-    .select({ companyId: user.companyId, role: user.role })
+    .select({ banned: user.banned, companyId: user.companyId, role: user.role })
     .from(user)
     .where(eq(user.id, userId));
-  if (!row || row.role === "super_admin" || row.companyId !== companyId) {
+  if (
+    !row ||
+    row.banned ||
+    row.companyId !== companyId ||
+    (row.role !== "admin" && row.role !== "user")
+  ) {
     throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
   }
+  return { role: row.role as "admin" | "user" };
 }
 
 /** Used by admin.createUser to reject a companyId that does not exist. */

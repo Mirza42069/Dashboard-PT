@@ -6,14 +6,14 @@
     "web": {
       "root": "apps/web",
       "framework": "nextjs",
-      "installCommand": "cd ../.. && bun install",
-      "buildCommand": "NEXT_PUBLIC_SERVER_URL=/api bun run build"
+      "installCommand": "cd ../.. && bun install --frozen-lockfile",
+      "buildCommand": "bun ../../scripts/vercel-build-web.ts"
     },
     "server": {
       "root": "apps/server",
       "framework": "hono",
       "entrypoint": "server.mjs",
-      "installCommand": "cd ../.. && bun install",
+      "installCommand": "cd ../.. && bun install --frozen-lockfile",
       "buildCommand": "bun run build && cp dist/index.mjs server.mjs",
       "routes": [
         {

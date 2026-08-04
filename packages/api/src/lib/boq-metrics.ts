@@ -273,6 +273,7 @@ export type ProjectException = BoqMetrics & {
   code: string;
   name: string;
   status: string;
+  hasBaseline: boolean;
   /** Deviation at the previous reported period, for the change-over-time figure. */
   previousDeviation: number | null;
   /** Periods past their end date with no submission. */
@@ -298,6 +299,7 @@ export async function projectExceptions(where: SQL | undefined) {
       code: project.code,
       name: project.name,
       status: project.status,
+      manualProgress: project.progress,
       dataDate: project.dataDate,
       actual: actualPercent,
       planned: plannedPercent,
@@ -330,7 +332,8 @@ export async function projectExceptions(where: SQL | undefined) {
       code: row.code,
       name: row.name,
       status: row.status,
-      progress: row.hasBaseline ? progress : 0,
+      hasBaseline: row.hasBaseline,
+      progress: row.hasBaseline ? progress : Number(row.manualProgress ?? 0),
       planned: row.hasBaseline ? planned : 0,
       contractValue: toAmount(row.contractValue),
       workCompletedValue:

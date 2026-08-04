@@ -33,8 +33,9 @@ import {
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
+import type { Route } from "next";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
@@ -61,15 +62,20 @@ const ALL = "all";
 export default function ProjectsTable({
   canCreate,
   canDelete,
+  canManageMembers,
+  currentUserId,
 }: {
   canCreate: boolean;
   canDelete: boolean;
+  canManageMembers: boolean;
+  currentUserId: string;
 }) {
   const t = useT();
   const { locale } = useLocale();
   const { formatDate } = useFormat();
   const statusLabel = useStatusLabel();
   const queryClient = useQueryClient();
+  const router = useRouter();
   const statusOptions = [
     { value: ALL, label: t.common.all },
     ...STATUSES.map((value) => ({ value, label: statusLabel("project", value) })),
@@ -357,6 +363,11 @@ export default function ProjectsTable({
           onOpenChange={setFormOpen}
           editingId={null}
           initialValues={EMPTY_PROJECT}
+          canManageMembers={canManageMembers}
+          currentUserId={currentUserId}
+          onCreated={(projectId) =>
+            router.push(`/projects/${projectId}?tab=baseline` as Route)
+          }
         />
       )}
 

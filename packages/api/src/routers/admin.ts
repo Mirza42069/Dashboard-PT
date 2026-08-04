@@ -2,14 +2,17 @@ import { auth } from "@DashboardV2/auth";
 import { db } from "@DashboardV2/db";
 import { user } from "@DashboardV2/db/schema/auth";
 import { company } from "@DashboardV2/db/schema/company";
+import { project, projectMember } from "@DashboardV2/db/schema/construction";
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, ilike, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, ne, or } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, permissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
+import { runBatch } from "../lib/batch";
 import { roleOf } from "../lib/permissions";
 import { assertCompanyExists } from "../lib/scope";
+import { planProjectAccessReconciliation } from "../lib/user-project-access";
 
 /**
  * Ambiguous glyphs (0/O, 1/l/I) are excluded — these passwords get read aloud
@@ -29,9 +32,83 @@ function generateTempPassword() {
 const roleSchema = z.enum(["super_admin", "admin", "user"]);
 const userIdSchema = z.object({ userId: z.string().min(1) });
 
+/**
+ * Keeps project scope valid when account administration changes how access is
+ * evaluated. Admins do not need membership rows; regular users do, and only in
+ * their current company. Manager assignments never survive a company move.
+ */
+async function reconcileProjectAccess(
+  userId: string,
+  role: z.infer<typeof roleSchema>,
+  companyId: string | null,
+  accountChanges?: { companyId: string | null; role?: z.infer<typeof roleSchema> },
+) {
+  const [managedProjects, memberships] = await Promise.all([
+    role === "user" && companyId
+      ? db
+          .select({ projectId: project.id })
+          .from(project)
+          .where(and(eq(project.managerId, userId), eq(project.companyId, companyId)))
+      : Promise.resolve([]),
+    db
+      .select({ companyId: project.companyId, projectId: projectMember.projectId })
+      .from(projectMember)
+      .innerJoin(project, eq(project.id, projectMember.projectId))
+      .where(eq(projectMember.userId, userId)),
+  ]);
+
+  const { grantProjectIds, staleProjectIds } = planProjectAccessReconciliation({
+    companyId,
+    managedProjectIds: managedProjects.map(({ projectId }) => projectId),
+    memberships,
+    role,
+  });
+
+  await runBatch([
+    ...(accountChanges
+      ? [db.update(user).set(accountChanges).where(eq(user.id, userId))]
+      : []),
+    db
+      .update(project)
+      .set({ managerId: null })
+      .where(
+        companyId
+          ? and(eq(project.managerId, userId), ne(project.companyId, companyId))
+          : eq(project.managerId, userId),
+      ),
+    ...(staleProjectIds.length > 0
+      ? [
+          db
+            .delete(projectMember)
+            .where(
+              and(
+                eq(projectMember.userId, userId),
+                inArray(projectMember.projectId, staleProjectIds),
+              ),
+            ),
+        ]
+      : []),
+    ...(grantProjectIds.length > 0
+      ? [
+          db
+            .insert(projectMember)
+            .values(grantProjectIds.map((projectId) => ({ projectId, userId })))
+            .onConflictDoNothing(),
+        ]
+      : []),
+  ]);
+}
+
 async function countSuperAdmins() {
   const [row] = await db.select({ value: count() }).from(user).where(eq(user.role, "super_admin"));
   return row?.value ?? 0;
+}
+
+async function assertUserExists(userId: string) {
+  const [target] = await db.select({ id: user.id }).from(user).where(eq(user.id, userId));
+  if (!target) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+  }
 }
 
 /**
@@ -289,14 +366,20 @@ export const adminRouter = router({
           message: "Super admins are not pinned to a company",
         });
       }
+      if (target.role !== "admin" && target.role !== "user") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Unsupported account role" });
+      }
 
-      await db.update(user).set({ companyId: input.companyId }).where(eq(user.id, input.userId));
+      await reconcileProjectAccess(input.userId, target.role, input.companyId, {
+        companyId: input.companyId,
+      });
       return { success: true };
     }),
 
   setRole: companyPermissionProcedure("user:setRole")
     .input(userIdSchema.extend({ role: roleSchema, companyId: z.string().min(1).optional() }))
     .mutation(async ({ ctx, input }) => {
+      await assertUserExists(input.userId);
       if (input.role !== "super_admin") {
         await assertNotLastSuperAdmin(input.userId, "demote");
       }
@@ -315,13 +398,11 @@ export const adminRouter = router({
         await assertCompanyExists(companyId);
       }
 
-      await auth.api.setRole({
-        headers: ctx.headers,
-        body: { userId: input.userId, role: input.role },
-      });
-
       // Promoting to super_admin unpins the account; any other role keeps or assigns one.
-      await db.update(user).set({ companyId }).where(eq(user.id, input.userId));
+      await reconcileProjectAccess(input.userId, input.role, companyId, {
+        companyId,
+        role: input.role,
+      });
 
       await recordActivity({ session: ctx.session, companyId: companyId ?? ctx.companyId }, {
         action: "role_changed",
@@ -353,6 +434,14 @@ export const adminRouter = router({
           headers: ctx.headers,
           body: { userId: input.userId },
         });
+
+        const [resumed] = await db
+          .select({ companyId: user.companyId, role: user.role })
+          .from(user)
+          .where(eq(user.id, input.userId));
+        if (resumed && (resumed.role === "admin" || resumed.role === "user")) {
+          await reconcileProjectAccess(input.userId, resumed.role, resumed.companyId);
+        }
       }
 
       await recordActivity({ session: ctx.session, companyId: auditCompanyId }, {

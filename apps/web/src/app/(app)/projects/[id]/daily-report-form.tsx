@@ -33,12 +33,21 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Textarea } from "@DashboardV2/ui/components/textarea";
 import { ArrowLeft, CircleAlert, Plus, Save, Trash2 } from "@DashboardV2/ui/components/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import type { Route } from "next";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 import { QueryError } from "@/components/query-error";
 import { StatusBadge, statusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import {
+  invalidDailyPrimaryRows,
+  type DailyDeliveryRow,
+  type DailyEquipmentRow,
+  type DailyManpowerRow,
+  type DailyRowErrors,
+} from "@/lib/daily-report-rows";
 import { toast } from "@/lib/toast";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
@@ -62,18 +71,12 @@ import { trpc } from "@/utils/trpc";
  * make the reading order ambiguous.
  */
 
-type Manpower = { trade: string; headcount: string; hours: string; note: string };
-type Equipment = { name: string; quantity: string; hoursUsed: string; idle: boolean; note: string };
-type Delivery = {
-  material: string;
-  quantity: string;
-  unit: string;
-  supplier: string;
-  reference: string;
-  note: string;
-};
+type Manpower = DailyManpowerRow;
+type Equipment = DailyEquipmentRow;
+type Delivery = DailyDeliveryRow;
 
 type DailyStatus = "draft" | "submitted" | "reviewed" | "approved" | "returned";
+type RowErrors = DailyRowErrors;
 
 const isEditableStatus = (status: DailyStatus) => status === "draft" || status === "returned";
 
@@ -82,22 +85,34 @@ const number = (value: string) => {
   return value.trim() === "" || !Number.isFinite(parsed) ? null : parsed;
 };
 
+function snapshotForm(
+  narrative: Record<string, string>,
+  manpower: Manpower[],
+  equipment: Equipment[],
+  deliveries: Delivery[],
+) {
+  return JSON.stringify({ narrative, manpower, equipment, deliveries });
+}
+
 export default function DailyReportForm({
   reportId,
   canEdit,
   canReview,
   canLock,
   onBack,
+  onDirtyChange,
 }: {
   reportId: string;
   canEdit: boolean;
   canReview: boolean;
   canLock: boolean;
   onBack: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const t = useT();
   const { formatDate, formatDateTime } = useFormat();
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   const query = useQuery(trpc.dailyReport.get.queryOptions({ id: reportId }));
   const save = useMutation(trpc.dailyReport.save.mutationOptions());
@@ -123,9 +138,68 @@ export default function DailyReportForm({
   const [manpower, setManpower] = useState<Manpower[]>([]);
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+  const [rowErrors, setRowErrors] = useState<RowErrors>({
+    manpower: [],
+    equipment: [],
+    deliveries: [],
+  });
   const [confirming, setConfirming] = useState<null | { to: DailyStatus; label: string; body: string; needsReason: boolean; toast: string }>(null);
   const [reason, setReason] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const persistRef = useRef<() => Promise<boolean>>(async () => false);
+  const saveAvailableRef = useRef(false);
+
+  const currentSnapshot = snapshotForm(narrative, manpower, equipment, deliveries);
+  const dirty = savedSnapshot !== null && currentSnapshot !== savedSnapshot;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [dirty]);
+
+  useEffect(() => {
+    const saveShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") return;
+      if (!saveAvailableRef.current) return;
+      event.preventDefault();
+      void persistRef.current();
+    };
+    window.addEventListener("keydown", saveShortcut);
+    return () => window.removeEventListener("keydown", saveShortcut);
+  }, []);
+
+  useEffect(() => {
+    const guardInternalLink = (event: MouseEvent) => {
+      if (!dirty || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement) || anchor.target === "_blank" || anchor.download) return;
+      const destination = new URL(anchor.href, window.location.href);
+      if (destination.origin !== window.location.origin || destination.href === window.location.href) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setPendingHref(`${destination.pathname}${destination.search}${destination.hash}`);
+      setConfirmingLeave(true);
+    };
+    document.addEventListener("click", guardInternalLink, true);
+    return () => document.removeEventListener("click", guardInternalLink, true);
+  }, [dirty]);
 
   if (query.isPending) return <Skeleton className="h-96 w-full" />;
   if (query.isError) {
@@ -138,10 +212,11 @@ export default function DailyReportForm({
   const status = report.status as DailyStatus;
   const editable =
     canEdit && isEditableStatus(status) && !save.isPending && !transition.isPending;
+  saveAvailableRef.current = editable;
 
   if (loadedFor !== reportId) {
     setLoadedFor(reportId);
-    setNarrative({
+    const loadedNarrative = {
       weather: report.weather ?? "",
       weatherNote: report.weatherNote ?? "",
       rainfallHours: report.rainfallHours === null ? "" : String(report.rainfallHours),
@@ -151,33 +226,34 @@ export default function DailyReportForm({
       qualityObservations: report.qualityObservations ?? "",
       visitors: report.visitors ?? "",
       notes: report.notes ?? "",
-    });
-    setManpower(
-      data.manpower.map((row) => ({
+    };
+    const loadedManpower = data.manpower.map((row) => ({
         trade: row.trade,
         headcount: String(row.headcount),
         hours: row.hours === null ? "" : String(row.hours),
         note: row.note ?? "",
-      })),
-    );
-    setEquipment(
-      data.equipment.map((row) => ({
+      }));
+    const loadedEquipment = data.equipment.map((row) => ({
         name: row.name,
         quantity: String(row.quantity),
         hoursUsed: row.hoursUsed === null ? "" : String(row.hoursUsed),
         idle: row.idle,
         note: row.note ?? "",
-      })),
-    );
-    setDeliveries(
-      data.deliveries.map((row) => ({
+      }));
+    const loadedDeliveries = data.deliveries.map((row) => ({
         material: row.material,
         quantity: row.quantity === null ? "" : String(row.quantity),
         unit: row.unit ?? "",
         supplier: row.supplier ?? "",
         reference: row.reference ?? "",
         note: row.note ?? "",
-      })),
+      }));
+    setNarrative(loadedNarrative);
+    setManpower(loadedManpower);
+    setEquipment(loadedEquipment);
+    setDeliveries(loadedDeliveries);
+    setSavedSnapshot(
+      snapshotForm(loadedNarrative, loadedManpower, loadedEquipment, loadedDeliveries),
     );
   }
 
@@ -197,6 +273,22 @@ export default function DailyReportForm({
   }
 
   async function persist(showSuccess = true) {
+    const errors = invalidDailyPrimaryRows(manpower, equipment, deliveries);
+    const firstError =
+      errors.manpower[0] !== undefined
+        ? `daily-manpower-${errors.manpower[0]}-primary`
+        : errors.equipment[0] !== undefined
+          ? `daily-equipment-${errors.equipment[0]}-primary`
+          : errors.deliveries[0] !== undefined
+            ? `daily-deliveries-${errors.deliveries[0]}-primary`
+            : null;
+    setRowErrors(errors);
+    if (firstError) {
+      toast.error(t.daily.completePartialRows);
+      requestAnimationFrame(() => document.getElementById(firstError)?.focus());
+      return false;
+    }
+
     try {
       await save.mutateAsync({
         id: reportId,
@@ -237,6 +329,7 @@ export default function DailyReportForm({
             note: row.note || null,
           })),
       });
+      setSavedSnapshot(currentSnapshot);
       await refresh();
       if (showSuccess) toast.success(t.daily.saved);
       return true;
@@ -246,11 +339,67 @@ export default function DailyReportForm({
     }
   }
 
+  persistRef.current = () => persist();
+
+  function usePreviousStructure() {
+    const previous = data.previousStructure;
+    if (!previous) return;
+    setManpower(
+      previous.manpower.map((row) => ({ trade: row.trade, headcount: "", hours: "", note: "" })),
+    );
+    setEquipment(
+      previous.equipment.map((row) => ({
+        name: row.name,
+        quantity: "",
+        hoursUsed: "",
+        idle: false,
+        note: "",
+      })),
+    );
+    setDeliveries(
+      previous.deliveries.map((row) => ({
+        material: row.material,
+        quantity: "",
+        unit: row.unit ?? "",
+        supplier: row.supplier ?? "",
+        reference: "",
+        note: "",
+      })),
+    );
+    setRowErrors({ manpower: [], equipment: [], deliveries: [] });
+    toast.success(t.daily.previousStructureApplied);
+  }
+
+  function clearRowError(section: keyof RowErrors, index: number) {
+    setRowErrors((current) => ({
+      ...current,
+      [section]: current[section].filter((rowIndex) => rowIndex !== index),
+    }));
+  }
+
+  function requestBack() {
+    if (dirty) {
+      setPendingHref(null);
+      setConfirmingLeave(true);
+    }
+    else onBack();
+  }
+
+  function discardAndLeave() {
+    onDirtyChange?.(false);
+    setConfirmingLeave(false);
+    if (pendingHref) router.push(pendingHref as Route);
+    else onBack();
+  }
+
   async function move(to: DailyStatus, successMessage: string) {
     try {
       // Submission freezes the report. Persist the form first so edits made
       // since the last explicit Save cannot disappear behind that transition.
-      if (to === "submitted" && editable && !(await persist(false))) return;
+      if (to === "submitted" && editable) {
+        setConfirming(null);
+        if (!(await persist(false))) return;
+      }
       await transition.mutateAsync({ id: reportId, to, comment: reason.trim() || undefined });
       await refresh();
       toast.success(successMessage);
@@ -309,12 +458,12 @@ export default function DailyReportForm({
   }
 
   return (
-    <div className="space-y-3">
+    <div className={`space-y-3 ${editable ? "pb-24 sm:pb-0" : ""}`}>
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="space-y-1">
-              <Button variant="ghost" size="sm" onClick={onBack}>
+              <Button variant="ghost" size="sm" onClick={requestBack}>
                 <ArrowLeft />
                 {t.daily.backToRegister}
               </Button>
@@ -329,6 +478,17 @@ export default function DailyReportForm({
             </div>
 
             <div className="flex flex-wrap gap-2">
+              {editable &&
+                data.previousStructure &&
+                manpower.length === 0 &&
+                equipment.length === 0 &&
+                deliveries.length === 0 && (
+                  <Button variant="outline" size="sm" onClick={usePreviousStructure}>
+                    {interpolate(t.daily.usePreviousStructure, {
+                      date: formatDate(data.previousStructure.reportDate),
+                    })}
+                  </Button>
+                )}
               {editable && (
                 <Button disabled={save.isPending} onClick={() => void persist()}>
                   <Save />
@@ -482,6 +642,8 @@ export default function DailyReportForm({
         }
         onRemove={(index) => setManpower((current) => current.filter((_, i) => i !== index))}
         nameOf={(row) => row.trade}
+        invalidRows={rowErrors.manpower}
+        errorText={interpolate(t.daily.primaryFieldRequired, { field: t.daily.trade })}
         columns={[
           { label: t.daily.trade, width: "min-w-40 flex-1" },
           { label: t.daily.people, width: "w-24" },
@@ -490,41 +652,69 @@ export default function DailyReportForm({
         ]}
         render={(row, index) => (
           <>
-            <Input
-              aria-label={`${t.daily.trade} ${index + 1}`}
-              className="min-w-40 flex-1"
-              value={row.trade}
-              disabled={!editable}
-              onChange={(e) => patch(setManpower, index, { trade: e.target.value })}
-            />
-            <Input
-              aria-label={`${t.daily.people} ${index + 1}`}
-              type="number"
-              min={0}
-              inputMode="numeric"
-              className="w-24 text-right tabular-nums"
-              value={row.headcount}
-              disabled={!editable}
-              onChange={(e) => patch(setManpower, index, { headcount: e.target.value })}
-            />
-            <Input
-              aria-label={`${t.daily.hours} ${index + 1}`}
-              type="number"
-              min={0}
-              step="any"
-              inputMode="decimal"
-              className="w-24 text-right tabular-nums"
-              value={row.hours}
-              disabled={!editable}
-              onChange={(e) => patch(setManpower, index, { hours: e.target.value })}
-            />
-            <Input
-              aria-label={`${t.daily.notes} ${index + 1}`}
-              className="min-w-40 flex-1"
-              value={row.note}
-              disabled={!editable}
-              onChange={(e) => patch(setManpower, index, { note: e.target.value })}
-            />
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-manpower-${index}-primary`} className="text-xs sm:hidden">
+                {t.daily.trade}
+              </Label>
+              <Input
+                id={`daily-manpower-${index}-primary`}
+                aria-label={`${t.daily.trade} ${index + 1}`}
+                aria-invalid={rowErrors.manpower.includes(index)}
+                className="w-full sm:min-w-40 sm:flex-1"
+                value={row.trade}
+                disabled={!editable}
+                onChange={(e) => {
+                  patch(setManpower, index, { trade: e.target.value });
+                  if (e.target.value.trim()) clearRowError("manpower", index);
+                }}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-manpower-${index}-people`} className="text-xs sm:hidden">
+                {t.daily.people}
+              </Label>
+              <Input
+                id={`daily-manpower-${index}-people`}
+                aria-label={`${t.daily.people} ${index + 1}`}
+                type="number"
+                min={0}
+                inputMode="numeric"
+                className="w-full text-right tabular-nums sm:w-24"
+                value={row.headcount}
+                disabled={!editable}
+                onChange={(e) => patch(setManpower, index, { headcount: e.target.value })}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-manpower-${index}-hours`} className="text-xs sm:hidden">
+                {t.daily.hours}
+              </Label>
+              <Input
+                id={`daily-manpower-${index}-hours`}
+                aria-label={`${t.daily.hours} ${index + 1}`}
+                type="number"
+                min={0}
+                step="any"
+                inputMode="decimal"
+                className="w-full text-right tabular-nums sm:w-24"
+                value={row.hours}
+                disabled={!editable}
+                onChange={(e) => patch(setManpower, index, { hours: e.target.value })}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-manpower-${index}-note`} className="text-xs sm:hidden">
+                {t.daily.notes}
+              </Label>
+              <Input
+                id={`daily-manpower-${index}-note`}
+                aria-label={`${t.daily.notes} ${index + 1}`}
+                className="w-full sm:min-w-40 sm:flex-1"
+                value={row.note}
+                disabled={!editable}
+                onChange={(e) => patch(setManpower, index, { note: e.target.value })}
+              />
+            </div>
           </>
         )}
       />
@@ -542,6 +732,8 @@ export default function DailyReportForm({
         }
         onRemove={(index) => setEquipment((current) => current.filter((_, i) => i !== index))}
         nameOf={(row) => row.name}
+        invalidRows={rowErrors.equipment}
+        errorText={interpolate(t.daily.primaryFieldRequired, { field: t.daily.equipmentName })}
         columns={[
           { label: t.daily.equipmentName, width: "min-w-40 flex-1" },
           { label: t.daily.quantity, width: "w-20" },
@@ -551,35 +743,57 @@ export default function DailyReportForm({
         ]}
         render={(row, index) => (
           <>
-            <Input
-              aria-label={`${t.daily.equipmentName} ${index + 1}`}
-              className="min-w-40 flex-1"
-              value={row.name}
-              disabled={!editable}
-              onChange={(e) => patch(setEquipment, index, { name: e.target.value })}
-            />
-            <Input
-              aria-label={`${t.daily.quantity} ${index + 1}`}
-              type="number"
-              min={0}
-              inputMode="numeric"
-              className="w-20 text-right tabular-nums"
-              value={row.quantity}
-              disabled={!editable}
-              onChange={(e) => patch(setEquipment, index, { quantity: e.target.value })}
-            />
-            <Input
-              aria-label={`${t.daily.hours} ${index + 1}`}
-              type="number"
-              min={0}
-              step="any"
-              inputMode="decimal"
-              className="w-24 text-right tabular-nums"
-              value={row.hoursUsed}
-              disabled={!editable}
-              onChange={(e) => patch(setEquipment, index, { hoursUsed: e.target.value })}
-            />
-            <label className="flex w-24 items-center gap-2 text-xs text-muted-foreground">
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-equipment-${index}-primary`} className="text-xs sm:hidden">
+                {t.daily.equipmentName}
+              </Label>
+              <Input
+                id={`daily-equipment-${index}-primary`}
+                aria-label={`${t.daily.equipmentName} ${index + 1}`}
+                aria-invalid={rowErrors.equipment.includes(index)}
+                className="w-full sm:min-w-40 sm:flex-1"
+                value={row.name}
+                disabled={!editable}
+                onChange={(e) => {
+                  patch(setEquipment, index, { name: e.target.value });
+                  if (e.target.value.trim()) clearRowError("equipment", index);
+                }}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-equipment-${index}-quantity`} className="text-xs sm:hidden">
+                {t.daily.quantity}
+              </Label>
+              <Input
+                id={`daily-equipment-${index}-quantity`}
+                aria-label={`${t.daily.quantity} ${index + 1}`}
+                type="number"
+                min={0}
+                inputMode="numeric"
+                className="w-full text-right tabular-nums sm:w-20"
+                value={row.quantity}
+                disabled={!editable}
+                onChange={(e) => patch(setEquipment, index, { quantity: e.target.value })}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-equipment-${index}-hours`} className="text-xs sm:hidden">
+                {t.daily.hours}
+              </Label>
+              <Input
+                id={`daily-equipment-${index}-hours`}
+                aria-label={`${t.daily.hours} ${index + 1}`}
+                type="number"
+                min={0}
+                step="any"
+                inputMode="decimal"
+                className="w-full text-right tabular-nums sm:w-24"
+                value={row.hoursUsed}
+                disabled={!editable}
+                onChange={(e) => patch(setEquipment, index, { hoursUsed: e.target.value })}
+              />
+            </div>
+            <label className="flex w-full items-center gap-2 text-xs text-muted-foreground sm:w-24">
               <Checkbox
                 checked={row.idle}
                 disabled={!editable}
@@ -590,13 +804,19 @@ export default function DailyReportForm({
               />
               {t.daily.idleHint}
             </label>
-            <Input
-              aria-label={`${t.daily.notes} ${index + 1}`}
-              className="min-w-40 flex-1"
-              value={row.note}
-              disabled={!editable}
-              onChange={(e) => patch(setEquipment, index, { note: e.target.value })}
-            />
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-equipment-${index}-note`} className="text-xs sm:hidden">
+                {t.daily.notes}
+              </Label>
+              <Input
+                id={`daily-equipment-${index}-note`}
+                aria-label={`${t.daily.notes} ${index + 1}`}
+                className="w-full sm:min-w-40 sm:flex-1"
+                value={row.note}
+                disabled={!editable}
+                onChange={(e) => patch(setEquipment, index, { note: e.target.value })}
+              />
+            </div>
           </>
         )}
       />
@@ -614,54 +834,104 @@ export default function DailyReportForm({
         }
         onRemove={(index) => setDeliveries((current) => current.filter((_, i) => i !== index))}
         nameOf={(row) => row.material}
+        invalidRows={rowErrors.deliveries}
+        errorText={interpolate(t.daily.primaryFieldRequired, { field: t.daily.material })}
         columns={[
           { label: t.daily.material, width: "min-w-40 flex-1" },
           { label: t.daily.quantity, width: "w-24" },
           { label: t.daily.unit, width: "w-20" },
           { label: t.daily.supplier, width: "min-w-32 flex-1" },
           { label: t.daily.reference, width: "w-32" },
+          { label: t.daily.notes, width: "min-w-32 flex-1" },
         ]}
         render={(row, index) => (
           <>
-            <Input
-              aria-label={`${t.daily.material} ${index + 1}`}
-              className="min-w-40 flex-1"
-              value={row.material}
-              disabled={!editable}
-              onChange={(e) => patch(setDeliveries, index, { material: e.target.value })}
-            />
-            <Input
-              aria-label={`${t.daily.quantity} ${index + 1}`}
-              type="number"
-              min={0}
-              step="any"
-              inputMode="decimal"
-              className="w-24 text-right tabular-nums"
-              value={row.quantity}
-              disabled={!editable}
-              onChange={(e) => patch(setDeliveries, index, { quantity: e.target.value })}
-            />
-            <Input
-              aria-label={`${t.daily.unit} ${index + 1}`}
-              className="w-20"
-              value={row.unit}
-              disabled={!editable}
-              onChange={(e) => patch(setDeliveries, index, { unit: e.target.value })}
-            />
-            <Input
-              aria-label={`${t.daily.supplier} ${index + 1}`}
-              className="min-w-32 flex-1"
-              value={row.supplier}
-              disabled={!editable}
-              onChange={(e) => patch(setDeliveries, index, { supplier: e.target.value })}
-            />
-            <Input
-              aria-label={`${t.daily.reference} ${index + 1}`}
-              className="w-32"
-              value={row.reference}
-              disabled={!editable}
-              onChange={(e) => patch(setDeliveries, index, { reference: e.target.value })}
-            />
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-deliveries-${index}-primary`} className="text-xs sm:hidden">
+                {t.daily.material}
+              </Label>
+              <Input
+                id={`daily-deliveries-${index}-primary`}
+                aria-label={`${t.daily.material} ${index + 1}`}
+                aria-invalid={rowErrors.deliveries.includes(index)}
+                className="w-full sm:min-w-40 sm:flex-1"
+                value={row.material}
+                disabled={!editable}
+                onChange={(e) => {
+                  patch(setDeliveries, index, { material: e.target.value });
+                  if (e.target.value.trim()) clearRowError("deliveries", index);
+                }}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-deliveries-${index}-quantity`} className="text-xs sm:hidden">
+                {t.daily.quantity}
+              </Label>
+              <Input
+                id={`daily-deliveries-${index}-quantity`}
+                aria-label={`${t.daily.quantity} ${index + 1}`}
+                type="number"
+                min={0}
+                step="any"
+                inputMode="decimal"
+                className="w-full text-right tabular-nums sm:w-24"
+                value={row.quantity}
+                disabled={!editable}
+                onChange={(e) => patch(setDeliveries, index, { quantity: e.target.value })}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-deliveries-${index}-unit`} className="text-xs sm:hidden">
+                {t.daily.unit}
+              </Label>
+              <Input
+                id={`daily-deliveries-${index}-unit`}
+                aria-label={`${t.daily.unit} ${index + 1}`}
+                className="w-full sm:w-20"
+                value={row.unit}
+                disabled={!editable}
+                onChange={(e) => patch(setDeliveries, index, { unit: e.target.value })}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-deliveries-${index}-supplier`} className="text-xs sm:hidden">
+                {t.daily.supplier}
+              </Label>
+              <Input
+                id={`daily-deliveries-${index}-supplier`}
+                aria-label={`${t.daily.supplier} ${index + 1}`}
+                className="w-full sm:min-w-32 sm:flex-1"
+                value={row.supplier}
+                disabled={!editable}
+                onChange={(e) => patch(setDeliveries, index, { supplier: e.target.value })}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-deliveries-${index}-reference`} className="text-xs sm:hidden">
+                {t.daily.reference}
+              </Label>
+              <Input
+                id={`daily-deliveries-${index}-reference`}
+                aria-label={`${t.daily.reference} ${index + 1}`}
+                className="w-full sm:w-32"
+                value={row.reference}
+                disabled={!editable}
+                onChange={(e) => patch(setDeliveries, index, { reference: e.target.value })}
+              />
+            </div>
+            <div className="w-full space-y-1 sm:contents">
+              <Label htmlFor={`daily-deliveries-${index}-note`} className="text-xs sm:hidden">
+                {t.daily.notes}
+              </Label>
+              <Input
+                id={`daily-deliveries-${index}-note`}
+                aria-label={`${t.daily.notes} ${index + 1}`}
+                className="w-full sm:min-w-32 sm:flex-1"
+                value={row.note}
+                disabled={!editable}
+                onChange={(e) => patch(setDeliveries, index, { note: e.target.value })}
+              />
+            </div>
           </>
         )}
       />
@@ -691,6 +961,52 @@ export default function DailyReportForm({
           </CardContent>
         </Card>
       )}
+
+      {editable && (
+        <div className="fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-40 grid grid-cols-2 gap-2 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur sm:hidden">
+          <Button disabled={save.isPending} onClick={() => void persist()}>
+            <Save />
+            {save.isPending ? t.common.saving : t.daily.save}
+          </Button>
+          {moves.find((move) => move.to === "submitted") && (
+            <Button
+              variant="secondary"
+              disabled={transition.isPending || save.isPending}
+              onClick={() => {
+                const submit = moves.find((move) => move.to === "submitted");
+                if (!submit) return;
+                setReason("");
+                setConfirming(submit);
+              }}
+            >
+              {t.daily.submit}
+            </Button>
+          )}
+        </div>
+      )}
+
+      <AlertDialog
+        open={confirmingLeave}
+        onOpenChange={(open) => {
+          setConfirmingLeave(open);
+          if (!open) {
+            setPendingHref(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.daily.discardTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{t.daily.discardDescription}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.common.keepEditing}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={discardAndLeave}>
+              {t.common.discardChanges}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={confirming !== null}
@@ -800,6 +1116,8 @@ function RowSection<T>({
   onAdd,
   onRemove,
   nameOf,
+  invalidRows,
+  errorText,
 }: {
   title: string;
   description?: string;
@@ -810,6 +1128,8 @@ function RowSection<T>({
   onAdd: () => void;
   onRemove: (index: number) => void;
   nameOf: (row: T) => string;
+  invalidRows: number[];
+  errorText: string;
 }) {
   const t = useT();
 
@@ -843,7 +1163,12 @@ function RowSection<T>({
               {editable && <span className="w-9" />}
             </div>
             {rows.map((row, index) => (
-              <div key={index} className="flex flex-wrap items-center gap-2">
+              <div
+                key={index}
+                className={`flex flex-wrap items-center gap-2 rounded-md ${
+                  invalidRows.includes(index) ? "bg-destructive/5 p-2" : ""
+                }`}
+              >
                 {render(row, index)}
                 {editable && (
                   <Button
@@ -856,6 +1181,9 @@ function RowSection<T>({
                   >
                     <Trash2 />
                   </Button>
+                )}
+                {invalidRows.includes(index) && (
+                  <p className="w-full text-xs text-destructive">{errorText}</p>
                 )}
               </div>
             ))}

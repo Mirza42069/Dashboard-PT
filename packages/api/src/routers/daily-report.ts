@@ -15,7 +15,7 @@ import {
 } from "@DashboardV2/db/schema";
 import type { DailyReportStatus } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { aliasedTable, and, asc, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { aliasedTable, and, asc, count, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
@@ -211,7 +211,29 @@ export const dailyReportRouter = router({
     .query(async ({ ctx, input }) => {
       const { report, projectCode, projectName } = await findReport(ctx, input.id);
 
-      const [manpower, equipment, deliveries, photos, events, reviewers] = await Promise.all([
+      const [previous] = await db
+        .select({ id: dailyReport.id, reportDate: dailyReport.reportDate })
+        .from(dailyReport)
+        .where(
+          and(
+            eq(dailyReport.projectId, report.projectId),
+            lt(dailyReport.reportDate, report.reportDate),
+          ),
+        )
+        .orderBy(desc(dailyReport.reportDate))
+        .limit(1);
+
+      const [
+        manpower,
+        equipment,
+        deliveries,
+        photos,
+        events,
+        reviewers,
+        previousManpower,
+        previousEquipment,
+        previousDeliveries,
+      ] = await Promise.all([
         db
           .select()
           .from(dailyReportManpower)
@@ -247,6 +269,31 @@ export const dailyReportRouter = router({
           .leftJoin(reviewerAlias, eq(reviewerAlias.id, dailyReport.reviewedById))
           .leftJoin(approverAlias, eq(approverAlias.id, dailyReport.approvedById))
           .where(eq(dailyReport.id, input.id)),
+        previous
+          ? db
+              .select({ trade: dailyReportManpower.trade })
+              .from(dailyReportManpower)
+              .where(eq(dailyReportManpower.reportId, previous.id))
+              .orderBy(asc(dailyReportManpower.sortOrder))
+          : Promise.resolve([]),
+        previous
+          ? db
+              .select({ name: dailyReportEquipment.name })
+              .from(dailyReportEquipment)
+              .where(eq(dailyReportEquipment.reportId, previous.id))
+              .orderBy(asc(dailyReportEquipment.sortOrder))
+          : Promise.resolve([]),
+        previous
+          ? db
+              .select({
+                material: dailyReportDelivery.material,
+                unit: dailyReportDelivery.unit,
+                supplier: dailyReportDelivery.supplier,
+              })
+              .from(dailyReportDelivery)
+              .where(eq(dailyReportDelivery.reportId, previous.id))
+              .orderBy(asc(dailyReportDelivery.sortOrder))
+          : Promise.resolve([]),
       ]);
 
       return {
@@ -269,6 +316,14 @@ export const dailyReportRouter = router({
         photos,
         events,
         editable: isEditable(report.status),
+        previousStructure: previous
+          ? {
+              reportDate: previous.reportDate,
+              manpower: previousManpower,
+              equipment: previousEquipment,
+              deliveries: previousDeliveries,
+            }
+          : null,
       };
     }),
 

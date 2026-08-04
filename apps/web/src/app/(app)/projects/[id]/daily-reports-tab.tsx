@@ -55,17 +55,21 @@ function today(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
+type DailyReportsTabProps = {
+  projectId: string;
+  canEdit: boolean;
+  canReview: boolean;
+  canLock: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+};
+
 export default function DailyReportsTab({
   projectId,
   canEdit,
   canReview,
   canLock,
-}: {
-  projectId: string;
-  canEdit: boolean;
-  canReview: boolean;
-  canLock: boolean;
-}) {
+  onDirtyChange,
+}: DailyReportsTabProps) {
   const t = useT();
   const { intlLocale } = useLocale();
   const { formatDate } = useFormat();
@@ -101,6 +105,7 @@ export default function DailyReportsTab({
         canReview={canReview}
         canLock={canLock}
         onBack={() => setOpenId(null)}
+        onDirtyChange={onDirtyChange}
       />
     );
   }

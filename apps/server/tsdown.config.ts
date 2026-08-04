@@ -1,13 +1,9 @@
 import { defineConfig } from "tsdown";
 
 /**
- * A self-contained bundle for `bun run start`. **Not** what Vercel deploys —
- * vercel.json points the service at src/index.ts.
- *
- * It cannot be the deployed entrypoint: a service's `entrypoint` is checked
- * against the cloned source tree before installCommand or buildCommand run, and
- * dist/ is gitignored, so the deploy fails validation with "entrypoint
- * dist/index.mjs ... does not exist" before anything has a chance to build it.
+ * A self-contained bundle for `bun run start` and the Vercel server service.
+ * Vercel builds `dist/index.mjs`, then copies it to the configured `server.mjs`
+ * entrypoint because the entrypoint must exist at the service root after build.
  *
  * The cold-start resolve failure this was originally reaching for is real, but
  * it belongs to package.json, not to a bundler. Bun installs a workspace
@@ -31,12 +27,9 @@ export default defineConfig({
   /**
    * Everything is inlined, not just @DashboardV2/*.
    *
-   * Vercel runs src/index.ts under Bun rather than bundling it, so every bare
-   * specifier is resolved at cold start relative to the file that imports it —
-   * and `packages/env/src/server.ts` asking for `@t3-oss/env-core` looks in
-   * packages/env/node_modules, which is not part of the deployed function.
-   * Declaring the dependency on apps/server cannot help: Bun never looks there.
-   * Leaving nothing external is what removes the failure rather than moving it.
+   * Vercel runs the resulting server.mjs under Bun. Bundling every dependency
+   * makes that artifact self-contained instead of relying on workspace package
+   * resolution inside the deployed function.
    */
   deps: { alwaysBundle: [/.*/] },
   /**
@@ -53,5 +46,5 @@ export default defineConfig({
    * download and not a server that will not boot.
    */
   /** One file, so there are no sibling chunks left to resolve or to package. */
-  outputOptions: { inlineDynamicImports: true },
+  outputOptions: { codeSplitting: false },
 });

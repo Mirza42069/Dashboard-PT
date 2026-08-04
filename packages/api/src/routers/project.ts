@@ -9,15 +9,17 @@ import {
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, ilike, inArray, ne, notInArray, or, sql, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, notInArray, or, sql, sum } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
+import { isBehindDeviation } from "../lib/deviation";
 import { runBatch } from "../lib/batch";
 import { type BoqMetrics, boqMetricsByProject, projectExceptions } from "../lib/boq-metrics";
 import { percentOf, toAmount } from "../lib/money";
 import { hasPermission, roleOf } from "../lib/permissions";
+import { canAssignProjectManager, projectMembershipIds } from "../lib/project-manager";
 import { assertProjectAccess, assertUserAssignable, projectAccessFilter } from "../lib/scope";
 
 const statusSchema = z.enum(PROJECT_STATUSES);
@@ -69,6 +71,8 @@ const upsertSchema = z.object({
   managerId: z.string().min(1).nullish(),
   notes: z.string().max(2000).nullish(),
 });
+
+const createSchema = upsertSchema.omit({ status: true, progress: true });
 
 /** Tickets remain open until somebody explicitly closes them. */
 async function openTicketsByProject(projectIds: string[]) {
@@ -193,7 +197,7 @@ export const projectRouter = router({
         and(
           eq(user.banned, false),
           eq(user.companyId, ctx.companyId),
-          ne(user.role, "super_admin"),
+          inArray(user.role, ["admin", "user"]),
         ),
       )
       .orderBy(asc(user.name));
@@ -224,7 +228,14 @@ export const projectRouter = router({
           ? db
               .select({ id: user.id, name: user.name, email: user.email })
               .from(user)
-              .where(and(eq(user.id, row.managerId), ne(user.role, "super_admin")))
+              .where(
+                and(
+                  eq(user.id, row.managerId),
+                  eq(user.banned, false),
+                  eq(user.companyId, row.companyId),
+                  inArray(user.role, ["admin", "user"]),
+                ),
+              )
           : Promise.resolve([]),
       ]);
 
@@ -252,10 +263,10 @@ export const projectRouter = router({
       return rows
         .flatMap((row) => {
           const boq = metrics.get(row.id);
-          if (!boq || boq.deviation === null || boq.deviation >= 0) return [];
+          if (!boq || !isBehindDeviation(boq.deviation)) return [];
           return [{ ...row, ...boq, deviation: boq.deviation }];
         })
-        .sort((a, b) => a.deviation - b.deviation)
+        .sort((a, b) => (a.deviation ?? 0) - (b.deviation ?? 0))
         .slice(0, input.limit);
     }),
 
@@ -280,12 +291,20 @@ export const projectRouter = router({
       // act on a variance from a job that finished.
       const live = rows.filter((row) => row.status !== "completed" && row.status !== "cancelled");
 
-      const behind = live.filter((row) => row.deviation !== null && row.deviation < 0);
-      const stale = live.filter((row) => row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS);
-      const unreported = live.filter((row) => row.dataDate === null);
+      const behind = live.filter((row) => isBehindDeviation(row.deviation));
+      const stale = live.filter(
+        (row) => row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS,
+      );
+      const unreported = live.filter((row) => row.hasBaseline && row.dataDate === null);
+      const reporting = live.filter(
+        (row) =>
+          (row.hasBaseline && row.dataDate === null) ||
+          (row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS) ||
+          row.reportsDue > 0,
+      );
       const needsAttention = live.filter(
         (row) =>
-          (row.deviation !== null && row.deviation < 0) ||
+          isBehindDeviation(row.deviation) ||
           row.dataDate === null ||
           (row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS) ||
           row.reportsDue > 0 ||
@@ -293,11 +312,15 @@ export const projectRouter = router({
           row.openTickets > 0,
       );
       const ranked = [...needsAttention].sort((a, b) => {
-        const aBehind = a.deviation !== null && a.deviation < 0;
-        const bBehind = b.deviation !== null && b.deviation < 0;
+        const aBehind = isBehindDeviation(a.deviation);
+        const bBehind = isBehindDeviation(b.deviation);
         if (aBehind !== bBehind) return aBehind ? -1 : 1;
         if (aBehind && bBehind) return (a.deviation ?? 0) - (b.deviation ?? 0);
-        return (b.reportAgeDays ?? -1) - (a.reportAgeDays ?? -1);
+        const reportingDifference = b.reportsDue - a.reportsDue;
+        if (reportingDifference !== 0) return reportingDifference;
+        const ageDifference = (b.reportAgeDays ?? -1) - (a.reportAgeDays ?? -1);
+        if (ageDifference !== 0) return ageDifference;
+        return a.code.localeCompare(b.code);
       });
 
       return {
@@ -306,11 +329,23 @@ export const projectRouter = router({
           behind: behind.length,
           stale: stale.length,
           unreported: unreported.length,
+          reporting: reporting.length,
           reportsDue: live.reduce((total, row) => total + row.reportsDue, 0),
-          awaitingReview: live.reduce((total, row) => total + row.reportsAwaitingReview, 0),
-          openTickets: live.reduce((total, row) => total + row.openTickets, 0),
+          awaitingReview: live.filter((row) => canReview && row.reportsAwaitingReview > 0).length,
+          openTickets: live.filter((row) => row.openTickets > 0).length,
         },
-        projects: ranked,
+        projects: ranked.map((row) => ({
+          ...row,
+          reasons: {
+            behind: isBehindDeviation(row.deviation),
+            baselineMissing: !row.hasBaseline,
+            unreported: row.hasBaseline && row.dataDate === null,
+            stale: row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS,
+            reportsDue: row.reportsDue > 0,
+            awaitingReview: canReview && row.reportsAwaitingReview > 0,
+            openActions: row.openTickets > 0,
+          },
+        })),
       };
     }),
 
@@ -374,46 +409,77 @@ export const projectRouter = router({
     };
   }),
 
-  create: companyPermissionProcedure("project:create").input(upsertSchema).mutation(async ({ ctx, input }) => {
-    const code = input.code.toUpperCase();
+  create: companyPermissionProcedure("project:create")
+    .input(createSchema)
+    .mutation(async ({ ctx, input }) => {
+      const code = input.code.toUpperCase();
+      const actorRole = roleOf(ctx.session.user);
 
-    // Codes are unique per company, so the clash check is scoped too.
-    const [existing] = await db
-      .select({ id: project.id })
-      .from(project)
-      .where(and(eq(project.code, code), eq(project.companyId, ctx.companyId)));
-    if (existing) {
-      throw new TRPCError({ code: "CONFLICT", message: `Project code ${code} is already in use` });
-    }
-    if (input.startDate && input.endDate && input.endDate < input.startDate) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date" });
-    }
-    if (input.managerId) {
-      await assertUserAssignable(ctx.companyId, input.managerId);
-    }
+      // Codes are unique per company, so the clash check is scoped too.
+      const [existing] = await db
+        .select({ id: project.id })
+        .from(project)
+        .where(and(eq(project.code, code), eq(project.companyId, ctx.companyId)));
+      if (existing) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Project code ${code} is already in use`,
+        });
+      }
+      if (input.startDate && input.endDate && input.endDate < input.startDate) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date" });
+      }
+      const manager = input.managerId
+        ? { id: input.managerId, ...(await assertUserAssignable(ctx.companyId, input.managerId)) }
+        : null;
+      if (
+        !canAssignProjectManager({
+          actorId: ctx.session.user.id,
+          canManageMembers: hasPermission(actorRole, "member:manage"),
+          currentManagerId: null,
+          nextManagerId: input.managerId ?? null,
+        })
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You cannot assign this project manager",
+        });
+      }
 
-    const projectId = crypto.randomUUID();
-    await runBatch([
-      db.insert(project).values({
-        id: projectId,
-        ...input,
-        code,
-        companyId: ctx.companyId,
-      }),
-      ...(roleOf(ctx.session.user) === "user"
-        ? [db.insert(projectMember).values({ projectId, userId: ctx.session.user.id })]
-        : []),
-    ]);
+      const projectId = crypto.randomUUID();
+      const membershipIds = projectMembershipIds({
+        creatorId: ctx.session.user.id,
+        creatorRole: actorRole,
+        manager,
+      });
+      await runBatch([
+        db.insert(project).values({
+          id: projectId,
+          ...input,
+          code,
+          companyId: ctx.companyId,
+          progress: 0,
+          status: "planning",
+        }),
+        ...(membershipIds.length > 0
+          ? [
+              db
+                .insert(projectMember)
+                .values(membershipIds.map((userId) => ({ projectId, userId })))
+                .onConflictDoNothing(),
+            ]
+          : []),
+      ]);
 
-    await recordActivity(ctx, {
-      action: "created",
-      entityType: "project",
-      entityId: projectId,
-      entityLabel: `${code} - ${input.name}`,
-    });
+      await recordActivity(ctx, {
+        action: "created",
+        entityType: "project",
+        entityId: projectId,
+        entityLabel: `${code} - ${input.name}`,
+      });
 
-    return { id: projectId };
-  }),
+      return { id: projectId };
+    }),
 
   update: companyPermissionProcedure("project:update")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
@@ -442,8 +508,24 @@ export const projectRouter = router({
       // absent from the picker. Re-sending the value already in the column
       // changes nothing and is treated as such; assigning a new one is checked
       // as before.
-      if (rest.managerId && rest.managerId !== current.managerId) {
-        await assertUserAssignable(ctx.companyId, rest.managerId);
+      let nextManagerRole: "admin" | "user" | null = null;
+      if (rest.managerId !== undefined && rest.managerId !== current.managerId) {
+        if (
+          !canAssignProjectManager({
+            actorId: ctx.session.user.id,
+            canManageMembers: hasPermission(roleOf(ctx.session.user), "member:manage"),
+            currentManagerId: current.managerId,
+            nextManagerId: rest.managerId,
+          })
+        ) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You cannot assign this project manager",
+          });
+        }
+        if (rest.managerId) {
+          nextManagerRole = (await assertUserAssignable(ctx.companyId, rest.managerId)).role;
+        }
       }
 
       if (code && code.toUpperCase() !== current.code) {
@@ -458,13 +540,23 @@ export const projectRouter = router({
         }
       }
 
-      await db
-        .update(project)
-        .set({
-          ...rest,
-          ...(code ? { code: code.toUpperCase() } : {}),
-        })
-        .where(eq(project.id, projectId));
+      await runBatch([
+        db
+          .update(project)
+          .set({
+            ...rest,
+            ...(code ? { code: code.toUpperCase() } : {}),
+          })
+          .where(eq(project.id, projectId)),
+        ...(rest.managerId && nextManagerRole === "user"
+          ? [
+              db
+                .insert(projectMember)
+                .values({ projectId, userId: rest.managerId })
+                .onConflictDoNothing(),
+            ]
+          : []),
+      ]);
 
       // create, delete and setMembers all record themselves; this one did not,
       // so editing a project was the one change to a project that left no trail.
@@ -599,16 +691,35 @@ export const projectRouter = router({
 
   /**
    * Replaces a project's member list wholesale. Two idempotent statements
-   * rather than a read-diff-write — the Neon HTTP driver has no interactive
-   * transactions, so delete-then-insert is what keeps a partial failure a
-   * subset of the intended result, never a superset.
+   * rather than a read-diff-write. They run in one Neon batch so the replacement
+   * is atomic, and the active regular-user manager is always retained.
    */
   setMembers: companyPermissionProcedure("member:manage")
     .input(z.object({ projectId: z.string().min(1), userIds: z.array(z.string().min(1)).max(200) }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
 
-      const uniqueIds = [...new Set(input.userIds)];
+      const [managedProject] = await db
+        .select({
+          managerBanned: user.banned,
+          managerCompanyId: user.companyId,
+          managerId: project.managerId,
+          managerRole: user.role,
+        })
+        .from(project)
+        .leftJoin(user, eq(project.managerId, user.id))
+        .where(eq(project.id, input.projectId));
+
+      const effectiveIds = new Set(input.userIds);
+      if (
+        managedProject?.managerId &&
+        managedProject.managerRole === "user" &&
+        managedProject.managerCompanyId === ctx.companyId &&
+        managedProject.managerBanned === false
+      ) {
+        effectiveIds.add(managedProject.managerId);
+      }
+      const uniqueIds = [...effectiveIds];
       if (uniqueIds.length > 0) {
         const eligible = await db
           .select({ id: user.id })
@@ -618,6 +729,7 @@ export const projectRouter = router({
               inArray(user.id, uniqueIds),
               eq(user.companyId, ctx.companyId),
               eq(user.role, "user"),
+              eq(user.banned, false),
             ),
           );
         if (eligible.length !== uniqueIds.length) {
@@ -625,23 +737,26 @@ export const projectRouter = router({
         }
       }
 
-      await db
-        .delete(projectMember)
-        .where(
-          uniqueIds.length > 0
-            ? and(
-                eq(projectMember.projectId, input.projectId),
-                notInArray(projectMember.userId, uniqueIds),
-              )
-            : eq(projectMember.projectId, input.projectId),
-        );
-
-      if (uniqueIds.length > 0) {
-        await db
-          .insert(projectMember)
-          .values(uniqueIds.map((userId) => ({ projectId: input.projectId, userId })))
-          .onConflictDoNothing();
-      }
+      await runBatch([
+        db
+          .delete(projectMember)
+          .where(
+            uniqueIds.length > 0
+              ? and(
+                  eq(projectMember.projectId, input.projectId),
+                  notInArray(projectMember.userId, uniqueIds),
+                )
+              : eq(projectMember.projectId, input.projectId),
+          ),
+        ...(uniqueIds.length > 0
+          ? [
+              db
+                .insert(projectMember)
+                .values(uniqueIds.map((userId) => ({ projectId: input.projectId, userId })))
+                .onConflictDoNothing(),
+            ]
+          : []),
+      ]);
 
       const [target] = await db
         .select({ code: project.code, name: project.name })

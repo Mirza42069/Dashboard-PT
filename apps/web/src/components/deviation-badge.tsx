@@ -1,5 +1,6 @@
 "use client";
 
+import { deviationPosition } from "@DashboardV2/api/lib/deviation";
 import { cn } from "@DashboardV2/ui/lib/utils";
 
 import { useT } from "@/i18n/provider";
@@ -14,7 +15,9 @@ import { useT } from "@/i18n/provider";
  * answer from the text.
  */
 export function formatDeviation(value: number) {
-  return `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(1)}%`;
+  const position = deviationPosition(value);
+  const displayed = position === "on_track" ? 0 : value;
+  return `${displayed >= 0 ? "+" : "−"}${Math.abs(displayed).toFixed(1)}%`;
 }
 
 export function DeviationBadge({
@@ -31,9 +34,9 @@ export function DeviationBadge({
     return <span className={cn("text-muted-foreground", className)}>{t.common.none}</span>;
   }
 
-  // A fraction of a percent either way is rounding, not a schedule position.
-  const isBehind = value <= -0.05;
-  const isAhead = value >= 0.05;
+  const position = deviationPosition(value);
+  const isBehind = position === "behind";
+  const isAhead = position === "ahead";
 
   return (
     <span className={cn("inline-flex items-baseline gap-1.5", className)}>

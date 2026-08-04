@@ -32,6 +32,7 @@ import {
   scheduleRows,
 } from "@/lib/boq/curves";
 import { isEditable } from "@DashboardV2/api/lib/progress-workflow";
+import { isBehindDeviation } from "@DashboardV2/api/lib/deviation";
 import { buildPeriodHeader } from "@/lib/period-header";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
@@ -257,7 +258,7 @@ export default function ProgressTab({
             <CardContent className="space-y-1">
               <p
                 className={`text-2xl font-semibold tabular-nums ${
-                  hasReadings && position.deviation < -0.05 ? "text-destructive" : ""
+                  hasReadings && isBehindDeviation(position.deviation) ? "text-destructive" : ""
                 }`}
               >
                 {hasReadings ? formatDeviation(position.deviation) : "—"}

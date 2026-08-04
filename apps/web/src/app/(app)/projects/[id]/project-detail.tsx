@@ -1,5 +1,15 @@
 "use client";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@DashboardV2/ui/components/alert-dialog";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent } from "@DashboardV2/ui/components/card";
 import { Empty, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
@@ -34,6 +44,7 @@ const PROJECT_TABS = ["overview", "tickets", "baseline", "progress", "daily", "n
 
 export default function ProjectDetail({
   projectId,
+  currentUserId,
   canUpdateProject,
   canWrite,
   canManageMembers,
@@ -41,6 +52,7 @@ export default function ProjectDetail({
   canLock,
 }: {
   projectId: string;
+  currentUserId: string;
   canUpdateProject: boolean;
   canWrite: boolean;
   canManageMembers: boolean;
@@ -52,6 +64,8 @@ export default function ProjectDetail({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [editValues, setEditValues] = useState<ProjectFormValues | null>(null);
+  const [dailyDirty, setDailyDirty] = useState(false);
+  const [pendingTab, setPendingTab] = useState<string | null>(null);
 
   const requestedTab = searchParams.get("tab");
   const activeTab =
@@ -61,13 +75,21 @@ export default function ProjectDetail({
       ? requestedTab
       : "overview";
 
-  function selectTab(value: string) {
+  function applyTab(value: string) {
     const next = new URLSearchParams(searchParams.toString());
     if (value === "overview") next.delete("tab");
     else next.set("tab", value);
     if (value !== "tickets") next.delete("action");
     const query = next.toString();
     router.replace((query ? `${pathname}?${query}` : pathname) as Route, { scroll: false });
+  }
+
+  function selectTab(value: string) {
+    if (activeTab === "daily" && value !== "daily" && dailyDirty) {
+      setPendingTab(value);
+      return;
+    }
+    applyTab(value);
   }
 
   const projectQuery = useQuery(trpc.project.get.queryOptions({ id: projectId }));
@@ -186,6 +208,7 @@ export default function ProjectDetail({
             canEdit={canWrite}
             canReview={canReview}
             canLock={canLock}
+            onDirtyChange={setDailyDirty}
           />
         </TabsContent>
 
@@ -195,7 +218,7 @@ export default function ProjectDetail({
 
         {canManageMembers && (
           <TabsContent value="team">
-            <TeamTab projectId={projectId} />
+            <TeamTab projectId={projectId} managerId={project.managerId} />
           </TabsContent>
         )}
       </Tabs>
@@ -209,8 +232,34 @@ export default function ProjectDetail({
           editingId={project.id}
           initialValues={editValues}
           progressLocked={project.progressSource === "boq"}
+          canManageMembers={canManageMembers}
+          currentUserId={currentUserId}
         />
       )}
+
+      <AlertDialog open={pendingTab !== null} onOpenChange={(open) => !open && setPendingTab(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.daily.discardTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{t.daily.discardDescription}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.common.keepEditing}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (!pendingTab) return;
+                const nextTab = pendingTab;
+                setDailyDirty(false);
+                setPendingTab(null);
+                applyTab(nextTab);
+              }}
+            >
+              {t.common.discardChanges}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

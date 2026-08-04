@@ -5,8 +5,6 @@ import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@DashboardV2/ui/components/card";
 import {
   ChevronRight,
-  ListChecks,
-  TriangleAlert,
   Wallet,
 } from "@DashboardV2/ui/components/icons";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
@@ -20,7 +18,9 @@ import {
 } from "@DashboardV2/ui/components/table";
 import { cn } from "@DashboardV2/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
+import type { Route } from "next";
 import Link from "next/link";
+import { useState } from "react";
 
 import { DeviationBadge } from "@/components/deviation-badge";
 import { Meter } from "@/components/meter";
@@ -32,17 +32,82 @@ import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
+type AttentionFilter = "all" | "behind" | "reporting" | "review" | "actions";
 
 export default function DashboardOverview({ canReview }: { canReview: boolean }) {
   const t = useT();
   const { formatDate, money, moneyCompact, percent, quantity } = useFormat();
+  const [attentionFilter, setAttentionFilter] = useState<AttentionFilter>("all");
   const summary = useQuery(trpc.project.summary.queryOptions());
   const exceptions = useQuery(trpc.project.exceptions.queryOptions());
-  const actions = useQuery(trpc.ticket.overdueSummary.queryOptions({}));
-  const dashboardPending = summary.isPending || exceptions.isPending || actions.isPending;
-  const dashboardHasError = summary.isError || exceptions.isError || actions.isError;
+  const dashboardPending = summary.isPending || exceptions.isPending;
+  const dashboardHasError = summary.isError || exceptions.isError;
 
   const attentionProjects = exceptions.data?.projects ?? [];
+  const visibleProjects = attentionProjects.filter((row) => {
+    if (attentionFilter === "behind") return row.reasons.behind;
+    if (attentionFilter === "reporting") {
+      return row.reasons.unreported || row.reasons.stale || row.reasons.reportsDue;
+    }
+    if (attentionFilter === "review") return row.reasons.awaitingReview;
+    if (attentionFilter === "actions") return row.reasons.openActions;
+    return true;
+  });
+
+  function projectHref(row: (typeof attentionProjects)[number]) {
+    if (attentionFilter === "actions" && row.reasons.openActions) {
+      return `/projects/${row.projectId}?tab=tickets` as Route;
+    }
+    if (
+      (attentionFilter === "behind" && row.reasons.behind) ||
+      (attentionFilter === "reporting" &&
+        (row.reasons.unreported || row.reasons.stale || row.reasons.reportsDue)) ||
+      (attentionFilter === "review" && row.reasons.awaitingReview)
+    ) {
+      return `/projects/${row.projectId}?tab=progress` as Route;
+    }
+    if (row.reasons.baselineMissing) return `/projects/${row.projectId}?tab=baseline` as Route;
+    if (
+      row.reasons.behind ||
+      row.reasons.unreported ||
+      row.reasons.stale ||
+      row.reasons.reportsDue ||
+      row.reasons.awaitingReview
+    ) {
+      return `/projects/${row.projectId}?tab=progress` as Route;
+    }
+    return `/projects/${row.projectId}?tab=tickets` as Route;
+  }
+
+  function problemReasons(row: (typeof attentionProjects)[number]) {
+    return (
+      <span className="mt-1.5 flex flex-wrap gap-1">
+        {row.reasons.behind && <Badge variant="destructive">{t.exceptions.behind}</Badge>}
+        {row.reasons.baselineMissing && <Badge variant="secondary">{t.exceptions.baselineMissing}</Badge>}
+        {row.reasons.unreported && <Badge variant="outline">{t.exceptions.unreported}</Badge>}
+        {row.reasons.stale && (
+          <Badge variant="outline" className="border-warning text-warning">
+            {t.exceptions.stale}
+          </Badge>
+        )}
+        {row.reasons.reportsDue && (
+          <Badge variant="outline" className="border-warning">
+            {t.exceptions.reportsDue}: {row.reportsDue}
+          </Badge>
+        )}
+        {row.reasons.awaitingReview && (
+          <Badge variant="secondary">
+            {t.exceptions.awaitingReview}: {row.reportsAwaitingReview}
+          </Badge>
+        )}
+        {row.reasons.openActions && (
+          <Badge variant="outline">
+            {t.exceptions.openIssues}: {row.openTickets}
+          </Badge>
+        )}
+      </span>
+    );
+  }
 
   function projectChange(row: (typeof attentionProjects)[number]) {
     if (row.deviation === null || row.previousDeviation === null) return null;
@@ -55,13 +120,6 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
     return `${sign}${quantity(Math.abs(value))}%`;
   }
 
-  function priorityLabel(priority: string) {
-    if (priority === "critical") return t.actions.priorityCritical;
-    if (priority === "high") return t.actions.priorityHigh;
-    if (priority === "low") return t.actions.priorityLow;
-    return t.actions.priorityMedium;
-  }
-
   return (
     <div className="space-y-5">
       <p role="status" className="sr-only">
@@ -71,7 +129,7 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
             ? t.common.loadFailed
             : t.dashboard.loaded}
       </p>
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(18rem,0.75fr)]">
+      <div>
         <Card id="needs-attention" aria-busy={exceptions.isPending} className="scroll-mt-4 overflow-hidden">
           <CardHeader className="border-b">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -99,13 +157,49 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
                 className="m-5"
               />
             )}
+            {exceptions.data && (
+              <div className="grid gap-2 border-b p-4 sm:grid-cols-2 xl:grid-cols-5">
+                {(
+                  [
+                    ["all", t.exceptions.allProblems, attentionProjects.length],
+                    ["behind", t.exceptions.behind, exceptions.data.counts.behind],
+                    ["reporting", t.exceptions.reportingProblems, exceptions.data.counts.reporting],
+                    ["review", t.exceptions.awaitingReview, exceptions.data.counts.awaitingReview],
+                    ["actions", t.exceptions.openIssues, exceptions.data.counts.openTickets],
+                  ] as const
+                )
+                  .filter(([key]) => key !== "review" || canReview)
+                  .map(([key, label, count]) => (
+                    <Button
+                      key={key}
+                      variant={attentionFilter === key ? "secondary" : "outline"}
+                      className={cn(
+                        "h-auto justify-between gap-3 py-3",
+                        key === "behind" && count > 0 && "border-destructive/40",
+                        attentionFilter === key && key === "behind" && "bg-destructive/10 text-destructive",
+                      )}
+                      aria-pressed={attentionFilter === key}
+                      onClick={() => setAttentionFilter(key)}
+                    >
+                      <span className="text-start">{label}</span>
+                      <span className="text-lg font-semibold tabular-nums">{count}</span>
+                    </Button>
+                  ))}
+              </div>
+            )}
             {exceptions.data && attentionProjects.length === 0 && (
               <div className="px-6 py-14 text-center">
                 <p className="font-medium">{t.exceptions.empty}</p>
                 <p className="mt-1 text-sm text-muted-foreground">{t.exceptions.emptyHint}</p>
               </div>
             )}
-            {exceptions.data && attentionProjects.length > 0 && (
+            {exceptions.data && attentionProjects.length > 0 && visibleProjects.length === 0 && (
+              <div className="px-6 py-14 text-center">
+                <p className="font-medium">{t.exceptions.filterEmpty}</p>
+                <Button variant="link" onClick={() => setAttentionFilter("all")}>{t.exceptions.showAll}</Button>
+              </div>
+            )}
+            {exceptions.data && visibleProjects.length > 0 && (
               <>
                 <div className="hidden md:block">
                   <Table className="min-w-[760px]">
@@ -120,31 +214,47 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {attentionProjects.map((row) => {
+                      {visibleProjects.map((row) => {
                         const change = projectChange(row);
                         return (
-                          <TableRow key={row.projectId}>
+                          <TableRow key={row.projectId} className={cn(row.reasons.behind && "bg-destructive/[0.035]")}>
                             <TableCell className="max-w-56 pl-5">
                               <Link
-                                href={`/projects/${row.projectId}?tab=progress`}
+                                href={projectHref(row)}
                                 className="block min-w-0 rounded-sm font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               >
                                 <span className="block truncate" title={row.name}>{row.name}</span>
                                 <span className="font-mono text-xs font-normal text-muted-foreground">{row.code}</span>
                               </Link>
+                              {problemReasons(row)}
                             </TableCell>
                             <TableCell className="min-w-36">
-                              <div className="flex items-center justify-between gap-3 text-xs tabular-nums">
-                                <span className="text-muted-foreground">{percent(row.planned)}</span>
-                                <span className="font-medium">{percent(row.progress)}</span>
-                              </div>
-                              <Meter
-                                value={row.progress}
-                                max={100}
-                                segments={8}
-                                ariaLabel={interpolate(t.dashboard.projectProgressMeter, { project: row.name })}
-                                className="mt-1.5"
-                              />
+                              {!row.hasBaseline ? (
+                                <div>
+                                  <Link href={`/projects/${row.projectId}?tab=baseline`} className="text-sm font-medium text-muted-foreground hover:underline">
+                                    {t.exceptions.baselineMissing}
+                                  </Link>
+                                  <span className="block text-xs text-muted-foreground">
+                                    {interpolate(t.exceptions.manualProgress, { value: percent(row.progress) })}
+                                  </span>
+                                </div>
+                              ) : row.dataDate === null ? (
+                                <span className="text-sm text-muted-foreground">{t.exceptions.noReadings}</span>
+                              ) : (
+                                <>
+                                  <div className="flex items-center justify-between gap-3 text-xs tabular-nums">
+                                    <span className="text-muted-foreground">{percent(row.planned)}</span>
+                                    <span className="font-medium">{percent(row.progress)}</span>
+                                  </div>
+                                  <Meter
+                                    value={row.progress}
+                                    max={100}
+                                    segments={8}
+                                    ariaLabel={interpolate(t.dashboard.projectProgressMeter, { project: row.name })}
+                                    className="mt-1.5"
+                                  />
+                                </>
+                              )}
                             </TableCell>
                             <TableCell><DeviationBadge value={row.deviation} /></TableCell>
                             <TableCell>
@@ -194,13 +304,13 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
                 </div>
 
                 <div className="divide-y md:hidden">
-                  {attentionProjects.map((row) => {
+                  {visibleProjects.map((row) => {
                     const change = projectChange(row);
                     return (
-                      <article key={row.projectId} className="space-y-3 px-4 py-4">
+                      <article key={row.projectId} className={cn("space-y-3 px-4 py-4", row.reasons.behind && "bg-destructive/[0.035]")}>
                         <div className="flex items-start justify-between gap-3">
                           <Link
-                            href={`/projects/${row.projectId}?tab=progress`}
+                            href={projectHref(row)}
                             className="min-w-0 rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <span className="block truncate font-medium" title={row.name}>{row.name}</span>
@@ -208,18 +318,31 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
                           </Link>
                           <DeviationBadge value={row.deviation} className="shrink-0" />
                         </div>
-                        <div>
-                          <div className="mb-1.5 flex justify-between text-xs tabular-nums">
-                            <span className="text-muted-foreground">{t.exceptions.planned} {percent(row.planned)}</span>
-                            <span className="font-medium">{t.exceptions.actual} {percent(row.progress)}</span>
+                        {!row.hasBaseline ? (
+                          <div>
+                            <Link href={`/projects/${row.projectId}?tab=baseline`} className="text-sm font-medium text-muted-foreground hover:underline">
+                              {t.exceptions.baselineMissing}
+                            </Link>
+                            <p className="text-xs text-muted-foreground">
+                              {interpolate(t.exceptions.manualProgress, { value: percent(row.progress) })}
+                            </p>
                           </div>
-                          <Meter
-                            value={row.progress}
-                            max={100}
-                            segments={8}
-                            ariaLabel={interpolate(t.dashboard.projectProgressMeter, { project: row.name })}
-                          />
-                        </div>
+                        ) : row.dataDate === null ? (
+                          <p className="text-sm text-muted-foreground">{t.exceptions.noReadings}</p>
+                        ) : (
+                          <div>
+                            <div className="mb-1.5 flex justify-between text-xs tabular-nums">
+                              <span className="text-muted-foreground">{t.exceptions.planned} {percent(row.planned)}</span>
+                              <span className="font-medium">{t.exceptions.actual} {percent(row.progress)}</span>
+                            </div>
+                            <Meter
+                              value={row.progress}
+                              max={100}
+                              segments={8}
+                              ariaLabel={interpolate(t.dashboard.projectProgressMeter, { project: row.name })}
+                            />
+                          </div>
+                        )}
                         <div className="grid grid-cols-3 gap-2 text-xs">
                           <div>
                             <span className="block text-muted-foreground">{t.exceptions.change}</span>
@@ -240,12 +363,7 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
                             </Link>
                           </div>
                         </div>
-                        {(row.reportsDue > 0 || (canReview && row.reportsAwaitingReview > 0)) && (
-                          <div className="flex flex-wrap gap-1">
-                            {row.reportsDue > 0 && <Badge variant="outline">{t.exceptions.reportsDue}: {row.reportsDue}</Badge>}
-                            {canReview && row.reportsAwaitingReview > 0 && <Badge variant="secondary">{t.exceptions.awaitingReview}: {row.reportsAwaitingReview}</Badge>}
-                          </div>
-                        )}
+                        {problemReasons(row)}
                       </article>
                     );
                   })}
@@ -255,85 +373,6 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
           </CardContent>
         </Card>
 
-        <Card id="action-aging" aria-busy={actions.isPending} className="scroll-mt-4 overflow-hidden">
-          <CardHeader className="border-b">
-            <CardTitle>{t.dashboard.actionAging}</CardTitle>
-            <p className="text-sm text-muted-foreground">{t.dashboard.actionAgingDescription}</p>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            {actions.isPending && <Skeleton className="h-80 w-full" />}
-            {actions.isError && !actions.data && (
-              <QueryError error={actions.error} onRetry={() => void actions.refetch()} />
-            )}
-            {actions.data && (
-              <>
-                <div className="grid grid-cols-3 divide-x rounded-md border bg-muted/25 py-3 text-center">
-                  {[
-                    [t.dashboard.openActions, actions.data.open],
-                    [t.dashboard.overdue, actions.data.overdue],
-                    [t.dashboard.critical, actions.data.critical],
-                  ].map(([label, value]) => (
-                    <div key={String(label)} className="px-2">
-                      <p className="text-lg font-semibold tabular-nums">{value}</p>
-                      <p className="text-xs text-muted-foreground">{label}</p>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    [t.dashboard.ageWeek, actions.data.buckets.week, "border-border"],
-                    [t.dashboard.ageMonth, actions.data.buckets.month, "border-warning"],
-                    [t.dashboard.ageOlder, actions.data.buckets.older, "border-destructive"],
-                  ].map(([label, value, borderClass]) => (
-                    <div key={String(label)} className={cn("border-l-2 pl-2", borderClass)}>
-                      <p className="font-medium tabular-nums">{value}</p>
-                      <p className="text-xs leading-tight text-muted-foreground">{label}</p>
-                    </div>
-                  ))}
-                </div>
-
-                {actions.data.actions.length === 0 && (
-                  <div className="rounded-md border border-dashed px-4 py-8 text-center">
-                    <ListChecks className="mx-auto size-5 text-success" />
-                    <p className="mt-2 text-sm font-medium">{t.dashboard.overdueEmpty}</p>
-                  </div>
-                )}
-
-                {actions.data.actions.length > 0 && (
-                  <div className="divide-y border-y">
-                    {actions.data.actions.slice(0, 6).map((action) => (
-                      <Link
-                        key={action.id}
-                        href={`/projects/${action.projectId}?tab=tickets&action=${action.id}`}
-                        aria-label={interpolate(t.dashboard.viewAction, {
-                          action: action.title,
-                          project: action.projectName,
-                        })}
-                        className="group flex gap-3 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <TriangleAlert className={cn("mt-0.5 size-4 shrink-0 text-warning", action.priority === "critical" && "text-destructive")} />
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-start justify-between gap-2">
-                            <span className="line-clamp-2 text-sm font-medium group-hover:underline">{action.title}</span>
-                            <Badge variant={action.priority === "critical" ? "destructive" : "outline"} className="shrink-0">{priorityLabel(action.priority)}</Badge>
-                          </span>
-                          <span className="mt-1 block truncate text-xs text-muted-foreground">
-                            <span className="font-mono">{action.projectCode}</span>
-                            {" · "}{action.assigneeName ?? t.actions.unassigned}
-                          </span>
-                          <span className="mt-1 block text-xs font-medium text-destructive tabular-nums">
-                            {plural(t.actions.overdueBy, action.overdueDays ?? 0)}
-                          </span>
-                        </span>
-                      </Link>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </CardContent>
-        </Card>
       </div>
 
       <section className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
