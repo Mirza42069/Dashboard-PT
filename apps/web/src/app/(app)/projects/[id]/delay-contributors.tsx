@@ -93,7 +93,6 @@ export default function DelayContributors<T extends { id: string; code: string; 
         {dataDate === null ? (
           <Empty>
             <EmptyHeader>
-              <EmptyTitle>{t.delay.title}</EmptyTitle>
               <EmptyDescription>{t.delay.noData}</EmptyDescription>
             </EmptyHeader>
           </Empty>

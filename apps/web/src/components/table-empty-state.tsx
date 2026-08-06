@@ -9,7 +9,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@DashboardV2/ui/components/empty";
-import { Inbox, Plus, SearchX } from "@DashboardV2/ui/components/icons";
+import { Inbox, SearchX } from "@DashboardV2/ui/components/icons";
 
 import { useT } from "@/i18n/provider";
 
@@ -23,25 +23,20 @@ import { useT } from "@/i18n/provider";
  * who has filtered everything away is not told that filters are why, nor given
  * a way back.
  *
- * So the two cases are distinguished and each gets an exit. `filtered` is the
- * discriminator, and it matters that the caller computes it from the actual
- * filter state rather than guessing from a zero row count.
+ * The two cases stay distinct: filtered results get a clear-filters exit,
+ * while the unfiltered state relies on the list toolbar's create action.
+ * `filtered` must come from the actual filter state, not the zero row count.
  */
 export function TableEmptyState({
   filtered,
   title,
   description,
   onClearFilters,
-  onCreate,
-  createLabel,
 }: {
   filtered: boolean;
   title: string;
   description: string;
   onClearFilters: () => void;
-  /** Omitted for non-admins, who have no create permission to offer. */
-  onCreate?: () => void;
-  createLabel: string;
 }) {
   const t = useT();
 
@@ -54,20 +49,13 @@ export function TableEmptyState({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
-      <EmptyContent>
-        {filtered ? (
+      {filtered && (
+        <EmptyContent>
           <Button variant="outline" size="sm" onClick={onClearFilters}>
             {t.common.clearFilters}
           </Button>
-        ) : (
-          onCreate && (
-            <Button size="sm" onClick={onCreate}>
-              <Plus />
-              {createLabel}
-            </Button>
-          )
-        )}
-      </EmptyContent>
+        </EmptyContent>
+      )}
     </Empty>
   );
 }

@@ -54,7 +54,6 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
   const { money, percent, formatDate } = useFormat();
   const reportQuery = useQuery(trpc.progress.report.queryOptions({ projectId: project.id }));
   const complete = Math.min(100, Math.max(0, project.progressPercent));
-  const incomplete = 100 - complete;
   const cadence = {
     weekly: t.projects.periodWeekly,
     biweekly: t.projects.periodBiweekly,
@@ -105,19 +104,11 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-2xl font-semibold tabular-nums">
-                {complete.toFixed(project.progressSource === "boq" ? 1 : 0)}%
-              </p>
-              <p className="text-muted-foreground">{t.projects.complete}</p>
-            </div>
-            <div>
-              <p className="text-2xl font-semibold tabular-nums">
-                {incomplete.toFixed(project.progressSource === "boq" ? 1 : 0)}%
-              </p>
-              <p className="text-muted-foreground">{t.projects.incomplete}</p>
-            </div>
+          <div>
+            <p className="text-2xl font-semibold tabular-nums">
+              {complete.toFixed(project.progressSource === "boq" ? 1 : 0)}%
+            </p>
+            <p className="text-muted-foreground">{t.projects.complete}</p>
           </div>
           <Meter value={complete} max={100} label={percent(complete)} />
           {project.progressSource === "boq" && (

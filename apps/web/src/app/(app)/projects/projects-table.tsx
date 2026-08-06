@@ -277,8 +277,6 @@ export default function ProjectsTable({
                     <TableEmptyState
                       filtered={filtered}
                       onClearFilters={clearFilters}
-                      onCreate={canCreate ? openCreate : undefined}
-                      createLabel={t.projects.newProject}
                       title={filtered ? t.projects.noMatch : t.projects.empty}
                       description={filtered ? t.projects.noMatchHint : t.projects.emptyHint}
                     />
@@ -324,35 +322,35 @@ export default function ProjectsTable({
         </CardContent>
       </Card>
 
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">
-          {total === 0
-            ? t.projects.noProjects
-            : interpolate(t.projects.showing, {
-                from: page * PAGE_SIZE + 1,
-                to: page * PAGE_SIZE + projects.length,
-                total,
-              })}
-        </p>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === 0}
-            onClick={() => setPage((value) => Math.max(0, value - 1))}
-          >
-            {t.common.previous}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!hasNextPage}
-            onClick={() => setPage((value) => value + 1)}
-          >
-            {t.common.next}
-          </Button>
+      {total > 0 && (
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">
+            {interpolate(t.projects.showing, {
+              from: page * PAGE_SIZE + 1,
+              to: page * PAGE_SIZE + projects.length,
+              total,
+            })}
+          </p>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page === 0}
+              onClick={() => setPage((value) => Math.max(0, value - 1))}
+            >
+              {t.common.previous}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!hasNextPage}
+              onClick={() => setPage((value) => value + 1)}
+            >
+              {t.common.next}
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {canCreate && (
         <ProjectFormDialog

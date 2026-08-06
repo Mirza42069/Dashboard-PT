@@ -158,11 +158,6 @@ export default function ProjectDetail({
                 <StatusBadge kind="project" value={project.status} />
               </span>
             </div>
-            {(project.client || project.location) && (
-              <p className="truncate text-xs text-muted-foreground max-[420px]:hidden">
-                {[project.client, project.location].filter(Boolean).join(" - ")}
-              </p>
-            )}
           </div>
           <ProjectBuildingScene seed={project.code} className="h-full min-h-0" />
         </CardContent>

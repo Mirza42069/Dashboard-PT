@@ -58,12 +58,14 @@ export default function ActivityPopover() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
+        openOnHover
+        delay={100}
+        closeDelay={150}
         render={
           <Button
             variant="ghost"
             size="icon-sm"
             aria-label={t.activity.title}
-            title={t.activity.title}
           >
             <Inbox />
           </Button>
@@ -71,8 +73,9 @@ export default function ActivityPopover() {
       />
       <PopoverContent
         side="bottom"
-        align="end"
+        align="center"
         sideOffset={8}
+        aria-label={t.activity.title}
         className="w-[min(24rem,calc(100vw-1.5rem))] max-w-none p-0"
       >
         <div className="border-b px-4 py-3">

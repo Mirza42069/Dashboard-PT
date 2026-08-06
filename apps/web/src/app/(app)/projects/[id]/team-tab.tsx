@@ -9,7 +9,7 @@ import {
   CardTitle,
 } from "@DashboardV2/ui/components/card";
 import { Checkbox } from "@DashboardV2/ui/components/checkbox";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
+import { Empty, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save } from "@DashboardV2/ui/components/icons";
@@ -102,7 +102,6 @@ export default function TeamTab({
           <Empty>
             <EmptyHeader>
               <EmptyTitle>{t.projects.noMembers}</EmptyTitle>
-              <EmptyDescription>{t.projects.addMembers}</EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : (

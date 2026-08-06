@@ -190,7 +190,6 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
             {exceptions.data && attentionProjects.length === 0 && (
               <div className="px-6 py-14 text-center">
                 <p className="font-medium">{t.exceptions.empty}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{t.exceptions.emptyHint}</p>
               </div>
             )}
             {exceptions.data && attentionProjects.length > 0 && visibleProjects.length === 0 && (
@@ -423,7 +422,6 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
         <Card aria-busy={summary.isPending}>
           <CardHeader>
             <CardTitle>{t.dashboard.statusSnapshot}</CardTitle>
-            <p className="text-sm text-muted-foreground">{t.dashboard.statusSnapshotDescription}</p>
           </CardHeader>
           <CardContent className="space-y-1">
             {summary.isPending && <Skeleton className="h-32 w-full" />}

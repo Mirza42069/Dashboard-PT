@@ -20,7 +20,7 @@ type NavItem = {
 };
 
 type NavSection = {
-  headingKey: keyof Dictionary["nav"];
+  headingKey?: keyof Dictionary["nav"];
   items: NavItem[];
 };
 
@@ -34,12 +34,10 @@ type NavSection = {
  */
 const SECTIONS: NavSection[] = [
   {
-    headingKey: "overview",
-    items: [{ href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard }],
-  },
-  {
-    headingKey: "operations",
-    items: [{ href: "/projects", labelKey: "projects", icon: HardHat }],
+    items: [
+      { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
+      { href: "/projects", labelKey: "projects", icon: HardHat },
+    ],
   },
   {
     headingKey: "administration",
@@ -90,7 +88,7 @@ export default function AppNav({
   return (
     <nav className={cn("flex flex-col transition-[gap]", MOTION, collapsed ? "gap-1" : "gap-5")}>
       {sections.map((section, sectionIndex) => (
-        <div key={section.headingKey} className="space-y-1">
+        <div key={section.headingKey ?? "main"} className="space-y-1">
           {/* Collapsed: a hairline separates groups, since headings won't fit.
               Keyed off sectionIndex rather than `first:hidden`, which never
               rendered a separator at all — the rule was meant to skip the one
@@ -109,16 +107,18 @@ export default function AppNav({
               the text itself is gone in 100ms. Collapsing both onto one
               duration is what makes this look wrong — a fast height snaps every
               row upward while the rail is still a tenth of the way through. */}
-          <p
-            aria-hidden={collapsed}
-            className={cn(
-              "overflow-hidden px-2 text-[0.6875rem] font-medium tracking-widest whitespace-nowrap text-muted-foreground uppercase",
-              "transition-[height,opacity] duration-[1000ms,100ms] ease-[cubic-bezier(0.075,0.82,0.165,1)]",
-              collapsed ? "h-0 opacity-0" : "h-4 opacity-100",
-            )}
-          >
-            {t.nav[section.headingKey]}
-          </p>
+          {section.headingKey && (
+            <p
+              aria-hidden={collapsed}
+              className={cn(
+                "overflow-hidden px-2 text-[0.6875rem] font-medium tracking-widest whitespace-nowrap text-muted-foreground uppercase",
+                "transition-[height,opacity] duration-[1000ms,100ms] ease-[cubic-bezier(0.075,0.82,0.165,1)]",
+                collapsed ? "h-0 opacity-0" : "h-4 opacity-100",
+              )}
+            >
+              {t.nav[section.headingKey]}
+            </p>
+          )}
 
           {section.items.map(({ href, labelKey, icon: Icon }) => {
             const isActive = pathname === href || pathname.startsWith(`${href}/`);
