@@ -1,4 +1,8 @@
-import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+
+export const COMPANY_VERTICALS = ["construction", "dental"] as const;
+export type CompanyVertical = (typeof COMPANY_VERTICALS)[number];
 
 /**
  * Tenant boundary.
@@ -13,15 +17,23 @@ import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
  * own; they inherit it through their parent, which is the only way it cannot
  * drift out of sync.
  */
-export const company = pgTable("company", {
-  id: text("id")
-    .primaryKey()
-    .$defaultFn(() => crypto.randomUUID()),
-  name: text("name").notNull(),
-  code: text("code").notNull().unique(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at")
-    .defaultNow()
-    .$onUpdate(() => new Date())
-    .notNull(),
-});
+export const company = pgTable(
+  "company",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    name: text("name").notNull(),
+    code: text("code").notNull().unique(),
+    // Intentionally no default: every newly-created tenant declares its product.
+    vertical: text("vertical").$type<CompanyVertical>().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    check("company_vertical_check", sql`${table.vertical} in ('construction', 'dental')`),
+  ],
+);

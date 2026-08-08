@@ -34,7 +34,7 @@ export default function CompanySwitcher() {
   const canSwitch = options.data?.canSwitch ?? false;
   const companyItems = companies.map((company) => ({
     value: company.id,
-    label: company.name,
+    label: `${company.name} · ${company.vertical === "dental" ? t.company.verticalDental : t.company.verticalConstruction}`,
   }));
 
   async function select(companyId: string) {
@@ -85,7 +85,12 @@ export default function CompanySwitcher() {
       <SelectContent>
         {companies.map((item) => (
           <SelectItem key={item.id} value={item.id}>
-            {item.name}
+            <span className="flex w-full items-center justify-between gap-4">
+              <span>{item.name}</span>
+              <span className="text-muted-foreground">
+                {item.vertical === "dental" ? t.company.verticalDental : t.company.verticalConstruction}
+              </span>
+            </span>
           </SelectItem>
         ))}
       </SelectContent>

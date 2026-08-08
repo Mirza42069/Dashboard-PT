@@ -1,6 +1,7 @@
 "use client";
 
 import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
+import type { CompanyScope } from "@DashboardV2/api/lib/scope";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
@@ -17,10 +18,12 @@ import UserMenu from "./user-menu";
 export default function Header({
   user,
   collapsed,
+  vertical,
   onToggleSidebar,
 }: {
   user: ShellUser;
   collapsed: boolean;
+  vertical: CompanyScope["vertical"];
   onToggleSidebar: () => void;
 }) {
   const t = useT();
@@ -30,7 +33,7 @@ export default function Header({
   return (
     <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b bg-card px-3 md:px-4">
       <div className="flex items-center gap-1">
-        <MobileNav role={role} />
+        <MobileNav role={role} vertical={vertical} />
         {/* Desktop only — on mobile the Sheet is the navigation. */}
         <Tooltip>
           <TooltipTrigger
@@ -65,7 +68,7 @@ export default function Header({
       </div>
       {/* Global controls stay together at the trailing edge of the top bar. */}
       <div className="flex items-center gap-2">
-        {hasPermission(role, "activity:read") && <ActivityPopover />}
+        {vertical === "construction" && hasPermission(role, "activity:read") && <ActivityPopover />}
         {hasPermission(role, "company:switch") && <CompanySwitcher />}
         <UserMenu user={user} />
       </div>

@@ -102,6 +102,7 @@ export default function CompaniesTable() {
                 <TableRow>
                   <TableHead>{t.company.name}</TableHead>
                   <TableHead>{t.company.code}</TableHead>
+                  <TableHead>{t.company.vertical}</TableHead>
                   <TableHead>{t.nav.users}</TableHead>
                   <TableHead>{t.company.created}</TableHead>
                   {/* Wide enough for the two actions plus the blocked marker. */}
@@ -121,6 +122,20 @@ export default function CompaniesTable() {
                     const projects =
                       row.projects > 0 ? plural(t.company.projectCount, row.projects) : null;
                     const users = row.users > 0 ? plural(t.company.userCount, row.users) : null;
+                    const patients =
+                      row.patients > 0 ? plural(t.company.patientCount, row.patients) : null;
+                    const practitioners =
+                      row.practitioners > 0
+                        ? plural(t.company.practitionerCount, row.practitioners)
+                        : null;
+                    const dentalOwners = [patients, practitioners].filter(Boolean).join(", ");
+                    if (dentalOwners) {
+                      const other = [projects, users].filter(Boolean).join(", ");
+                      return interpolate(t.company.deleteBlockedDental, {
+                        dental: dentalOwners,
+                        other: other ? `, ${other}` : "",
+                      });
+                    }
                     if (projects && users) {
                       return interpolate(t.company.deleteBlockedBoth, { projects, users });
                     }
@@ -133,6 +148,13 @@ export default function CompaniesTable() {
                       <TableCell className="font-medium">{row.name}</TableCell>
                       <TableCell>
                         <Badge variant="outline">{row.code}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={row.vertical === "dental" ? "secondary" : "outline"}>
+                          {row.vertical === "dental"
+                            ? t.company.verticalDental
+                            : t.company.verticalConstruction}
+                        </Badge>
                       </TableCell>
                       {/* Left, against the usual right-align-numbers rule, and
                           deliberately: a left-aligned Created column sits
@@ -198,7 +220,12 @@ export default function CompaniesTable() {
                             size="icon-sm"
                             aria-label={t.company.edit}
                             onClick={() =>
-                              setEditing({ id: row.id, name: row.name, code: row.code })
+                              setEditing({
+                                id: row.id,
+                                name: row.name,
+                                code: row.code,
+                                vertical: row.vertical,
+                              })
                             }
                           >
                             <Pencil />

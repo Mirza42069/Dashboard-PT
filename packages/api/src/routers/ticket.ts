@@ -18,7 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
 import z from "zod";
 
-import { companyPermissionProcedure, router } from "../index";
+import { constructionPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { roleOf } from "../lib/permissions";
@@ -159,7 +159,7 @@ async function assertReferencesInProject(
 }
 
 export const ticketRouter = router({
-  listByProject: companyPermissionProcedure("project:read")
+  listByProject: constructionPermissionProcedure("project:read")
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -223,7 +223,7 @@ export const ticketRouter = router({
       };
     }),
 
-  create: companyPermissionProcedure("project:write")
+  create: constructionPermissionProcedure("project:write")
     .input(fieldsSchema.extend({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -271,7 +271,7 @@ export const ticketRouter = router({
       return { id: createdId };
     }),
 
-  update: companyPermissionProcedure("project:write")
+  update: constructionPermissionProcedure("project:write")
     .input(fieldsSchema.extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { id, ...fields } = input;
@@ -335,7 +335,7 @@ export const ticketRouter = router({
       return { success: true };
     }),
 
-  setStatus: companyPermissionProcedure("project:write")
+  setStatus: constructionPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1), status: statusSchema }))
     .mutation(async ({ ctx, input }) => {
       const current = await ticketInScope(ctx, input.id);
@@ -385,7 +385,7 @@ export const ticketRouter = router({
     }),
 
   /** The discussion on one action, oldest first — it reads as a conversation. */
-  comments: companyPermissionProcedure("project:read")
+  comments: constructionPermissionProcedure("project:read")
     .input(z.object({ ticketId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       await ticketInScope(ctx, input.ticketId);
@@ -401,7 +401,7 @@ export const ticketRouter = router({
         .orderBy(asc(ticketComment.createdAt));
     }),
 
-  addComment: companyPermissionProcedure("project:write")
+  addComment: constructionPermissionProcedure("project:write")
     .input(z.object({ ticketId: z.string().min(1), body: z.string().trim().min(1).max(4000) }))
     .mutation(async ({ ctx, input }) => {
       // ticketInScope carries the company check and, for role=user, the
@@ -442,7 +442,7 @@ export const ticketRouter = router({
     }),
 
   /** What has changed on this action, newest first. */
-  history: companyPermissionProcedure("project:read")
+  history: constructionPermissionProcedure("project:read")
     .input(z.object({ ticketId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       await ticketInScope(ctx, input.ticketId);
@@ -454,7 +454,7 @@ export const ticketRouter = router({
     }),
 
   /** Follow or unfollow an action without owning it. */
-  setWatching: companyPermissionProcedure("project:read")
+  setWatching: constructionPermissionProcedure("project:read")
     .input(z.object({ ticketId: z.string().min(1), watching: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await ticketInScope(ctx, input.ticketId);
@@ -476,7 +476,7 @@ export const ticketRouter = router({
       return { watching: input.watching };
     }),
 
-  watching: companyPermissionProcedure("project:read")
+  watching: constructionPermissionProcedure("project:read")
     .input(z.object({ ticketId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       await ticketInScope(ctx, input.ticketId);
@@ -500,7 +500,7 @@ export const ticketRouter = router({
    * register rots into — six months later nobody can tell a fixed defect from
    * an abandoned one.
    */
-  close: companyPermissionProcedure("project:write")
+  close: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         id: z.string().min(1),
@@ -574,7 +574,7 @@ export const ticketRouter = router({
    * projectAccessFilter through the join, so a role=user sees only their own
    * projects' actions.
    */
-  overdueSummary: companyPermissionProcedure("project:read")
+  overdueSummary: constructionPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1).optional() }))
     .query(async ({ ctx, input }) => {
       if (input.projectId) await assertProjectAccess(ctx, input.projectId);
@@ -634,7 +634,7 @@ export const ticketRouter = router({
       };
     }),
 
-  delete: companyPermissionProcedure("project:write")
+  delete: constructionPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const current = await ticketInScope(ctx, input.id);

@@ -1,4 +1,5 @@
 import type { Role } from "@DashboardV2/api/lib/permissions";
+import type { CompanyScope } from "@DashboardV2/api/lib/scope";
 import { cn } from "@DashboardV2/ui/lib/utils";
 
 import AppNav from "./app-nav";
@@ -7,9 +8,11 @@ import { BrandMark } from "./brand";
 export default function AppSidebar({
   role,
   collapsed,
+  vertical,
 }: {
   role: Role;
   collapsed: boolean;
+  vertical: CompanyScope["vertical"];
 }) {
   return (
     <aside
@@ -52,7 +55,7 @@ export default function AppSidebar({
           justify-center (8 + (40-16)/2). Identical in both states, so there is
           nothing left for a padding transition to do. */}
       <div className="flex-1 overflow-y-auto px-3 py-3">
-        <AppNav role={role} collapsed={collapsed} />
+        <AppNav role={role} collapsed={collapsed} vertical={vertical} />
       </div>
     </aside>
   );

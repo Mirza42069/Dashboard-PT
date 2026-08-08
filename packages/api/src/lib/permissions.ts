@@ -56,6 +56,12 @@ export const PERMISSIONS = [
    * agreed record, and reopening is what un-agrees it.
    */
   "progress:lock",
+  /** Dental chart, scheduling, treatment and payment operations. */
+  "dental:read",
+  "dental:write",
+  /** Hard removal and clinic configuration remain supervisory. */
+  "dental:delete",
+  "dental:settings",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -79,6 +85,8 @@ const GRANTS: Record<Role, readonly Permission[]> = {
     "project:update",
     "project:write",
     "activity:read",
+    "dental:read",
+    "dental:write",
   ],
 };
 

@@ -8,6 +8,13 @@ import {
 } from "@DashboardV2/ui/components/dialog";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@DashboardV2/ui/components/select";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
 import { Plus } from "@DashboardV2/ui/components/icons";
@@ -20,7 +27,12 @@ import { useT } from "@/i18n/provider";
 import { toast } from "@/lib/toast";
 import { trpc } from "@/utils/trpc";
 
-export type CompanyDraft = { id: string; name: string; code: string };
+export type CompanyDraft = {
+  id: string;
+  name: string;
+  code: string;
+  vertical: "construction" | "dental";
+};
 
 /**
  * Create and rename in one form — the fields are identical, and a company is
@@ -61,14 +73,19 @@ export default function CompanyFormDialog({
       .min(1, t.company.codeRequired)
       .max(16)
       .regex(/^[A-Za-z0-9-]+$/, t.company.codeFormat),
+    vertical: z.enum(["construction", "dental"]),
   });
 
   const form = useForm({
-    defaultValues: { name: draft?.name ?? "", code: draft?.code ?? "" },
+    defaultValues: {
+      name: draft?.name ?? "",
+      code: draft?.code ?? "",
+      vertical: draft?.vertical ?? ("construction" as "construction" | "dental"),
+    },
     onSubmit: async ({ value, formApi }) => {
       try {
         if (draft) {
-          await updateCompany.mutateAsync({ id: draft.id, ...value });
+          await updateCompany.mutateAsync({ id: draft.id, name: value.name, code: value.code });
         } else {
           await createCompany.mutateAsync(value);
         }
@@ -147,6 +164,52 @@ export default function CompanyFormDialog({
                   </div>
                 );
               }}
+            </form.Field>
+
+            <form.Field name="vertical">
+              {(field) => (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{t.company.vertical}</Label>
+                  {draft ? (
+                    <>
+                      <Input
+                        id={field.name}
+                        value={
+                          field.state.value === "dental"
+                            ? t.company.verticalDental
+                            : t.company.verticalConstruction
+                        }
+                        readOnly
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {t.company.verticalImmutable}
+                      </p>
+                    </>
+                  ) : (
+                    <Select
+                      items={[
+                        { value: "construction", label: t.company.verticalConstruction },
+                        { value: "dental", label: t.company.verticalDental },
+                      ]}
+                      value={field.state.value}
+                      onValueChange={(value) =>
+                        field.handleChange((value ?? "construction") as "construction" | "dental")
+                      }
+                    >
+                      <SelectTrigger id={field.name} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="construction">
+                          {t.company.verticalConstruction}
+                        </SelectItem>
+                        <SelectItem value="dental">{t.company.verticalDental}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <p className="text-xs text-muted-foreground">{t.company.verticalHint}</p>
+                </div>
+              )}
             </form.Field>
 
             <form.Field name="code">

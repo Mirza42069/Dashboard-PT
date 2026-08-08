@@ -4,12 +4,12 @@ import { TRPCError } from "@trpc/server";
 import { desc, eq, inArray } from "drizzle-orm";
 import z from "zod";
 
-import { companyPermissionProcedure, router } from "../index";
+import { constructionPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { assertNoteAccess, assertProjectAccess } from "../lib/scope";
 
 export const noteRouter = router({
-  listByProject: companyPermissionProcedure("project:read")
+  listByProject: constructionPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1), limit: z.number().int().min(1).max(100).default(50) }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -51,7 +51,7 @@ export const noteRouter = router({
     }),
 
   /** Recording site evidence is exactly what an assigned project member is there to do. */
-  create: companyPermissionProcedure("project:write")
+  create: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -95,7 +95,7 @@ export const noteRouter = router({
   // Photo uploads bypass tRPC: the browser POSTs raw bytes to
   // /notes/:noteId/photos on the Hono server, which inserts the row itself.
 
-  deletePhoto: companyPermissionProcedure("project:write")
+  deletePhoto: constructionPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       // Resolve the owning note first so scope is checked before the delete.
@@ -112,7 +112,7 @@ export const noteRouter = router({
       return { success: true };
     }),
 
-  delete: companyPermissionProcedure("project:write")
+  delete: constructionPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       await assertNoteAccess(ctx, input.id);

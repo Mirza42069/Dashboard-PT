@@ -61,7 +61,9 @@ export default function CreateUserDialog({
   const companyItems =
     companies.data?.companies.map((company) => ({
       value: company.id,
-      label: company.name,
+      label: `${company.name} · ${
+        company.vertical === "dental" ? t.company.verticalDental : t.company.verticalConstruction
+      }`,
     })) ?? [];
 
   const schema = z

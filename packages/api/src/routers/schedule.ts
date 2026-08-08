@@ -13,7 +13,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
-import { companyPermissionProcedure, router } from "../index";
+import { constructionPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { getVersion, leafPredicate } from "../lib/boq";
@@ -105,14 +105,14 @@ async function assertPeriodsOfProject(projectId: string, periodIds: string[]) {
 }
 
 export const scheduleRouter = router({
-  listPeriods: companyPermissionProcedure("project:read")
+  listPeriods: constructionPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
       return listPeriodsFor(input.projectId);
     }),
 
-  updateSettings: companyPermissionProcedure("project:write")
+  updateSettings: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -180,7 +180,7 @@ export const scheduleRouter = router({
    * reading is attached to, and regenerating them would either orphan those
    * readings or move them to dates nobody reported against.
    */
-  generatePeriods: companyPermissionProcedure("project:write")
+  generatePeriods: constructionPermissionProcedure("project:write")
     .input(z.object({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -330,7 +330,7 @@ export const scheduleRouter = router({
       return { periods: await listPeriodsFor(input.projectId) };
     }),
 
-  getDistribution: companyPermissionProcedure("project:read")
+  getDistribution: constructionPermissionProcedure("project:read")
     .input(z.object({ versionId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       await getVersion(ctx, input.versionId);
@@ -361,7 +361,7 @@ export const scheduleRouter = router({
    * batch so a half-applied edit cannot leave the row totalling something the
    * user never typed.
    */
-  setDistributionCells: companyPermissionProcedure("project:write")
+  setDistributionCells: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         versionId: z.string().min(1),
@@ -447,7 +447,7 @@ export const scheduleRouter = router({
    * row and then realises the finish date moved should not lose the adjustment
    * to a silent redistribution.
    */
-  setItemPlan: companyPermissionProcedure("project:write")
+  setItemPlan: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         versionId: z.string().min(1),
@@ -583,7 +583,7 @@ export const scheduleRouter = router({
    * slab, say) are the common case, and retyping the window for each is exactly
    * the spreadsheet drudgery this tab replaces.
    */
-  copyDistribution: companyPermissionProcedure("project:write")
+  copyDistribution: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         versionId: z.string().min(1),
@@ -668,7 +668,7 @@ export const scheduleRouter = router({
     }),
 
   /** Clears the planned cells and the planning window on one or many lines. */
-  clearItemDistribution: companyPermissionProcedure("project:write")
+  clearItemDistribution: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         versionId: z.string().min(1),

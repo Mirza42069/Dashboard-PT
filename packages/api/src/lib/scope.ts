@@ -1,6 +1,7 @@
 import { db } from "@DashboardV2/db";
 import {
   company,
+  type CompanyVertical,
   project,
   projectMember,
   projectNote,
@@ -39,6 +40,8 @@ function readCookie(headers: Headers, name: string): string | undefined {
 
 export type SessionUser = { id: string; role?: string | null; companyId?: string | null };
 
+export type CompanyScope = { companyId: string; vertical: CompanyVertical };
+
 /**
  * Resolves the company a request acts on.
  *
@@ -49,6 +52,14 @@ export async function resolveCompanyIdForSession(
   sessionUser: SessionUser,
   headers: Headers,
 ): Promise<string> {
+  return (await resolveCompanyScopeForSession(sessionUser, headers)).companyId;
+}
+
+/** Resolves and validates both dimensions of the tenant product boundary. */
+export async function resolveCompanyScopeForSession(
+  sessionUser: SessionUser,
+  headers: Headers,
+): Promise<CompanyScope> {
   if (roleOf(sessionUser) !== "super_admin") {
     // admin and user are both pinned to one company now — only super_admin
     // gets the cross-tenant cookie-switcher below.
@@ -58,7 +69,14 @@ export async function resolveCompanyIdForSession(
         message: "No company assigned to this account. Ask an admin to set one.",
       });
     }
-    return sessionUser.companyId;
+    const [found] = await db
+      .select({ companyId: company.id, vertical: company.vertical })
+      .from(company)
+      .where(eq(company.id, sessionUser.companyId));
+    if (!found) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Assigned company no longer exists" });
+    }
+    return found;
   }
 
   // Super admin: the cookie is a preference, not an authority — validate it
@@ -66,14 +84,14 @@ export async function resolveCompanyIdForSession(
   const requested = readCookie(headers, COMPANY_COOKIE);
   if (requested) {
     const [found] = await db
-      .select({ id: company.id })
+      .select({ companyId: company.id, vertical: company.vertical })
       .from(company)
       .where(eq(company.id, requested));
-    if (found) return found.id;
+    if (found) return found;
   }
 
   const [first] = await db
-    .select({ id: company.id })
+    .select({ companyId: company.id, vertical: company.vertical })
     .from(company)
     .orderBy(asc(company.createdAt))
     .limit(1);
@@ -83,7 +101,7 @@ export async function resolveCompanyIdForSession(
       message: "No companies exist yet. Create one under Admin → Companies.",
     });
   }
-  return first.id;
+  return first;
 }
 
 /**

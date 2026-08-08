@@ -2,6 +2,8 @@ import { initTRPC, TRPCError } from "@trpc/server";
 
 import type { Context } from "./context";
 import { hasPermission, roleOf, type Permission } from "./lib/permissions";
+import type { CompanyVertical } from "@DashboardV2/db/schema";
+import { allowsCompanyVertical } from "./lib/vertical-policy";
 
 export const t = initTRPC.context<Context>().create();
 
@@ -39,9 +41,22 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
  * type checker flags a router that forgot to scope itself.
  */
 export const companyProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-  const companyId = await ctx.getCompanyId();
-  return next({ ctx: { ...ctx, companyId } });
+  const scope = await ctx.getCompanyScope();
+  return next({ ctx: { ...ctx, ...scope } });
 });
+
+/** Authoritative product boundary for all tenant business data. */
+export const verticalProcedure = (vertical: CompanyVertical) =>
+  companyProcedure.use(({ ctx, next }) => {
+    if (!allowsCompanyVertical(ctx.vertical, vertical)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `This operation is only available to ${vertical} companies`,
+        cause: "Company vertical mismatch",
+      });
+    }
+    return next({ ctx });
+  });
 
 function assertPermission(permission: Permission, user: { role?: string | null }) {
   if (!hasPermission(roleOf(user), permission)) {
@@ -72,3 +87,17 @@ export const companyPermissionProcedure = (permission: Permission) =>
     assertPermission(permission, ctx.session.user);
     return next({ ctx });
   });
+
+/** Vertical check + permission check + trusted company scope. */
+export const companyVerticalPermissionProcedure = (
+  vertical: CompanyVertical,
+  permission: Permission,
+) =>
+  verticalProcedure(vertical).use(({ ctx, next }) => {
+    assertPermission(permission, ctx.session.user);
+    return next({ ctx });
+  });
+
+export const constructionProcedure = verticalProcedure("construction");
+export const constructionPermissionProcedure = (permission: Permission) =>
+  companyVerticalPermissionProcedure("construction", permission);

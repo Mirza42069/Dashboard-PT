@@ -291,6 +291,22 @@
 }
 
 @layer components {
+  /* Dental uses the same typography and controls as the construction product. */
+  .dental-product .font-serif,
+  body[data-product="dental"] [data-slot="dialog-title"].font-serif {
+    font-family: var(--font-sans);
+  }
+
+  body[data-product="dental"] [data-slot="dialog-title"].font-serif {
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  .dental-product input[type="checkbox"],
+  body[data-product="dental"] input[type="checkbox"] {
+    accent-color: var(--primary);
+  }
+
   /*
    * Horizontal scroll affordance for wide tables.
    *

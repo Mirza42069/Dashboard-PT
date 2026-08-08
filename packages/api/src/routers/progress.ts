@@ -15,7 +15,7 @@ import { TRPCError } from "@trpc/server";
 import { aliasedTable, and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
-import { companyPermissionProcedure, router } from "../index";
+import { constructionPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { computePctComplete, leafPredicate, serializeItem, serializeVersion } from "../lib/boq";
 import { toAmount } from "../lib/money";
@@ -213,7 +213,7 @@ export const progressRouter = router({
    * actual from the same arrays the chart renders means the headline deviation
    * can never disagree with the line the user is looking at.
    */
-  report: companyPermissionProcedure("project:read")
+  report: constructionPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1), versionId: z.string().min(1).optional() }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -335,7 +335,7 @@ export const progressRouter = router({
    * what every progress figure is measured against, and leaving it stale after
    * a successful save would understate the project until the next write.
    */
-  bulkSave: companyPermissionProcedure("project:write")
+  bulkSave: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         periodId: z.string().min(1),
@@ -521,7 +521,7 @@ export const progressRouter = router({
    * data) or leaving the line blank (which is indistinguishable from forgetting
    * it) — and it is precisely that distinction submission depends on.
    */
-  markNoProgress: companyPermissionProcedure("project:write")
+  markNoProgress: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         periodId: z.string().min(1),
@@ -597,7 +597,7 @@ export const progressRouter = router({
    * table shows every period at once, and the counts are what tell a manager
    * which week to chase.
    */
-  periodStatus: companyPermissionProcedure("project:read")
+  periodStatus: constructionPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -686,7 +686,7 @@ export const progressRouter = router({
     }),
 
   /** The full transition history for one period — who moved it, when, and why. */
-  periodHistory: companyPermissionProcedure("project:read")
+  periodHistory: constructionPermissionProcedure("project:read")
     .input(z.object({ periodId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       const period = await findPeriod(ctx, input.periodId);
@@ -715,7 +715,7 @@ export const progressRouter = router({
    * the entire body of each, and four copies is four places for one of them to
    * go missing.
    */
-  transitionPeriod: companyPermissionProcedure("project:read")
+  transitionPeriod: constructionPermissionProcedure("project:read")
     .input(
       z.object({
         periodId: z.string().min(1),

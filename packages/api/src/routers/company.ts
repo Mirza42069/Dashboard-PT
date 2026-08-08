@@ -1,7 +1,8 @@
 import { db } from "@DashboardV2/db";
 import { user } from "@DashboardV2/db/schema/auth";
-import { company } from "@DashboardV2/db/schema/company";
+import { COMPANY_VERTICALS, company } from "@DashboardV2/db/schema/company";
 import { project } from "@DashboardV2/db/schema/construction";
+import { dentalPatient, dentalPractitioner } from "@DashboardV2/db/schema/dental";
 import { TRPCError } from "@trpc/server";
 import { asc, count, eq } from "drizzle-orm";
 import z from "zod";
@@ -18,6 +19,7 @@ const upsertSchema = z.object({
     .min(1, "Code is required")
     .max(16)
     .regex(/^[A-Za-z0-9-]+$/, "Use letters, numbers and hyphens only"),
+  vertical: z.enum(COMPANY_VERTICALS),
 });
 
 export const companyRouter = router({
@@ -29,7 +31,7 @@ export const companyRouter = router({
   options: protectedProcedure.query(async ({ ctx }) => {
     const canSwitch = roleOf(ctx.session.user) === "super_admin";
     const rows = await db
-      .select({ id: company.id, name: company.name, code: company.code })
+      .select({ id: company.id, name: company.name, code: company.code, vertical: company.vertical })
       .from(company)
       .orderBy(asc(company.createdAt));
 
@@ -47,14 +49,23 @@ export const companyRouter = router({
         id: company.id,
         name: company.name,
         code: company.code,
+        vertical: company.vertical,
         createdAt: company.createdAt,
       })
       .from(company)
       .orderBy(asc(company.createdAt));
 
     // Counts drive the "can this be deleted?" affordance in the table.
-    const [projects, users] = await Promise.all([
+    const [projects, patients, practitioners, users] = await Promise.all([
       db.select({ companyId: project.companyId, value: count() }).from(project).groupBy(project.companyId),
+      db
+        .select({ companyId: dentalPatient.companyId, value: count() })
+        .from(dentalPatient)
+        .groupBy(dentalPatient.companyId),
+      db
+        .select({ companyId: dentalPractitioner.companyId, value: count() })
+        .from(dentalPractitioner)
+        .groupBy(dentalPractitioner.companyId),
       db.select({ companyId: user.companyId, value: count() }).from(user).groupBy(user.companyId),
     ]);
 
@@ -65,6 +76,8 @@ export const companyRouter = router({
       companies: rows.map((row) => ({
         ...row,
         projects: tally(projects, row.id),
+        patients: tally(patients, row.id),
+        practitioners: tally(practitioners, row.id),
         users: tally(users, row.id),
       })),
     };
@@ -79,19 +92,28 @@ export const companyRouter = router({
 
     const [created] = await db
       .insert(company)
-      .values({ name: input.name, code })
-      .returning({ id: company.id });
+      .values({ name: input.name, code, vertical: input.vertical })
+      .returning({ id: company.id, vertical: company.vertical });
 
-    return { id: created?.id };
+    return { id: created?.id, vertical: created?.vertical };
   }),
 
   update: permissionProcedure("company:manage")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ input }) => {
-      const { id, name, code } = input;
+      const { id, name, code, vertical } = input;
       const [current] = await db.select().from(company).where(eq(company.id, id));
       if (!current) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
+      }
+
+      // Product data models deliberately do not overlap. Moving a tenant after
+      // creation would make all of its existing records inaccessible.
+      if (vertical && vertical !== current.vertical) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Company vertical cannot be changed after creation",
+        });
       }
 
       if (code && code.toUpperCase() !== current.code) {
@@ -109,7 +131,7 @@ export const companyRouter = router({
         .set({ ...(name ? { name } : {}), ...(code ? { code: code.toUpperCase() } : {}) })
         .where(eq(company.id, id));
 
-      return { success: true };
+      return { success: true, vertical: current.vertical };
     }),
 
   /**
@@ -128,17 +150,27 @@ export const companyRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
       }
 
-      const [[projects], [users]] = await Promise.all([
+       const [[projects], [patients], [practitioners], [users]] = await Promise.all([
         db.select({ value: count() }).from(project).where(eq(project.companyId, input.id)),
+        db.select({ value: count() }).from(dentalPatient).where(eq(dentalPatient.companyId, input.id)),
+        db
+          .select({ value: count() })
+          .from(dentalPractitioner)
+          .where(eq(dentalPractitioner.companyId, input.id)),
         db.select({ value: count() }).from(user).where(eq(user.companyId, input.id)),
       ]);
 
-      const owned = (projects?.value ?? 0) + (users?.value ?? 0);
+      const owned =
+        (projects?.value ?? 0) +
+        (patients?.value ?? 0) +
+        (practitioners?.value ?? 0) +
+        (users?.value ?? 0);
       if (owned > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
             `This company still owns ${projects?.value ?? 0} project(s) ` +
+            `${patients?.value ?? 0} patient(s), ${practitioners?.value ?? 0} practitioner(s), ` +
             `and ${users?.value ?? 0} user(s). Move or delete them first.`,
         });
       }

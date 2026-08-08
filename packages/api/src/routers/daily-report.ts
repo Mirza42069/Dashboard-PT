@@ -18,7 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { aliasedTable, and, asc, count, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import z from "zod";
 
-import { companyPermissionProcedure, router } from "../index";
+import { constructionPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import {
   canTransition,
@@ -147,7 +147,7 @@ export const dailyReportRouter = router({
    * second round trip, and so a filter that matches nothing can say so rather
    * than looking like a failure.
    */
-  list: companyPermissionProcedure("project:read")
+  list: constructionPermissionProcedure("project:read")
     .input(
       z.object({
         projectId: z.string().min(1),
@@ -206,7 +206,7 @@ export const dailyReportRouter = router({
     }),
 
   /** One report in full, with its structured sections. */
-  get: companyPermissionProcedure("project:read")
+  get: constructionPermissionProcedure("project:read")
     .input(z.object({ id: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       const { report, projectCode, projectName } = await findReport(ctx, input.id);
@@ -336,7 +336,7 @@ export const dailyReportRouter = router({
    * the form at once therefore both land on the same record instead of one of
    * them getting a constraint violation for doing nothing wrong.
    */
-  open: companyPermissionProcedure("project:write")
+  open: constructionPermissionProcedure("project:write")
     .input(z.object({ projectId: z.string().min(1), reportDate: z.iso.date() }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -398,7 +398,7 @@ export const dailyReportRouter = router({
    * in one batch, so a save cannot leave a report with yesterday's manpower and
    * today's equipment.
    */
-  save: companyPermissionProcedure("project:write")
+  save: constructionPermissionProcedure("project:write")
     .input(
       narrativeSchema.extend({
         id: z.string().min(1),
@@ -513,7 +513,7 @@ export const dailyReportRouter = router({
     }),
 
   /** Submit, review, approve, return, or reopen. Same shape as the period workflow. */
-  transition: companyPermissionProcedure("project:read")
+  transition: constructionPermissionProcedure("project:read")
     .input(
       z.object({
         id: z.string().min(1),
@@ -604,7 +604,7 @@ export const dailyReportRouter = router({
    * note, and putting it on the overview would present it as the record of the
    * day when it is not yet one.
    */
-  recentSummary: companyPermissionProcedure("project:read")
+  recentSummary: constructionPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1), days: z.number().int().min(1).max(60).default(14) }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -633,7 +633,7 @@ export const dailyReportRouter = router({
       return rows.map((row) => ({ ...row, headcount: Number(row.headcount ?? 0) }));
     }),
 
-  delete: companyPermissionProcedure("project:write")
+  delete: constructionPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       // Only a draft may be deleted. Once submitted the report is part of the

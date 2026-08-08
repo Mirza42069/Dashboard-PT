@@ -1,7 +1,8 @@
 "use client";
 
 import { roleOf } from "@DashboardV2/api/lib/permissions";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { CompanyScope } from "@DashboardV2/api/lib/scope";
 
 import { writeSidebarCookie } from "@/lib/sidebar";
 
@@ -19,14 +20,25 @@ export type ShellUser = { name: string; email: string; role: string };
 export default function AppShell({
   user,
   initialCollapsed,
+  vertical,
   children,
 }: {
   user: ShellUser;
   initialCollapsed: boolean;
+  vertical: CompanyScope["vertical"];
   children: React.ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const role = roleOf(user);
+
+  // Dialogs render in a body-level portal, so expose the active product there
+  // for the small dental style normalization below.
+  useEffect(() => {
+    document.body.dataset.product = vertical;
+    return () => {
+      delete document.body.dataset.product;
+    };
+  }, [vertical]);
 
   function toggle() {
     setCollapsed((value) => {
@@ -43,9 +55,9 @@ export default function AppShell({
     <div className="flex h-svh overflow-x-hidden">
       {/* First in the DOM so it is the first thing Tab reaches. */}
       <SkipLink />
-      <AppSidebar role={role} collapsed={collapsed} />
+      <AppSidebar role={role} collapsed={collapsed} vertical={vertical} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header user={user} collapsed={collapsed} onToggleSidebar={toggle} />
+        <Header user={user} collapsed={collapsed} vertical={vertical} onToggleSidebar={toggle} />
         {/* tabIndex={-1} so the skip link can actually land focus here; without
             it the browser scrolls to #main but focus stays on the link, and the
             next Tab goes back into the sidebar. */}

@@ -10,6 +10,7 @@ import {
   SheetTrigger,
 } from "@DashboardV2/ui/components/sheet";
 import type { Role } from "@DashboardV2/api/lib/permissions";
+import type { CompanyScope } from "@DashboardV2/api/lib/scope";
 import { Menu } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 
@@ -18,7 +19,13 @@ import { useT } from "@/i18n/provider";
 import AppNav from "./app-nav";
 import { BRAND_NAME } from "./brand";
 
-export default function MobileNav({ role }: { role: Role }) {
+export default function MobileNav({
+  role,
+  vertical,
+}: {
+  role: Role;
+  vertical: CompanyScope["vertical"];
+}) {
   const t = useT();
   const [open, setOpen] = useState(false);
 
@@ -33,10 +40,12 @@ export default function MobileNav({ role }: { role: Role }) {
       <SheetContent side="left" className="w-64" closeLabel={t.common.close}>
         <SheetHeader>
           <SheetTitle>{BRAND_NAME}</SheetTitle>
-          <SheetDescription>{t.auth.tagline}</SheetDescription>
+          <SheetDescription>
+            {vertical === "dental" ? t.dental.productTagline : t.auth.tagline}
+          </SheetDescription>
         </SheetHeader>
         <div className="px-3 pb-4">
-          <AppNav role={role} onNavigate={() => setOpen(false)} />
+          <AppNav role={role} vertical={vertical} onNavigate={() => setOpen(false)} />
         </div>
       </SheetContent>
     </Sheet>

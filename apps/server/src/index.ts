@@ -3,7 +3,7 @@ import { recordActivity } from "@DashboardV2/api/lib/activity";
 import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
 import { auth } from "@DashboardV2/auth";
-import { projectAccessFilter, resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
+import { projectAccessFilter, resolveCompanyScopeForSession } from "@DashboardV2/api/lib/scope";
 import { db } from "@DashboardV2/db";
 import { notePhoto, project, projectMember, projectNote } from "@DashboardV2/db/schema";
 import { trustedOrigins } from "@DashboardV2/env/server";
@@ -72,17 +72,29 @@ const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 const PHOTO_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 /**
- * Resolves the caller's company for these plain Hono routes.
+ * Resolves the caller's construction company for these plain Hono routes.
  *
- * resolveCompanyIdForSession is shared with tRPC and signals failure by
+ * resolveCompanyScopeForSession is shared with tRPC and signals failure by
  * throwing a TRPCError, which only the tRPC pipeline knows how to turn into a
  * status. Here it would escape as an unhandled 500 with no body — so an account
  * that has no company assigned would see every photo <img> break with a generic
- * error instead of the sentence explaining what is wrong. Map it instead.
+ * error instead of the sentence explaining what is wrong. Map it instead, and
+ * enforce the same vertical boundary as constructionProcedure before any route
+ * can query tenant business data.
  */
-async function resolveCompany(sessionUser: Parameters<typeof resolveCompanyIdForSession>[0], headers: Headers) {
+async function resolveConstructionCompany(
+  sessionUser: Parameters<typeof resolveCompanyScopeForSession>[0],
+  headers: Headers,
+) {
   try {
-    return { companyId: await resolveCompanyIdForSession(sessionUser, headers) };
+    const scope = await resolveCompanyScopeForSession(sessionUser, headers);
+    if (scope.vertical !== "construction") {
+      return {
+        error: "This operation is only available to construction companies",
+        status: 403 as const,
+      };
+    }
+    return { companyId: scope.companyId };
   } catch (error) {
     const code = (error as { code?: string }).code;
     const message = error instanceof Error ? error.message : "No company assigned";
@@ -116,7 +128,7 @@ app.post("/notes/:noteId/photos", async (c) => {
   // Same company (and, for role=user, project-membership) rule as tRPC — a
   // note in another tenant, or in a project this account isn't assigned to,
   // must read as absent.
-  const scope = await resolveCompany(session.user, c.req.raw.headers);
+  const scope = await resolveConstructionCompany(session.user, c.req.raw.headers);
   if ("error" in scope) {
     return c.json({ error: scope.error }, scope.status);
   }
@@ -185,7 +197,7 @@ app.get("/photos/:id", async (c) => {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
-  const scope = await resolveCompany(session.user, c.req.raw.headers);
+  const scope = await resolveConstructionCompany(session.user, c.req.raw.headers);
   if ("error" in scope) {
     return c.json({ error: scope.error }, scope.status);
   }
@@ -247,7 +259,7 @@ app.get("/projects/export", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  const scope = await resolveCompany(session.user, c.req.raw.headers);
+  const scope = await resolveConstructionCompany(session.user, c.req.raw.headers);
   if ("error" in scope) {
     return c.json({ error: scope.error }, scope.status);
   }
@@ -306,7 +318,7 @@ async function requireProjectWrite(c: HonoRequestContext, projectId: string) {
     return { error: "Not found", status: 404 as const };
   }
 
-  const scope = await resolveCompany(session.user, c.req.raw.headers);
+  const scope = await resolveConstructionCompany(session.user, c.req.raw.headers);
   if ("error" in scope) return { error: scope.error, status: scope.status };
 
   const [visible] = await db

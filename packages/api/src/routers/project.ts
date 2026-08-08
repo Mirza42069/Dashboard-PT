@@ -12,7 +12,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, ilike, inArray, notInArray, or, sql, sum } from "drizzle-orm";
 import z from "zod";
 
-import { companyPermissionProcedure, companyProcedure, router } from "../index";
+import { constructionPermissionProcedure, constructionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { isBehindDeviation } from "../lib/deviation";
 import { runBatch } from "../lib/batch";
@@ -123,7 +123,7 @@ function decorate(
 }
 
 export const projectRouter = router({
-  list: companyPermissionProcedure("project:read")
+  list: constructionPermissionProcedure("project:read")
     .input(
       z.object({
         search: z.string().trim().max(200).default(""),
@@ -172,7 +172,7 @@ export const projectRouter = router({
     }),
 
   /** Lightweight list for the project pickers on other screens. */
-  options: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
+  options: constructionPermissionProcedure("project:read").query(async ({ ctx }) => {
     return db
       .select({ id: project.id, code: project.code, name: project.name, status: project.status })
       .from(project)
@@ -189,7 +189,7 @@ export const projectRouter = router({
    * and email end up printed on a project page. `assertUserAssignable` enforces
    * the same rule on write, so a hand-made request cannot get around the list.
    */
-  managerOptions: companyProcedure.query(async ({ ctx }) => {
+  managerOptions: constructionProcedure.query(async ({ ctx }) => {
     return db
       .select({ id: user.id, name: user.name, email: user.email })
       .from(user)
@@ -203,7 +203,7 @@ export const projectRouter = router({
       .orderBy(asc(user.name));
   }),
 
-  get: companyPermissionProcedure("project:read")
+  get: constructionPermissionProcedure("project:read")
     .input(z.object({ id: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       const [row] = await db
@@ -250,7 +250,7 @@ export const projectRouter = router({
    * active BoQ and at least one reading can be behind — everything else has no
    * plan to be measured against and is left out rather than shown as on track.
    */
-  behindSchedule: companyPermissionProcedure("project:read")
+  behindSchedule: constructionPermissionProcedure("project:read")
     .input(z.object({ limit: z.number().int().min(1).max(20).default(5) }))
     .query(async ({ ctx, input }) => {
       const rows = await db
@@ -283,7 +283,7 @@ export const projectRouter = router({
    * by it — but silence is itself the exception worth surfacing, which is what
    * `reportAgeDays` is for.
    */
-  exceptions: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
+  exceptions: constructionPermissionProcedure("project:read").query(async ({ ctx }) => {
       const rows = await projectExceptions(projectAccessFilter(ctx));
       const canReview = hasPermission(roleOf(ctx.session.user), "progress:review");
 
@@ -350,7 +350,7 @@ export const projectRouter = router({
     }),
 
   /** Everything the dashboard needs, in one round trip. */
-  summary: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
+  summary: constructionPermissionProcedure("project:read").query(async ({ ctx }) => {
     const inCompany = projectAccessFilter(ctx);
     const [projectRows, [baselineTotal], [openTicketRow]] = await Promise.all([
       db
@@ -409,7 +409,7 @@ export const projectRouter = router({
     };
   }),
 
-  create: companyPermissionProcedure("project:create")
+  create: constructionPermissionProcedure("project:create")
     .input(createSchema)
     .mutation(async ({ ctx, input }) => {
       const code = input.code.toUpperCase();
@@ -481,7 +481,7 @@ export const projectRouter = router({
       return { id: projectId };
     }),
 
-  update: companyPermissionProcedure("project:update")
+  update: constructionPermissionProcedure("project:update")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { id: projectId, code, ...rest } = input;
@@ -574,7 +574,7 @@ export const projectRouter = router({
    * Tickets cascade, but that is a lot of history to lose by accident, so
    * deleting a project with tickets requires an explicit confirm.
    */
-  delete: companyPermissionProcedure("project:delete")
+  delete: constructionPermissionProcedure("project:delete")
     .input(z.object({ id: z.string().min(1), force: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
       // Read the label before deleting — after the row is gone there is nothing
@@ -617,7 +617,7 @@ export const projectRouter = router({
    * Bulk counterpart of delete. Scoping shares the where clause with the id
    * filter so a cross-tenant id is simply not matched.
    */
-  deleteMany: companyPermissionProcedure("project:delete")
+  deleteMany: constructionPermissionProcedure("project:delete")
     .input(
       z.object({
         ids: z.array(z.string().min(1)).min(1).max(100),
@@ -668,7 +668,7 @@ export const projectRouter = router({
     }),
 
   /** Who currently sees this project — for the project's Team tab. */
-  listMembers: companyPermissionProcedure("member:manage")
+  listMembers: constructionPermissionProcedure("member:manage")
     .input(z.object({ projectId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -681,7 +681,7 @@ export const projectRouter = router({
     }),
 
   /** Company Users eligible to be assigned to a project — feeds the picker. */
-  memberOptions: companyPermissionProcedure("member:manage").query(async ({ ctx }) => {
+  memberOptions: constructionPermissionProcedure("member:manage").query(async ({ ctx }) => {
     return db
       .select({ id: user.id, name: user.name, email: user.email })
       .from(user)
@@ -694,7 +694,7 @@ export const projectRouter = router({
    * rather than a read-diff-write. They run in one Neon batch so the replacement
    * is atomic, and the active regular-user manager is always retained.
    */
-  setMembers: companyPermissionProcedure("member:manage")
+  setMembers: constructionPermissionProcedure("member:manage")
     .input(z.object({ projectId: z.string().min(1), userIds: z.array(z.string().min(1)).max(200) }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);

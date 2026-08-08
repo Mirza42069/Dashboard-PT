@@ -1,32 +1,36 @@
 import { relations } from "drizzle-orm";
-import { pgTable, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, index, unique } from "drizzle-orm/pg-core";
 
 import { company } from "./company";
 
-export const user = pgTable("user", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  emailVerified: boolean("email_verified").default(false).notNull(),
-  image: text("image"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at")
-    .defaultNow()
-    .$onUpdate(() => /* @__PURE__ */ new Date())
-    .notNull(),
-  // better-auth admin plugin
-  role: text("role").default("user").notNull(),
-  banned: boolean("banned").default(false).notNull(),
-  banReason: text("ban_reason"),
-  banExpires: timestamp("ban_expires"),
-  // Forces the /change-password flow after an admin issues a temporary password
-  mustChangePassword: boolean("must_change_password").default(true).notNull(),
-  /**
-   * The tenant this account is pinned to. Null means "not pinned" — the case
-   * for admins, who instead pick an active company from the header switcher.
-   */
-  companyId: text("company_id").references(() => company.id, { onDelete: "restrict" }),
-});
+export const user = pgTable(
+  "user",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    email: text("email").notNull().unique(),
+    emailVerified: boolean("email_verified").default(false).notNull(),
+    image: text("image"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    // better-auth admin plugin
+    role: text("role").default("user").notNull(),
+    banned: boolean("banned").default(false).notNull(),
+    banReason: text("ban_reason"),
+    banExpires: timestamp("ban_expires"),
+    // Forces the /change-password flow after an admin issues a temporary password
+    mustChangePassword: boolean("must_change_password").default(true).notNull(),
+    /**
+     * The tenant this account is pinned to. Null means "not pinned" — the case
+     * for super admins, who instead pick an active company from the header switcher.
+     */
+    companyId: text("company_id").references(() => company.id, { onDelete: "restrict" }),
+  },
+  (table) => [unique("user_company_id_key").on(table.companyId, table.id)],
+);
 
 export const session = pgTable(
   "session",

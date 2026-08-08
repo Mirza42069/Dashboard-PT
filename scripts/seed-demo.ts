@@ -88,11 +88,15 @@ async function main() {
 
   const code = targetCompanyCode();
   const [target] = await db
-    .select({ id: company.id, name: company.name })
+    .select({ id: company.id, name: company.name, vertical: company.vertical })
     .from(company)
     .where(eq(company.code, code));
   if (!target) {
     console.error(`No company with code ${code}. Create it under Admin → Companies first.`);
+    process.exit(1);
+  }
+  if (target.vertical !== "construction") {
+    console.error(`Refusing to seed ${code}: its vertical is ${target.vertical}, not construction.`);
     process.exit(1);
   }
   const companyId = target.id;

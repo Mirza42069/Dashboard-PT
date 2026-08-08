@@ -5,6 +5,7 @@ import { adminRouter } from "./admin";
 import { boqRouter } from "./boq";
 import { companyRouter } from "./company";
 import { dailyReportRouter } from "./daily-report";
+import { dentalRouter } from "./dental";
 import { noteRouter } from "./note";
 import { progressRouter } from "./progress";
 import { projectRouter } from "./project";
@@ -32,5 +33,6 @@ export const appRouter = router({
   schedule: scheduleRouter,
   progress: progressRouter,
   dailyReport: dailyReportRouter,
+  dental: dentalRouter,
 });
 export type AppRouter = typeof appRouter;

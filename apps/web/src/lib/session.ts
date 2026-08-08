@@ -1,7 +1,12 @@
 import { hasPermission, type Permission, roleOf } from "@DashboardV2/api/lib/permissions";
+import {
+  resolveCompanyScopeForSession,
+  type CompanyScope,
+} from "@DashboardV2/api/lib/scope";
 import { auth } from "@DashboardV2/auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import type { Route } from "next";
 import { cache } from "react";
 
 /**
@@ -62,4 +67,18 @@ export async function requirePermission(permission: Permission) {
   }
 
   return session;
+}
+
+/** Authoritative product scope, deduped with the session for one server render. */
+export const getCompanyScope = cache(async (): Promise<CompanyScope> => {
+  const session = await requireSession();
+  return resolveCompanyScopeForSession(session.user, await headers());
+});
+
+export async function requireVertical(vertical: CompanyScope["vertical"]) {
+  const scope = await getCompanyScope();
+  if (scope.vertical !== vertical) {
+    redirect((scope.vertical === "dental" ? "/dental" : "/dashboard") as Route);
+  }
+  return scope;
 }

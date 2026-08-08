@@ -203,7 +203,14 @@ export default function UsersTable({
                         active company from the header instead of belonging
                         to one. */}
                     <TableCell className="text-muted-foreground">
-                      {user.companyName ?? t.common.none}
+                      <span>{user.companyName ?? t.common.none}</span>
+                      {companies.find((company) => company.id === user.companyId) && (
+                        <span className="block text-[0.6875rem]">
+                          {companies.find((company) => company.id === user.companyId)?.vertical === "dental"
+                            ? t.company.verticalDental
+                            : t.company.verticalConstruction}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell>
                       {user.banned ? (
@@ -393,7 +400,7 @@ export default function UsersTable({
                 }}
               >
                 <Building2 />
-                {item.name}
+                {item.name} · {item.vertical === "dental" ? t.company.verticalDental : t.company.verticalConstruction}
               </Button>
             ))}
           </div>

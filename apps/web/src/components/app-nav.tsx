@@ -1,9 +1,17 @@
 "use client";
 
 import { hasPermission, type Permission, type Role } from "@DashboardV2/api/lib/permissions";
+import type { CompanyScope } from "@DashboardV2/api/lib/scope";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
 import { Building2, HardHat, LayoutDashboard, Users } from "@DashboardV2/ui/components/icons";
+import {
+  DentalAppointment,
+  DentalClinic,
+  DentalDoctor,
+  DentalPatient,
+  DentalTreatment,
+} from "@DashboardV2/ui/components/dental-icons";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -17,6 +25,7 @@ type NavItem = {
   icon: typeof LayoutDashboard;
   /** Omitted entirely means every role sees it. */
   permission?: Permission;
+  exact?: boolean;
 };
 
 type NavSection = {
@@ -32,7 +41,7 @@ type NavSection = {
  * Settings deliberately lives in the account menu, not here: it configures the
  * person, not the business.
  */
-const SECTIONS: NavSection[] = [
+const CONSTRUCTION_SECTIONS: NavSection[] = [
   {
     items: [
       { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
@@ -46,6 +55,24 @@ const SECTIONS: NavSection[] = [
       { href: "/admin/companies", labelKey: "companies", icon: Building2, permission: "company:manage" },
     ],
   },
+];
+
+const DENTAL_SECTIONS: NavSection[] = [
+  {
+    items: [
+      { href: "/dental" as Route, labelKey: "clinicDashboard", icon: DentalClinic, exact: true },
+      { href: "/dental/appointments" as Route, labelKey: "appointments", icon: DentalAppointment },
+      { href: "/dental/patients" as Route, labelKey: "patients", icon: DentalPatient },
+      { href: "/dental/treatments" as Route, labelKey: "treatmentPlans", icon: DentalTreatment },
+      {
+        href: "/dental/practitioners" as Route,
+        labelKey: "practitioners",
+        icon: DentalDoctor,
+        permission: "dental:settings",
+      },
+    ],
+  },
+  CONSTRUCTION_SECTIONS[1]!,
 ];
 
 /**
@@ -70,17 +97,20 @@ const MOTION = "duration-[1000ms] ease-[cubic-bezier(0.075,0.82,0.165,1)]";
 
 export default function AppNav({
   role,
+  vertical,
   collapsed = false,
   onNavigate,
 }: {
   role: Role;
+  vertical: CompanyScope["vertical"];
   collapsed?: boolean;
   onNavigate?: () => void;
 }) {
   const t = useT();
   const pathname = usePathname();
 
-  const sections = SECTIONS.map((section) => ({
+  const productSections = vertical === "dental" ? DENTAL_SECTIONS : CONSTRUCTION_SECTIONS;
+  const sections = productSections.map((section) => ({
     ...section,
     items: section.items.filter((item) => !item.permission || hasPermission(role, item.permission)),
   })).filter((section) => section.items.length > 0);
@@ -120,8 +150,8 @@ export default function AppNav({
             </p>
           )}
 
-          {section.items.map(({ href, labelKey, icon: Icon }) => {
-            const isActive = pathname === href || pathname.startsWith(`${href}/`);
+          {section.items.map(({ href, labelKey, icon: Icon, exact }) => {
+            const isActive = pathname === href || (!exact && pathname.startsWith(`${href}/`));
             const label = t.nav[labelKey];
 
             const link = (

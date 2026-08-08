@@ -148,6 +148,13 @@
       "when": 1785945600000,
       "tag": "0020_project_access_invariants",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1786147200000,
+      "tag": "0021_dental_vertical",
+      "breakpoints": true
     }
   ]
 }

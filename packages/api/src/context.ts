@@ -2,7 +2,7 @@ import { auth } from "@DashboardV2/auth";
 import { TRPCError } from "@trpc/server";
 import type { Context as HonoContext } from "hono";
 
-import { resolveCompanyIdForSession } from "./lib/scope";
+import { resolveCompanyScopeForSession } from "./lib/scope";
 
 export type CreateContextOptions = {
   context: HonoContext;
@@ -21,7 +21,7 @@ export async function createContext({ context }: CreateContextOptions) {
   //
   // A rejection is cached too, on purpose: the rest of the batch should fail the
   // same way without re-running the query that already failed.
-  let companyId: Promise<string> | undefined;
+  let companyScope: ReturnType<typeof resolveCompanyScopeForSession> | undefined;
 
   return {
     // Forwarded to auth.api.* calls so better-auth re-verifies the caller
@@ -36,8 +36,15 @@ export async function createContext({ context }: CreateContextOptions) {
           cause: "No session",
         });
       }
-      companyId ??= resolveCompanyIdForSession(session.user, headers);
-      return companyId;
+      companyScope ??= resolveCompanyScopeForSession(session.user, headers);
+      return companyScope.then((scope) => scope.companyId);
+    },
+    getCompanyScope() {
+      if (!session) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Authentication required" });
+      }
+      companyScope ??= resolveCompanyScopeForSession(session.user, headers);
+      return companyScope;
     },
   };
 }

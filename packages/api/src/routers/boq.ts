@@ -15,7 +15,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
-import { companyPermissionProcedure, router } from "../index";
+import { constructionPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import {
@@ -95,7 +95,7 @@ export const boqRouter = router({
    * the tree — it needs the parent/child relationship in hand anyway to work
    * out which lines are leaves.
    */
-  overview: companyPermissionProcedure("project:read")
+  overview: constructionPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1), versionId: z.string().min(1).optional() }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -127,7 +127,7 @@ export const boqRouter = router({
       return { version: serializeVersion(current), items: items.map(serializeItem) };
     }),
 
-  listVersions: companyPermissionProcedure("project:read")
+  listVersions: constructionPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -143,7 +143,7 @@ export const boqRouter = router({
    * Opens the BoQ for editing. An active baseline is deep-cloned so edits never
    * rewrite the contract, plan or progress history currently in force.
    */
-  getOrCreateDraft: companyPermissionProcedure("project:write")
+  getOrCreateDraft: constructionPermissionProcedure("project:write")
     .input(z.object({ projectId: z.string().min(1), title: z.string().trim().max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -298,7 +298,7 @@ export const boqRouter = router({
     }),
 
   /** Redistributes derived weights by value. Draft only. */
-  recalcWeights: companyPermissionProcedure("project:write")
+  recalcWeights: constructionPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       await requireDraft(ctx, input.versionId);
@@ -313,7 +313,7 @@ export const boqRouter = router({
    * A prior active baseline is superseded in the same database batch. Its items,
    * schedule and progress remain intact as the historical snapshot.
    */
-  activate: companyPermissionProcedure("project:write")
+  activate: constructionPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const draft = await getVersion(ctx, input.versionId);
@@ -524,7 +524,7 @@ export const boqRouter = router({
    * and how it went. Read-only history; the import itself is a plain HTTP route
    * because it carries a binary body (apps/server/src/boq-import.ts).
    */
-  listImports: companyPermissionProcedure("project:read")
+  listImports: constructionPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1), limit: z.number().int().min(1).max(50).default(10) }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
@@ -551,7 +551,7 @@ export const boqRouter = router({
     }),
 
   /** Adds a section (no parentId) or a line under one. */
-  createItem: companyPermissionProcedure("project:write")
+  createItem: constructionPermissionProcedure("project:write")
     .input(
       itemSchema.extend({
         versionId: z.string().min(1),
@@ -613,7 +613,7 @@ export const boqRouter = router({
       return { item: created ? serializeItem(created) : null };
     }),
 
-  updateItem: companyPermissionProcedure("project:write")
+  updateItem: constructionPermissionProcedure("project:write")
     .input(itemSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const current = await requireDraftForItem(ctx, input.id);
@@ -652,7 +652,7 @@ export const boqRouter = router({
    * has to take its lines with it, or they survive as parentless leaves that
    * still draw weight.
    */
-  deleteItem: companyPermissionProcedure("project:write")
+  deleteItem: constructionPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       await requireDraftForItem(ctx, input.id);
@@ -675,7 +675,7 @@ export const boqRouter = router({
     }),
 
   /** Applies a new ordering to a group of siblings in one statement. */
-  reorderItems: companyPermissionProcedure("project:write")
+  reorderItems: constructionPermissionProcedure("project:write")
     .input(
       z.object({
         versionId: z.string().min(1),
