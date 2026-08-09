@@ -18,29 +18,30 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/compon
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Pencil } from "@DashboardV2/ui/components/icons";
 import type { Route } from "next";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
-import ProjectBuildingScene from "@/components/project-building-scene";
 import { QueryError } from "@/components/query-error";
+import ProjectBuildingScene from "@/components/project-building-scene";
 import { StatusBadge } from "@/components/status-badge";
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
-import BaselineTab from "./baseline-tab";
-import DailyReportsTab from "./daily-reports-tab";
-import NotesTab from "./notes-tab";
 import ProjectOverview from "./project-overview";
-import ProgressTab from "./progress-tab";
-import TeamTab from "./team-tab";
-import TicketsTab from "./tickets-tab";
-import ProjectFormDialog, {
-  projectToFormValues,
-  type ProjectFormValues,
-} from "../project-form-dialog";
+import { projectToFormValues, type ProjectFormValues } from "../project-form-values";
 
 const PROJECT_TABS = ["overview", "tickets", "baseline", "progress", "daily", "notes", "team"] as const;
+
+const tabLoading = () => <Skeleton className="h-64 w-full" />;
+const BaselineTab = dynamic(() => import("./baseline-tab"), { loading: tabLoading });
+const DailyReportsTab = dynamic(() => import("./daily-reports-tab"), { loading: tabLoading });
+const NotesTab = dynamic(() => import("./notes-tab"), { loading: tabLoading });
+const ProgressTab = dynamic(() => import("./progress-tab"), { loading: tabLoading });
+const TeamTab = dynamic(() => import("./team-tab"), { loading: tabLoading });
+const TicketsTab = dynamic(() => import("./tickets-tab"), { loading: tabLoading });
+const ProjectFormDialog = dynamic(() => import("../project-form-dialog"));
 
 export default function ProjectDetail({
   projectId,
@@ -177,43 +178,49 @@ export default function ProjectDetail({
         </div>
 
         <TabsContent value="overview">
-          <ProjectOverview project={project} />
+          {activeTab === "overview" && <ProjectOverview project={project} />}
         </TabsContent>
 
         <TabsContent value="baseline">
-          <BaselineTab projectId={projectId} canEdit={canWrite} />
+          {activeTab === "baseline" && <BaselineTab projectId={projectId} canEdit={canWrite} />}
         </TabsContent>
 
         <TabsContent value="progress">
-          <ProgressTab
-            projectId={projectId}
-            canEdit={canWrite}
-            canReview={canReview}
-            canLock={canLock}
-          />
+          {activeTab === "progress" && (
+            <ProgressTab
+              projectId={projectId}
+              canEdit={canWrite}
+              canReview={canReview}
+              canLock={canLock}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="tickets">
-          <TicketsTab projectId={projectId} />
+          {activeTab === "tickets" && <TicketsTab projectId={projectId} />}
         </TabsContent>
 
         <TabsContent value="daily">
-          <DailyReportsTab
-            projectId={projectId}
-            canEdit={canWrite}
-            canReview={canReview}
-            canLock={canLock}
-            onDirtyChange={setDailyDirty}
-          />
+          {activeTab === "daily" && (
+            <DailyReportsTab
+              projectId={projectId}
+              canEdit={canWrite}
+              canReview={canReview}
+              canLock={canLock}
+              onDirtyChange={setDailyDirty}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="notes">
-          <NotesTab projectId={projectId} canEdit={canWrite} />
+          {activeTab === "notes" && <NotesTab projectId={projectId} canEdit={canWrite} />}
         </TabsContent>
 
         {canManageMembers && (
           <TabsContent value="team">
-            <TeamTab projectId={projectId} managerId={project.managerId} />
+            {activeTab === "team" && (
+              <TeamTab projectId={projectId} managerId={project.managerId} />
+            )}
           </TabsContent>
         )}
       </Tabs>

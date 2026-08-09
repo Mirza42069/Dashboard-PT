@@ -1,22 +1,23 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 /**
- * Checkbox selection for a paginated table.
+ * Checkbox selection for a progressively loaded table.
  *
- * Selection is pruned against the rows currently on screen rather than cleared
- * on change. That single choice gives the right behaviour in all three cases
- * that matter: paging or filtering drops the selection (none of the new ids
- * match), a background refetch after invalidateQueries keeps it, and rows
- * removed by a bulk action fall out on their own. Clearing in an effect keyed on
- * `rows` would instead wipe the selection on every refetch, because React Query
- * hands back a new array identity each time.
+ * Selection is derived against the rows currently loaded. Loading another page
+ * keeps existing selections, a background refetch keeps them, and rows removed
+ * by a bulk action fall out on their own. A caller-provided reset key clears the
+ * held ids when server filters change without wiping selection on every refetch.
  *
- * "Select all" therefore means the current page, never the whole result set.
+ * "Select all" therefore means all loaded rows, never the whole result set.
  */
-export function useRowSelection<T extends { id: string }>(rows: T[]) {
+export function useRowSelection<T extends { id: string }>(rows: T[], resetKey?: string) {
   const [held, setHeld] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => {
+    setHeld(new Set());
+  }, [resetKey]);
 
   const visibleIds = useMemo(() => rows.map((row) => row.id), [rows]);
 

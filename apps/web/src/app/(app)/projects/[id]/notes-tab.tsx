@@ -135,8 +135,10 @@ export default function NotesTab({
       setPending([]);
       setBody("");
       if (fileInput.current) fileInput.current.value = "";
-      await queryClient.invalidateQueries(trpc.note.pathFilter());
-      await queryClient.invalidateQueries(trpc.activity.pathFilter());
+      await Promise.all([
+        queryClient.invalidateQueries(trpc.note.pathFilter()),
+        queryClient.invalidateQueries(trpc.activity.pathFilter()),
+      ]);
       toast.success(t.notes.created);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.notes.createFailed);

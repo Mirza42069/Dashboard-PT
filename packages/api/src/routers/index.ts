@@ -9,6 +9,7 @@ import { noteRouter } from "./note";
 import { progressRouter } from "./progress";
 import { projectRouter } from "./project";
 import { scheduleRouter } from "./schedule";
+import { supportRouter } from "./support";
 import { ticketRouter } from "./ticket";
 
 export const appRouter = router({
@@ -32,5 +33,6 @@ export const appRouter = router({
   schedule: scheduleRouter,
   progress: progressRouter,
   dailyReport: dailyReportRouter,
+  support: supportRouter,
 });
 export type AppRouter = typeof appRouter;

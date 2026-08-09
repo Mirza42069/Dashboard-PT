@@ -7,6 +7,7 @@ import { cn } from "@DashboardV2/ui/lib/utils";
 import { ChevronLeft } from "@DashboardV2/ui/components/icons";
 
 import { useT } from "@/i18n/provider";
+import type { TextScale } from "@/lib/text-scale";
 
 import type { ShellUser } from "./app-shell";
 import ActivityPopover from "./activity-popover";
@@ -17,11 +18,15 @@ import UserMenu from "./user-menu";
 export default function Header({
   user,
   collapsed,
+  initialTextScale,
   onToggleSidebar,
+  onContactSupport,
 }: {
   user: ShellUser;
   collapsed: boolean;
+  initialTextScale: TextScale;
   onToggleSidebar: () => void;
+  onContactSupport: () => void;
 }) {
   const t = useT();
   const role = roleOf(user);
@@ -30,7 +35,7 @@ export default function Header({
   return (
     <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b bg-card px-3 md:px-4">
       <div className="flex items-center gap-1">
-        <MobileNav role={role} />
+        <MobileNav role={role} onContactSupport={onContactSupport} />
         {/* Desktop only — on mobile the Sheet is the navigation. */}
         <Tooltip>
           <TooltipTrigger
@@ -67,7 +72,7 @@ export default function Header({
       <div className="flex items-center gap-2">
         {hasPermission(role, "activity:read") && <ActivityPopover />}
         {hasPermission(role, "company:switch") && <CompanySwitcher />}
-        <UserMenu user={user} />
+        <UserMenu user={user} initialTextScale={initialTextScale} />
       </div>
     </header>
   );

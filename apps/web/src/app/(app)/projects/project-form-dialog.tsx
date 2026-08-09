@@ -50,7 +50,7 @@ import { toast } from "@/lib/toast";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
-const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
+import { PROJECT_STATUSES, type ProjectFormValues } from "./project-form-values";
 
 const NOTES_MAX = 2000;
 
@@ -61,65 +61,6 @@ const NOTES_MAX = 2000;
  * remove a manager once assigned, which is how it used to be.
  */
 const UNASSIGNED = "unassigned";
-
-export type ProjectFormValues = {
-  code: string;
-  name: string;
-  client: string;
-  location: string;
-  status: (typeof PROJECT_STATUSES)[number];
-  managerId: string;
-  /** "" or "YYYY-MM-DD" — the shape the `date` columns use. */
-  startDate: string;
-  endDate: string;
-  /** Kept as text because that is what the control produces; coerced at submit. */
-  progress: string;
-  notes: string;
-};
-
-export const EMPTY_PROJECT: ProjectFormValues = {
-  code: "",
-  name: "",
-  client: "",
-  location: "",
-  status: "planning",
-  managerId: "",
-  startDate: "",
-  endDate: "",
-  progress: "0",
-  notes: "",
-};
-
-/**
- * A row from `project.list`/`project.get` as the form wants it. Exported so the
- * project detail can open this shared form without maintaining a second mapping
- * that drifts when fields are added.
- */
-export function projectToFormValues(row: {
-  code: string;
-  name: string;
-  client: string | null;
-  location: string | null;
-  status: (typeof PROJECT_STATUSES)[number];
-  managerId: string | null;
-  startDate: string | null;
-  endDate: string | null;
-  progress: number;
-  notes: string | null;
-}): ProjectFormValues {
-  return {
-    code: row.code,
-    name: row.name,
-    client: row.client ?? "",
-    location: row.location ?? "",
-    status: row.status,
-    managerId: row.managerId ?? "",
-    startDate: row.startDate ?? "",
-    endDate: row.endDate ?? "",
-    progress: String(row.progress),
-    notes: row.notes ?? "",
-  };
-}
 
 /**
  * An emptied field sends `null`, not `undefined`.

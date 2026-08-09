@@ -37,6 +37,7 @@ import {
   KeyRound,
   MoreHorizontal,
   PauseCircle,
+  Pencil,
   PlayCircle,
   ShieldMinus,
   ShieldPlus,
@@ -52,6 +53,7 @@ import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import CreateUserDialog from "./create-user-dialog";
+import RenameUserDialog, { type RenameTarget } from "./rename-user-dialog";
 import TempPasswordDialog, { type TempPasswordResult } from "./temp-password-dialog";
 
 const PAGE_SIZE = 25;
@@ -74,6 +76,7 @@ export default function UsersTable({
   const [tempPassword, setTempPassword] = useState<TempPasswordResult | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [companyTarget, setCompanyTarget] = useState<{ id: string; name: string } | null>(null);
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
 
   const debouncedSearch = useDebounced(search);
 
@@ -229,6 +232,17 @@ export default function UsersTable({
                           <MoreHorizontal />
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-52 bg-card">
+                          {actorRole === "super_admin" && (
+                            <DropdownMenuItem
+                              onClick={() =>
+                                setRenameTarget({ id: user.id, name: user.name, isSelf })
+                              }
+                            >
+                              <Pencil />
+                              {t.users.rename}
+                            </DropdownMenuItem>
+                          )}
+
                           <DropdownMenuItem
                             disabled={!manageable}
                             onClick={() =>
@@ -360,6 +374,14 @@ export default function UsersTable({
       </div>
 
       <TempPasswordDialog result={tempPassword} onClose={() => setTempPassword(null)} />
+
+      {renameTarget && (
+        <RenameUserDialog
+          key={renameTarget.id}
+          target={renameTarget}
+          onClose={() => setRenameTarget(null)}
+        />
+      )}
 
       {/* Moving an account between companies changes everything it can see, so
           it is an explicit pick rather than a cycle-through. */}

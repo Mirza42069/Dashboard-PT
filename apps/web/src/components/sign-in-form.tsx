@@ -4,6 +4,7 @@ import { Button } from "@DashboardV2/ui/components/button";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
 import { useForm } from "@tanstack/react-form";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useRef } from "react";
 import z from "zod";
@@ -17,6 +18,7 @@ import { toast } from "@/lib/toast";
 export default function SignInForm() {
   const t = useT();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const formRef = useRef<HTMLFormElement>(null);
   const searchParams = useSearchParams();
   // proxy.ts stores the page you were trying to reach here.
@@ -40,6 +42,7 @@ export default function SignInForm() {
         },
         {
           onSuccess: () => {
+            queryClient.clear();
             // Only same-origin paths — an attacker-supplied absolute URL in
             // ?next= would otherwise turn this into an open redirect.
             const target = next?.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";

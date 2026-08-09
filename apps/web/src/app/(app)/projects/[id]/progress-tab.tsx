@@ -17,7 +17,12 @@ import { useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
-import { MonthBandRow } from "@/components/month-band-row";
+import {
+  MatrixColumnSpacer,
+  MatrixRowSpacer,
+  useMatrixWindow,
+  WindowedMonthBandRow,
+} from "@/components/matrix-window";
 import { QueryError } from "@/components/query-error";
 import { statusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
@@ -44,6 +49,10 @@ import SCurveChart from "./s-curve-chart";
 
 /** Ties the chart to the table that carries its figures for assistive tech. */
 const SUMMARY_TABLE_ID = "period-summary";
+const ESTIMATED_ROW_HEIGHT = 52;
+const PERIOD_WIDTH = 96;
+const ESTIMATED_HEADER_HEIGHT = 96;
+const LEADING_WIDTH = 320;
 
 const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
 
@@ -74,8 +83,19 @@ export default function ProgressTab({
   const [saving, setSaving] = useState(false);
   /** Which period the workflow panel is showing. Null follows its own default. */
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
+  const [showFullMatrix, setShowFullMatrix] = useState(false);
 
   const reportQuery = useQuery(trpc.progress.report.queryOptions({ projectId }));
+  const matrixWindow = useMatrixWindow({
+    rowCount: scheduleRows(reportQuery.data?.items ?? []).length,
+    columnCount: reportQuery.data?.periods.length ?? 0,
+    estimatedRowHeight: ESTIMATED_ROW_HEIGHT,
+    columnWidth: PERIOD_WIDTH,
+    estimatedHeaderHeight: ESTIMATED_HEADER_HEIGHT,
+    leadingWidth: LEADING_WIDTH,
+    stickyLeadingWidth: LEADING_WIDTH,
+    windowed: !showFullMatrix,
+  });
   const bulkSave = useMutation(trpc.progress.bulkSave.mutationOptions());
 
   if (reportQuery.isPending) return <Skeleton className="h-64 w-full" />;
@@ -117,7 +137,17 @@ export default function ProgressTab({
   // someone is looking at and the figure they are about to quote cannot
   // disagree.
   const summary = buildPeriodSummary(rows, periods, cells, entries, dataDate);
-  const header = buildPeriodHeader(format, periods, dataDate);
+  const visibleRows = rows.slice(matrixWindow.rowWindow.start, matrixWindow.rowWindow.end);
+  const visiblePeriods = periods.slice(
+    matrixWindow.columnWindow.start,
+    matrixWindow.columnWindow.end,
+  );
+  const visibleHeader = buildPeriodHeader(format, visiblePeriods, dataDate);
+  const renderedColumnCount =
+    1 +
+    visiblePeriods.length +
+    Number(matrixWindow.columnWindow.beforeSize > 0) +
+    Number(matrixWindow.columnWindow.afterSize > 0);
   const contributors = delayContributors(rows, periods, cells, entries, dataDate);
 
   const chartData = periods.map((period, index) => ({
@@ -297,19 +327,30 @@ export default function ProgressTab({
                 <CardTitle>{t.progress.matrixTitle}</CardTitle>
                 <CardDescription>{t.progress.matrixHint}</CardDescription>
               </div>
-              {canEdit && drafts.size > 0 && (
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setDrafts(new Map())}>
-                    {t.progress.discard}
-                  </Button>
-                  <Button size="sm" disabled={saving} onClick={() => void save()}>
-                    <Save />
-                    {saving
-                      ? t.progress.saving
-                      : interpolate(t.progress.save, { count: drafts.size })}
-                  </Button>
-                </div>
-              )}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant={showFullMatrix ? "secondary" : "outline"}
+                  size="sm"
+                  aria-pressed={showFullMatrix}
+                  aria-controls="progress-matrix-table"
+                  onClick={() => setShowFullMatrix((current) => !current)}
+                >
+                  {t.common.fullTable}
+                </Button>
+                {canEdit && drafts.size > 0 && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => setDrafts(new Map())}>
+                      {t.progress.discard}
+                    </Button>
+                    <Button size="sm" disabled={saving} onClick={() => void save()}>
+                      <Save />
+                      {saving
+                        ? t.progress.saving
+                        : interpolate(t.progress.save, { count: drafts.size })}
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
           </CardHeader>
 
@@ -319,20 +360,63 @@ export default function ProgressTab({
                 aria-hidden
                 className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-card to-transparent"
               />
-              <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <MonthBandRow header={header} leadingLabel={t.schedule.line} />
+              <div
+                ref={matrixWindow.scrollRef}
+                role="region"
+                aria-label={t.progress.matrixTitle}
+                tabIndex={0}
+                onScroll={matrixWindow.onScroll}
+                className={`max-h-[36rem] max-w-[120rem] overflow-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
+                  showFullMatrix ? "" : "[overflow-anchor:none]"
+                }`}
+              >
+                <table
+                  id="progress-matrix-table"
+                  aria-rowcount={rows.length + 2}
+                  aria-colcount={periods.length + 1}
+                  className="table-fixed text-sm"
+                  style={{
+                    width: LEADING_WIDTH + periods.length * PERIOD_WIDTH,
+                    minWidth: "100%",
+                  }}
+                >
+                  <caption className="sr-only">
+                    {t.progress.matrixTitle}. {t.progress.matrixHint}
+                  </caption>
+                  <colgroup>
+                    <col style={{ width: LEADING_WIDTH }} />
+                    {matrixWindow.columnWindow.beforeSize > 0 && (
+                      <col style={{ width: matrixWindow.columnWindow.beforeSize }} />
+                    )}
+                    {visiblePeriods.map((period) => (
+                      <col key={period.id} style={{ width: PERIOD_WIDTH }} />
+                    ))}
+                    {matrixWindow.columnWindow.afterSize > 0 && (
+                      <col style={{ width: matrixWindow.columnWindow.afterSize }} />
+                    )}
+                  </colgroup>
+                  <thead>
+                  <WindowedMonthBandRow
+                    header={visibleHeader}
+                    leadingLabel={t.schedule.line}
+                    beforeSize={matrixWindow.columnWindow.beforeSize}
+                    afterSize={matrixWindow.columnWindow.afterSize}
+                  />
                   <tr className="border-b">
-                    <th className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium">
+                    <th
+                      className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium"
+                      style={{ width: LEADING_WIDTH }}
+                    >
                       <span className="sr-only">{t.schedule.line}</span>
                     </th>
-                    {header.columns.map((column) => (
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} header />
+                    {visibleHeader.columns.map((column, index) => (
                       <th
                         key={column.period.id}
                         scope="col"
+                        aria-colindex={matrixWindow.columnWindow.start + index + 2}
                         aria-current={column.isCurrent ? "true" : undefined}
-                        className={`min-w-24 px-2 py-2 text-right font-medium ${
+                        className={`w-24 px-2 py-2 text-right font-medium ${
                           column.isCurrent ? "border-b-2 border-b-[var(--chart-3)]" : ""
                         }`}
                       >
@@ -352,12 +436,24 @@ export default function ProgressTab({
                         )}
                       </th>
                     ))}
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} header />
                   </tr>
-                </thead>
+                  </thead>
 
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.leaf.id} className="border-b last:border-0">
+                  <tbody>
+                  <MatrixRowSpacer
+                    height={matrixWindow.rowWindow.beforeSize}
+                    colSpan={renderedColumnCount}
+                  />
+                  {visibleRows.map((row, visibleRowIndex) => {
+                    const rowIndex = matrixWindow.rowWindow.start + visibleRowIndex;
+                    return (
+                      <tr
+                        key={row.leaf.id}
+                        data-matrix-row-index={rowIndex}
+                        aria-rowindex={rowIndex + 3}
+                        className="border-b last:border-0"
+                      >
                       <th
                         scope="row"
                         className="sticky left-0 z-10 max-w-64 truncate bg-card px-4 py-1.5 text-left font-normal"
@@ -376,7 +472,8 @@ export default function ProgressTab({
                         </span>
                       </th>
 
-                      {header.columns.map(({ period, accessibleName }) => {
+                      <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
+                      {visibleHeader.columns.map(({ period, accessibleName }, index) => {
                         const key = cellKey(row.leaf.id, period.id);
                         // The workflow decides, not a status string compared in
                         // place — a submitted report is frozen for the reviewer
@@ -384,7 +481,11 @@ export default function ProgressTab({
                         const editable = canEdit && isEditable(period.status);
 
                         return (
-                          <td key={period.id} className="px-1 py-1">
+                          <td
+                            key={period.id}
+                            aria-colindex={matrixWindow.columnWindow.start + index + 2}
+                            className="px-1 py-1"
+                          >
                             {editable ? (
                               <Input
                                 type="number"
@@ -420,10 +521,16 @@ export default function ProgressTab({
                           </td>
                         );
                       })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
+                      </tr>
+                    );
+                  })}
+                  <MatrixRowSpacer
+                    height={matrixWindow.rowWindow.afterSize}
+                    colSpan={renderedColumnCount}
+                  />
+                  </tbody>
+                </table>
               </div>
             </div>
           </CardContent>

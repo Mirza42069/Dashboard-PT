@@ -1,4 +1,4 @@
-import { Button } from "@DashboardV2/ui/components/button";
+import { buttonVariants } from "@DashboardV2/ui/components/button";
 import {
   Empty,
   EmptyContent,
@@ -32,10 +32,10 @@ export default async function NotFound() {
         <EmptyContent>
           {/* Straight to /dashboard rather than /, which only exists to redirect
               here anyway (app/page.tsx) — no reason to spend a round trip. */}
-          <Button nativeButton={false} render={<Link href="/dashboard" />}>
+          <Link href="/dashboard" className={buttonVariants()}>
             <House />
             {t.common.backToDashboard}
-          </Button>
+          </Link>
         </EmptyContent>
       </Empty>
     </div>

@@ -3,13 +3,16 @@ import { cn } from "@DashboardV2/ui/lib/utils";
 
 import AppNav from "./app-nav";
 import { BrandMark } from "./brand";
+import SupportNavItem from "./support-nav-item";
 
 export default function AppSidebar({
   role,
   collapsed,
+  onContactSupport,
 }: {
   role: Role;
   collapsed: boolean;
+  onContactSupport: () => void;
 }) {
   return (
     <aside
@@ -53,6 +56,13 @@ export default function AppSidebar({
           nothing left for a padding transition to do. */}
       <div className="flex-1 overflow-y-auto px-3 py-3">
         <AppNav role={role} collapsed={collapsed} />
+      </div>
+      <div className="shrink-0 border-t px-3 py-3">
+        <SupportNavItem
+          role={role}
+          collapsed={collapsed}
+          onContactSupport={onContactSupport}
+        />
       </div>
     </aside>
   );

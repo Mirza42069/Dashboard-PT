@@ -93,9 +93,11 @@ export default function BoqTab({
   const reorder = useMutation(trpc.boq.reorderItems.mutationOptions());
 
   async function refresh() {
-    await queryClient.invalidateQueries(trpc.boq.pathFilter());
-    await queryClient.invalidateQueries(trpc.progress.pathFilter());
-    await queryClient.invalidateQueries(trpc.project.pathFilter());
+    await Promise.all([
+      queryClient.invalidateQueries(trpc.boq.pathFilter()),
+      queryClient.invalidateQueries(trpc.progress.pathFilter()),
+      queryClient.invalidateQueries(trpc.project.pathFilter()),
+    ]);
   }
 
   async function run(action: () => Promise<unknown>, successMessage: string) {

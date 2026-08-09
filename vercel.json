@@ -13,7 +13,7 @@
       "framework": "hono",
       "entrypoint": "server.mjs",
       "installCommand": "cd ../.. && bun install --frozen-lockfile",
-      "buildCommand": "bun run build && cp dist/index.mjs server.mjs",
+      "buildCommand": "bun run --filter @DashboardV2/db db:migrate && bun run build && cp dist/index.mjs server.mjs",
       "routes": [
         {
           "src": "/api/((?!auth(?:/|$)).*)",

@@ -13,14 +13,13 @@ import {
 import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent } from "@DashboardV2/ui/components/card";
 import { Checkbox } from "@DashboardV2/ui/components/checkbox";
-import { Input } from "@DashboardV2/ui/components/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@DashboardV2/ui/components/select";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@DashboardV2/ui/components/dropdown-menu";
+import { Input } from "@DashboardV2/ui/components/input";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import {
@@ -31,16 +30,24 @@ import {
   TableHeader,
   TableRow,
 } from "@DashboardV2/ui/components/table";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Loader2, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  Check,
+  ChevronDown,
+  Download,
+  Loader2,
+  Plus,
+  Trash2,
+} from "@DashboardV2/ui/components/icons";
 import type { Route } from "next";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
-import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { QueryError } from "@/components/query-error";
+import { InfiniteLoadMore } from "@/components/infinite-load-more";
 import { TableEmptyState } from "@/components/table-empty-state";
 import { StatusBadge, useStatusLabel } from "@/components/status-badge";
 import { interpolate, plural } from "@/i18n";
@@ -52,7 +59,9 @@ import { useFormat } from "@/lib/use-format";
 import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
-import ProjectFormDialog, { EMPTY_PROJECT } from "./project-form-dialog";
+import { EMPTY_PROJECT } from "./project-form-values";
+
+const ProjectFormDialog = dynamic(() => import("./project-form-dialog"));
 
 const PAGE_SIZE = 25;
 const STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
@@ -93,7 +102,6 @@ export default function ProjectsTable({
     const requested = searchParams.get("status");
     return requested && (STATUSES as readonly string[]).includes(requested) ? requested : ALL;
   });
-  const [page, setPage] = useState(0);
   const [formOpen, setFormOpen] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -109,25 +117,26 @@ export default function ProjectsTable({
   function clearFilters() {
     setSearch("");
     setStatus(ALL);
-    setPage(0);
   }
 
-  const projectsQuery = useQuery(
-    trpc.project.list.queryOptions({
-      search: debouncedSearch,
-      status: status === ALL ? undefined : (status as (typeof STATUSES)[number]),
-      limit: PAGE_SIZE,
-      offset: page * PAGE_SIZE,
-    }),
+  const projectsQuery = useInfiniteQuery(
+    trpc.project.list.infiniteQueryOptions(
+      {
+        search: debouncedSearch,
+        status: status === ALL ? undefined : (status as (typeof STATUSES)[number]),
+        limit: PAGE_SIZE,
+      },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
+    ),
   );
 
   const deleteMany = useMutation(trpc.project.deleteMany.mutationOptions());
 
-  const projects = projectsQuery.data?.projects ?? [];
-  const total = projectsQuery.data?.total ?? 0;
-  const hasNextPage = (page + 1) * PAGE_SIZE < total;
+  const projects = projectsQuery.data?.pages.flatMap((page) => page.projects) ?? [];
+  const total = projectsQuery.data?.pages[0]?.total ?? 0;
+  const initialError = projectsQuery.isError && projectsQuery.data === undefined;
 
-  const selection = useRowSelection(projects);
+  const selection = useRowSelection(projects, `${debouncedSearch}\u0000${status}`);
 
   function openCreate() {
     setFormOpen(true);
@@ -150,6 +159,11 @@ export default function ProjectsTable({
 
   async function confirmBulkDelete() {
     const ids = selection.selectedIds;
+    if (ids.length > 100) {
+      setBulkDeleteOpen(false);
+      toast.error(t.projects.bulkDeleteLimit);
+      return;
+    }
     try {
       // force, for the same reason as the single-row path: the dialog already
       // spells out that tickets go too.
@@ -164,52 +178,63 @@ export default function ProjectsTable({
 
   return (
     <>
+      <p role="status" aria-live="polite" className="sr-only">
+        {projectsQuery.isPending ? t.common.loading : ""}
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <Input
           value={search}
           onChange={(e) => {
             setSearch(e.target.value);
-            setPage(0);
           }}
           placeholder={t.projects.searchPlaceholder}
           className="w-full sm:max-w-xs"
           aria-label={t.common.search}
         />
-        <Select
-          items={statusOptions}
-          value={status}
-          onValueChange={(value) => {
-            setStatus(value ?? ALL);
-            setPage(0);
-          }}
-        >
-          <SelectTrigger className="w-40" aria-label={t.projects.statusLabel}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {statusOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="outline"
-                size="icon-sm"
-                aria-label={t.projects.exportLabel}
-                disabled={exporting}
-                onClick={() => void downloadSpreadsheet()}
-              />
-            }
-          >
-            {exporting ? <Loader2 className="animate-spin" /> : <Download />}
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{t.projects.exportLabel}</TooltipContent>
-        </Tooltip>
+        {selection.selectedCount > 0 && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label={t.projects.exportLabel}
+                  disabled={exporting}
+                  onClick={() => void downloadSpreadsheet()}
+                />
+              }
+            >
+              {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t.projects.exportLabel}</TooltipContent>
+          </Tooltip>
+        )}
+
+        {canDelete && selection.selectedCount > 0 && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="destructive"
+                  size="icon-sm"
+                  aria-label={plural(t.projects.deleteSelectedLabel, selection.selectedCount)}
+                  onClick={() => {
+                    if (selection.selectedCount > 100) {
+                      toast.error(t.projects.bulkDeleteLimit);
+                      return;
+                    }
+                    setBulkDeleteOpen(true);
+                  }}
+                />
+              }
+            >
+              <Trash2 />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {plural(t.projects.deleteSelectedLabel, selection.selectedCount)}
+            </TooltipContent>
+          </Tooltip>
+        )}
 
         {canCreate && (
           <Button size="sm" className="ml-auto" onClick={openCreate}>
@@ -219,18 +244,9 @@ export default function ProjectsTable({
         )}
       </div>
 
-      {canDelete && (
-        <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
-          <Button variant="outline" size="sm" onClick={() => setBulkDeleteOpen(true)}>
-            <Trash2 />
-            {t.common.deleteSelected}
-          </Button>
-        </BulkActionsBar>
-      )}
-
-      <Card>
+      <Card aria-busy={projectsQuery.isPending || projectsQuery.isFetchingNextPage}>
         <CardContent className="px-0">
-          <Table>
+          <Table className="min-w-[44rem] table-fixed">
             <TableHeader>
               <TableRow>
                 {canDelete && (
@@ -243,10 +259,33 @@ export default function ProjectsTable({
                     />
                   </TableHead>
                 )}
-                <TableHead className={canDelete ? undefined : "pl-4"}>{t.projects.project}</TableHead>
-                <TableHead>{t.projects.statusLabel}</TableHead>
-                <TableHead>{t.projects.client}</TableHead>
-                <TableHead className="pr-4">{t.projects.dueColumn}</TableHead>
+                <TableHead className={canDelete ? "w-[40%]" : "w-[45%] pl-4"}>
+                  {t.projects.project}
+                </TableHead>
+                <TableHead className="w-40">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={<Button variant="ghost" size="xs" className="-ml-2" />}
+                      aria-label={t.projects.statusLabel}
+                    >
+                      {t.projects.statusLabel}
+                      <ChevronDown />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-48 bg-card">
+                      {statusOptions.map((option) => (
+                        <DropdownMenuItem
+                          key={option.value}
+                          onClick={() => setStatus(option.value)}
+                        >
+                          <span className="flex-1">{option.label}</span>
+                          {status === option.value && <Check />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableHead>
+                <TableHead className="w-[25%]">{t.projects.client}</TableHead>
+                <TableHead className="w-32 pr-4">{t.projects.dueColumn}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -259,7 +298,7 @@ export default function ProjectsTable({
                   </TableRow>
                 ))}
 
-              {projectsQuery.isError && (
+              {initialError && (
                 <TableRow>
                   <TableCell colSpan={COLUMNS} className="p-4">
                     <QueryError
@@ -271,7 +310,7 @@ export default function ProjectsTable({
                 </TableRow>
               )}
 
-              {!projectsQuery.isPending && !projectsQuery.isError && projects.length === 0 && (
+              {!projectsQuery.isPending && !initialError && projects.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={COLUMNS} className="p-0">
                     <TableEmptyState
@@ -299,19 +338,21 @@ export default function ProjectsTable({
                       />
                     </TableCell>
                   )}
-                  <TableCell className={canDelete ? undefined : "pl-4"}>
+                  <TableCell className={canDelete ? "min-w-0" : "min-w-0 pl-4"}>
                     <Link
                       href={`/projects/${row.id}`}
-                      className="font-medium outline-none after:absolute after:inset-0 after:content-[''] hover:underline focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
+                      className="block truncate font-medium outline-none after:absolute after:inset-0 after:content-[''] hover:underline focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
                     >
                       {row.name}
                     </Link>
-                    <p className="font-mono text-muted-foreground">{row.code}</p>
+                    <p className="truncate font-mono text-muted-foreground">{row.code}</p>
                   </TableCell>
                   <TableCell>
                     <StatusBadge kind="project" value={row.status} />
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{row.client ?? "—"}</TableCell>
+                  <TableCell className="truncate text-muted-foreground">
+                    {row.client ?? "—"}
+                  </TableCell>
                   <TableCell className="pr-4 whitespace-nowrap text-muted-foreground">
                     {formatDate(row.endDate)}
                   </TableCell>
@@ -322,37 +363,18 @@ export default function ProjectsTable({
         </CardContent>
       </Card>
 
-      {total > 0 && (
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-xs text-muted-foreground">
-            {interpolate(t.projects.showing, {
-              from: page * PAGE_SIZE + 1,
-              to: page * PAGE_SIZE + projects.length,
-              total,
-            })}
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={page === 0}
-              onClick={() => setPage((value) => Math.max(0, value - 1))}
-            >
-              {t.common.previous}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!hasNextPage}
-              onClick={() => setPage((value) => value + 1)}
-            >
-              {t.common.next}
-            </Button>
-          </div>
-        </div>
+      {!initialError && (
+        <InfiniteLoadMore
+          hasNextPage={projectsQuery.hasNextPage}
+          isFetchingNextPage={projectsQuery.isFetchingNextPage}
+          isFetchNextPageError={projectsQuery.isFetchNextPageError}
+          loadedCount={projects.length}
+          total={total}
+          onLoadMore={() => void projectsQuery.fetchNextPage()}
+        />
       )}
 
-      {canCreate && (
+      {canCreate && formOpen && (
         <ProjectFormDialog
           // No `key` on purpose: the dialog resets itself from initialValues, so
           // remounting it would only throw away the mounted form to build an

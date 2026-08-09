@@ -328,6 +328,9 @@ export const NOTIFICATION_KINDS = [
   "report_submitted",
   "report_returned",
   "report_approved",
+  "support_accepted",
+  "support_replied",
+  "support_closed",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

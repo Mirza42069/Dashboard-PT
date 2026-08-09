@@ -11,7 +11,7 @@ import {
   AlertDialogTitle,
 } from "@DashboardV2/ui/components/alert-dialog";
 import { Badge } from "@DashboardV2/ui/components/badge";
-import { Button } from "@DashboardV2/ui/components/button";
+import { Button, buttonVariants } from "@DashboardV2/ui/components/button";
 import {
   Card,
   CardContent,
@@ -37,17 +37,19 @@ import {
   TableHeader,
   TableRow,
 } from "@DashboardV2/ui/components/table";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { QueryError } from "@/components/query-error";
-import { StatusBadge, useStatusLabel } from "@/components/status-badge";
+import { InfiniteLoadMore } from "@/components/infinite-load-more";
+import { useStatusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
@@ -55,6 +57,7 @@ import TicketDialog, { EMPTY_TICKET, type TicketFormValues } from "./ticket-dial
 
 const STATUSES = ["open", "in_progress", "resolved", "closed"] as const;
 const ALL = "all";
+const PAGE_SIZE = 25;
 
 type DialogState = { id: string | null; values: TicketFormValues };
 type DeleteTarget = { id: string; title: string };
@@ -69,8 +72,9 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const linkedRowRef = useRef<HTMLTableRowElement>(null);
   const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
+  const debouncedSearch = useDebounced(search);
   const [status, setStatus] = useState<string>(ALL);
+  const debouncedStatus = useDebounced(status);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
   const [pendingClose, setPendingClose] = useState<CloseTarget | null>(null);
@@ -81,21 +85,31 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
   }));
   const filterOptions = [{ value: ALL, label: t.common.all }, ...statusOptions];
 
-  const query = useQuery(
-    trpc.ticket.listByProject.queryOptions({
-      projectId,
-      search: deferredSearch,
-      status: status === ALL ? undefined : (status as (typeof STATUSES)[number]),
-    }),
+  const query = useInfiniteQuery(
+    trpc.ticket.listByProject.infiniteQueryOptions(
+      {
+        projectId,
+        search: debouncedSearch,
+        status:
+          debouncedStatus === ALL
+            ? undefined
+            : (debouncedStatus as (typeof STATUSES)[number]),
+        focusId: requestedAction ?? undefined,
+        limit: PAGE_SIZE,
+      },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
+    ),
   );
   const setTicketStatus = useMutation(trpc.ticket.setStatus.mutationOptions());
   const closeTicket = useMutation(trpc.ticket.close.mutationOptions());
   const deleteTicket = useMutation(trpc.ticket.delete.mutationOptions());
 
   async function refresh() {
-    await queryClient.invalidateQueries(trpc.ticket.pathFilter());
-    await queryClient.invalidateQueries(trpc.project.pathFilter());
-    await queryClient.invalidateQueries(trpc.activity.pathFilter());
+    await Promise.all([
+      queryClient.invalidateQueries(trpc.ticket.pathFilter()),
+      queryClient.invalidateQueries(trpc.project.pathFilter()),
+      queryClient.invalidateQueries(trpc.activity.pathFilter()),
+    ]);
   }
 
   async function changeStatus(id: string, next: (typeof STATUSES)[number]) {
@@ -135,12 +149,12 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
     }
   }
 
-  const rows = query.data?.tickets ?? [];
-  const orderedRows = requestedAction
-    ? [...rows].sort((a, b) => Number(b.id === requestedAction) - Number(a.id === requestedAction))
-    : rows;
+  const rows = query.data?.pages.flatMap((page) => page.tickets) ?? [];
+  const total = query.data?.pages[0]?.total ?? 0;
+  const counts = query.data?.pages[0]?.counts;
+  const initialError = query.isError && query.data === undefined;
   const requestedActionFound = rows.some((row) => row.id === requestedAction);
-  const filtering = search.trim() !== "" || status !== ALL;
+  const filtering = debouncedSearch !== "" || debouncedStatus !== ALL;
 
   useEffect(() => {
     if (requestedActionFound) linkedRowRef.current?.focus();
@@ -148,7 +162,10 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <Card>
+      <p role="status" aria-live="polite" className="sr-only">
+        {query.isPending ? t.common.loading : ""}
+      </p>
+      <Card aria-busy={query.isPending || query.isFetchingNextPage}>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle>{t.tickets.title}</CardTitle>
@@ -163,6 +180,7 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
               onChange={(event) => setSearch(event.target.value)}
               placeholder={t.tickets.searchPlaceholder}
               className="w-full sm:max-w-xs"
+              aria-label={t.common.search}
             />
             <Select items={filterOptions} value={status} onValueChange={(value) => setStatus(value ?? ALL)}>
               <SelectTrigger className="w-40" aria-label={t.tickets.statusColumn}>
@@ -173,7 +191,7 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}
                     {option.value !== ALL &&
-                      ` (${query.data?.counts[option.value as (typeof STATUSES)[number]] ?? 0})`}
+                      ` (${counts?.[option.value as (typeof STATUSES)[number]] ?? 0})`}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -181,17 +199,15 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
           </div>
         </CardHeader>
         <CardContent className="px-0">
-          {!query.isPending && !query.isError && requestedAction && !requestedActionFound && (
+          {!query.isPending && !initialError && requestedAction && !requestedActionFound && (
             <div role="status" className="mx-4 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/35 bg-muted/30 p-3">
               <p className="text-sm">{t.actions.linkedActionMissing}</p>
-              <Button
-                nativeButton={false}
-                variant="outline"
-                size="sm"
-                render={<Link href={`/projects/${projectId}?tab=tickets`} />}
+              <Link
+                href={`/projects/${projectId}?tab=tickets`}
+                className={buttonVariants({ variant: "outline", size: "sm" })}
               >
                 {t.actions.showAll}
-              </Button>
+              </Link>
             </div>
           )}
           <Table>
@@ -214,21 +230,21 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                     </TableCell>
                   </TableRow>
                 ))}
-              {query.isError && (
+              {initialError && (
                 <TableRow>
                   <TableCell colSpan={6} className="p-4">
                     <QueryError error={query.error} onRetry={() => void query.refetch()} />
                   </TableCell>
                 </TableRow>
               )}
-              {!query.isPending && !query.isError && rows.length === 0 && (
+              {!query.isPending && !initialError && rows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
                     {filtering ? t.tickets.noMatch : t.tickets.empty}
                   </TableCell>
                 </TableRow>
               )}
-              {orderedRows.map((row) => (
+              {rows.map((row) => (
                 <TableRow
                   key={row.id}
                   ref={row.id === requestedAction ? linkedRowRef : undefined}
@@ -340,6 +356,17 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
           </Table>
         </CardContent>
       </Card>
+
+      {!initialError && (
+        <InfiniteLoadMore
+          hasNextPage={query.hasNextPage}
+          isFetchingNextPage={query.isFetchingNextPage}
+          isFetchNextPageError={query.isFetchNextPageError}
+          loadedCount={rows.length}
+          total={total}
+          onLoadMore={() => void query.fetchNextPage()}
+        />
+      )}
 
       {dialog && (
         <TicketDialog

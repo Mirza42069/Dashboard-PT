@@ -2,6 +2,7 @@
 
 import { Button } from "@DashboardV2/ui/components/button";
 import { LogOut } from "@DashboardV2/ui/components/icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
 import { useT } from "@/i18n/provider";
@@ -15,6 +16,7 @@ import { authClient } from "@/lib/auth-client";
 export default function SignOutButton({ className }: { className?: string }) {
   const t = useT();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
   return (
     <Button
@@ -25,6 +27,7 @@ export default function SignOutButton({ className }: { className?: string }) {
         authClient.signOut({
           fetchOptions: {
             onSuccess: () => {
+              queryClient.clear();
               router.push("/login");
               router.refresh();
             },

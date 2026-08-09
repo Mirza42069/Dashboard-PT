@@ -148,6 +148,20 @@
       "when": 1785945600000,
       "tag": "0020_project_access_invariants",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1786276902257,
+      "tag": "0021_needy_catseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1786281118588,
+      "tag": "0022_purple_stick",
+      "breakpoints": true
     }
   ]
 }

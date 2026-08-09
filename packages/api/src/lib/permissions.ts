@@ -23,6 +23,8 @@ export const PERMISSIONS = [
   "company:switch",
   /** Create/reset-password/ban/delete accounts. Scope (which accounts) is enforced separately. */
   "user:manage",
+  /** Rename any account in the global directory. Reserved for System accounts. */
+  "user:rename",
   /** Promote/demote a role. */
   "user:setRole",
   /** Move an account to a different company. */
@@ -43,6 +45,8 @@ export const PERMISSIONS = [
   /** Assign users to a project's member list. */
   "member:manage",
   "activity:read",
+  /** Manage the global support inbox. Reserved for System accounts. */
+  "support:manage",
   /**
    * Judge a submitted progress report: mark it reviewed, approve it, or send it
    * back. Deliberately separate from `project:write` — the point of the
@@ -67,6 +71,8 @@ const GRANTS: Record<Role, readonly Permission[]> = {
     (p) =>
       p !== "company:manage" &&
       p !== "company:switch" &&
+      p !== "user:rename" &&
+      p !== "support:manage" &&
       p !== "user:setRole" &&
       p !== "user:setCompany",
   ),

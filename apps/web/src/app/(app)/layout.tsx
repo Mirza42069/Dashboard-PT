@@ -1,12 +1,13 @@
 import AppShell from "@/components/app-shell";
 import { requireSession } from "@/lib/session";
 import { getSidebarCollapsed } from "@/lib/sidebar";
+import { getTextScale } from "@/lib/text-scale";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // Authoritative gate for every page in this group. proxy.ts only checks that
   // a session cookie exists; this verifies it actually resolves.
   const session = await requireSession();
-  const collapsed = await getSidebarCollapsed();
+  const [collapsed, textScale] = await Promise.all([getSidebarCollapsed(), getTextScale()]);
 
   return (
     <AppShell
@@ -21,6 +22,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         role: session.user.role ?? "user",
       }}
       initialCollapsed={collapsed}
+      initialTextScale={textScale}
     >
       {children}
     </AppShell>

@@ -4,10 +4,13 @@ import { roleOf } from "@DashboardV2/api/lib/permissions";
 import { useState } from "react";
 
 import { writeSidebarCookie } from "@/lib/sidebar";
+import type { TextScale } from "@/lib/text-scale";
 
 import AppSidebar from "./app-sidebar";
+import ContactSupportDialog from "./contact-support-dialog";
 import Header from "./header";
 import SkipLink from "./skip-link";
+import SupportNoticeDialog from "./support-notice-dialog";
 
 export type ShellUser = { name: string; email: string; role: string };
 
@@ -19,13 +22,16 @@ export type ShellUser = { name: string; email: string; role: string };
 export default function AppShell({
   user,
   initialCollapsed,
+  initialTextScale,
   children,
 }: {
   user: ShellUser;
   initialCollapsed: boolean;
+  initialTextScale: TextScale;
   children: React.ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
+  const [supportOpen, setSupportOpen] = useState(false);
   const role = roleOf(user);
 
   function toggle() {
@@ -43,9 +49,19 @@ export default function AppShell({
     <div className="flex h-svh overflow-x-hidden">
       {/* First in the DOM so it is the first thing Tab reaches. */}
       <SkipLink />
-      <AppSidebar role={role} collapsed={collapsed} />
+      <AppSidebar
+        role={role}
+        collapsed={collapsed}
+        onContactSupport={() => setSupportOpen(true)}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header user={user} collapsed={collapsed} onToggleSidebar={toggle} />
+        <Header
+          user={user}
+          collapsed={collapsed}
+          initialTextScale={initialTextScale}
+          onToggleSidebar={toggle}
+          onContactSupport={() => setSupportOpen(true)}
+        />
         {/* tabIndex={-1} so the skip link can actually land focus here; without
             it the browser scrolls to #main but focus stays on the link, and the
             next Tab goes back into the sidebar. */}
@@ -53,6 +69,10 @@ export default function AppShell({
           {children}
         </main>
       </div>
+      {role !== "super_admin" && (
+        <ContactSupportDialog open={supportOpen} onOpenChange={setSupportOpen} />
+      )}
+      {role !== "super_admin" && <SupportNoticeDialog enabled={!supportOpen} />}
     </div>
   );
 }

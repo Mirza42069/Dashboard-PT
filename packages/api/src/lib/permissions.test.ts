@@ -15,10 +15,15 @@ describe("role permissions", () => {
     expect(hasPermission("admin", "activity:read")).toBe(true);
     expect(hasPermission("admin", "progress:review")).toBe(true);
     expect(hasPermission("admin", "company:switch")).toBe(false);
+    expect(hasPermission("admin", "user:rename")).toBe(false);
+    expect(hasPermission("admin", "support:manage")).toBe(false);
+    expect(hasPermission("user", "support:manage")).toBe(false);
   });
 
   test("system accounts control every permission", () => {
     expect(hasPermission("super_admin", "company:switch")).toBe(true);
     expect(hasPermission("super_admin", "company:manage")).toBe(true);
+    expect(hasPermission("super_admin", "user:rename")).toBe(true);
+    expect(hasPermission("super_admin", "support:manage")).toBe(true);
   });
 });

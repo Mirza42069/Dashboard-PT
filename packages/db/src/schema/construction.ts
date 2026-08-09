@@ -173,6 +173,7 @@ export const project = pgTable(
     index("project_status_idx").on(table.status),
     index("project_managerId_idx").on(table.managerId),
     index("project_companyId_idx").on(table.companyId),
+    index("project_company_created_id_idx").on(table.companyId, table.createdAt, table.id),
     unique("project_companyId_code_key").on(table.companyId, table.code),
   ],
 );
@@ -245,6 +246,7 @@ export const ticket = pgTable(
   },
   (table) => [
     index("ticket_projectId_idx").on(table.projectId),
+    index("ticket_project_created_id_idx").on(table.projectId, table.createdAt, table.id),
     index("ticket_issuerId_idx").on(table.issuerId),
     index("ticket_status_idx").on(table.status),
     index("ticket_assigneeId_idx").on(table.assigneeId),

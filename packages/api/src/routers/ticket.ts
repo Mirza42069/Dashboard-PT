@@ -15,12 +15,18 @@ import {
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, isNotNull, ne, or, sql } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
+import {
+  createdAtCursorCondition,
+  createdAtCursorSchema,
+  exactCursorTimestamp,
+} from "../lib/created-at-cursor";
+import { pageWithFocus } from "../lib/focused-page";
 import { roleOf } from "../lib/permissions";
 import {
   assertMember,
@@ -45,6 +51,9 @@ import {
  */
 
 const statusSchema = z.enum(TICKET_STATUSES);
+const focusedCreatedAtCursorSchema = createdAtCursorSchema.extend({
+  inclusive: z.literal(true).optional(),
+});
 const contactSchema = z
   .string()
   .trim()
@@ -170,6 +179,9 @@ export const ticketRouter = router({
         assigneeId: z.string().min(1).optional(),
         /** Open actions whose due date has passed. */
         overdue: z.boolean().optional(),
+        limit: z.number().int().min(1).max(100).default(25),
+        cursor: focusedCreatedAtCursorSchema.optional(),
+        focusId: z.string().min(1).optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -198,28 +210,73 @@ export const ticketRouter = router({
             )
           : undefined,
       ];
+      const filteredWhere = and(...filters);
 
-      const [rows, counts] = await Promise.all([
+      const pageWhere = and(
+        filteredWhere,
+        input.focusId ? ne(ticket.id, input.focusId) : undefined,
+        input.cursor
+          ? createdAtCursorCondition(
+              ticket.createdAt,
+              ticket.id,
+              input.cursor,
+              input.cursor.inclusive,
+            )
+          : undefined,
+      );
+
+      const [rows, counts, [total], focusedRows] = await Promise.all([
         db
-          .select()
+          .select({
+            row: ticket,
+            cursorCreatedAt: exactCursorTimestamp(ticket.createdAt),
+          })
           .from(ticket)
-          .where(and(...filters))
-          .orderBy(desc(ticket.createdAt)),
-        db
-          .select({ status: ticket.status, value: count() })
-          .from(ticket)
-          .where(eq(ticket.projectId, input.projectId))
-          .groupBy(ticket.status),
+          .where(pageWhere)
+          .orderBy(desc(ticket.createdAt), desc(ticket.id))
+          .limit(input.limit + 1),
+        input.cursor
+          ? Promise.resolve([])
+          : db
+              .select({ status: ticket.status, value: count() })
+              .from(ticket)
+              .where(eq(ticket.projectId, input.projectId))
+              .groupBy(ticket.status),
+        input.cursor
+          ? Promise.resolve([])
+          : db.select({ value: count() }).from(ticket).where(filteredWhere),
+        input.focusId && !input.cursor
+          ? db
+              .select({
+                row: ticket,
+                cursorCreatedAt: exactCursorTimestamp(ticket.createdAt),
+              })
+              .from(ticket)
+              .where(and(filteredWhere, eq(ticket.id, input.focusId)))
+              .limit(1)
+          : Promise.resolve([]),
       ]);
 
+      const page = pageWithFocus(rows, focusedRows[0], input.limit);
+
       return {
-        tickets: rows,
-        counts: Object.fromEntries(
-          TICKET_STATUSES.map((status) => [
-            status,
-            counts.find((row) => row.status === status)?.value ?? 0,
-          ]),
-        ) as Record<(typeof TICKET_STATUSES)[number], number>,
+        tickets: page.items.map(({ row }) => row),
+        total: total?.value ?? null,
+        counts: input.cursor
+          ? null
+          : (Object.fromEntries(
+              TICKET_STATUSES.map((status) => [
+                status,
+                counts.find((row) => row.status === status)?.value ?? 0,
+              ]),
+            ) as Record<(typeof TICKET_STATUSES)[number], number>),
+        nextCursor: page.next
+          ? {
+              createdAt: page.next.row.cursorCreatedAt,
+              id: page.next.row.row.id,
+              ...(page.next.inclusive ? { inclusive: true as const } : {}),
+            }
+          : null,
       };
     }),
 

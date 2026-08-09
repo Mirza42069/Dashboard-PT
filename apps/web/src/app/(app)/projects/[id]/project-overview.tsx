@@ -1,6 +1,5 @@
 "use client";
 
-import { scheduleRows } from "@DashboardV2/api/lib/curves";
 import {
   Card,
   CardContent,
@@ -52,7 +51,9 @@ type WorkStage = {
 export default function ProjectOverview({ project }: { project: OverviewProject }) {
   const t = useT();
   const { money, percent, formatDate } = useFormat();
-  const reportQuery = useQuery(trpc.progress.report.queryOptions({ projectId: project.id }));
+  const workStagesQuery = useQuery(
+    trpc.progress.workStages.queryOptions({ projectId: project.id }),
+  );
   const complete = Math.min(100, Math.max(0, project.progressPercent));
   const cadence = {
     weekly: t.projects.periodWeekly,
@@ -68,7 +69,7 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
           <CardDescription>{t.projects.workStagesHint}</CardDescription>
         </CardHeader>
         <CardContent>
-          {reportQuery.isPending && (
+          {workStagesQuery.isPending && (
             <div className="space-y-3">
               {Array.from({ length: 6 }, (_, index) => (
                 <Skeleton key={index} className="h-10 w-full" />
@@ -76,20 +77,16 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
             </div>
           )}
 
-          {reportQuery.isError && (
+          {workStagesQuery.isError && (
             <QueryError
-              error={reportQuery.error}
-              onRetry={() => void reportQuery.refetch()}
+              error={workStagesQuery.error}
+              onRetry={() => void workStagesQuery.refetch()}
               className="border-0 px-2 py-8"
             />
           )}
 
-          {!reportQuery.isPending && !reportQuery.isError && (
-            <WorkStageList
-              stages={
-                reportQuery.data?.version ? buildWorkStages(reportQuery.data) : []
-              }
-            />
+          {!workStagesQuery.isPending && !workStagesQuery.isError && (
+            <WorkStageList stages={workStagesQuery.data ?? []} />
           )}
         </CardContent>
       </Card>
@@ -228,75 +225,6 @@ function WorkStageList({ stages }: { stages: WorkStage[] }) {
       })}
     </ol>
   );
-}
-
-function buildWorkStages(report: {
-  project: { dataDate: string | null };
-  items: Array<{
-    id: string;
-    parentId: string | null;
-    code: string;
-    description: string;
-    weight: number;
-    sortOrder: number;
-  }>;
-  periods: Array<{ id: string; periodIndex: number; endDate: string }>;
-  entries: Array<{
-    boqItemId: string;
-    periodId: string;
-    pctComplete: number;
-    cumulativeQuantity: number | null;
-    cumulativePercent: number | null;
-  }>;
-}): WorkStage[] {
-  const rows = scheduleRows(report.items);
-  const periods = new Map(report.periods.map((period) => [period.id, period]));
-  const latest = new Map<string, { periodIndex: number; progress: number }>();
-
-  for (const entry of report.entries) {
-    if (entry.cumulativeQuantity === null && entry.cumulativePercent === null) continue;
-    const period = periods.get(entry.periodId);
-    if (!period || (report.project.dataDate && period.endDate > report.project.dataDate)) continue;
-    const current = latest.get(entry.boqItemId);
-    if (!current || period.periodIndex > current.periodIndex) {
-      latest.set(entry.boqItemId, {
-        periodIndex: period.periodIndex,
-        progress: entry.pctComplete,
-      });
-    }
-  }
-
-  const stages = new Map<
-    string,
-    { name: string; weight: number; completed: number; hasReading: boolean }
-  >();
-  for (const row of rows) {
-    const stage = stages.get(row.sectionId) ?? {
-      name: row.section,
-      weight: 0,
-      completed: 0,
-      hasReading: false,
-    };
-    const reading = latest.get(row.leaf.id);
-    stage.weight += row.leaf.weight;
-    stage.completed += (row.leaf.weight * (reading?.progress ?? 0)) / 100;
-    stage.hasReading ||= reading !== undefined;
-    stages.set(row.sectionId, stage);
-  }
-
-  return [...stages].map(([id, stage]) => {
-    const progress = stage.weight > 0 ? (stage.completed / stage.weight) * 100 : 0;
-    return {
-      id,
-      name: stage.name,
-      progress,
-      state: !stage.hasReading || progress === 0
-        ? "not_started"
-        : progress >= 99.95
-          ? "complete"
-          : "in_progress",
-    };
-  });
 }
 
 function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {

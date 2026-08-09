@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { BRAND_NAME } from "@/components/brand";
 import { getDictionary, getLocale } from "@/i18n";
 import { requireSession } from "@/lib/session";
+import { getQueryClient, getTRPC, HydrateClient } from "@/utils/trpc-server";
 
 import ProjectsTable from "./projects-table";
 
@@ -12,21 +13,41 @@ export async function generateMetadata(): Promise<Metadata> {
   return { title: `${dict.projects.title} - ${BRAND_NAME}` };
 }
 
-export default async function ProjectsPage() {
+const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
+
+export default async function ProjectsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string | string[] }>;
+}) {
   const session = await requireSession();
   const dict = getDictionary(await getLocale());
   const role = roleOf(session.user);
+  const requestedStatus = (await searchParams).status;
+  const statusValue = Array.isArray(requestedStatus) ? requestedStatus[0] : requestedStatus;
+  const status = PROJECT_STATUSES.find((value) => value === statusValue);
+  const queryClient = getQueryClient();
+  const trpc = getTRPC();
+
+  await queryClient.prefetchInfiniteQuery(
+    trpc.project.list.infiniteQueryOptions(
+      { search: "", status, limit: 25 },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
+    ),
+  );
 
   return (
-    <div className="space-y-4 p-4 md:p-6">
-      <h1 className="sr-only">{dict.projects.title}</h1>
+    <HydrateClient>
+      <div className="space-y-4 p-4 md:p-6">
+        <h1 className="sr-only">{dict.projects.title}</h1>
 
-      <ProjectsTable
-        canCreate={hasPermission(role, "project:create")}
-        canDelete={hasPermission(role, "project:delete")}
-        canManageMembers={hasPermission(role, "member:manage")}
-        currentUserId={session.user.id}
-      />
-    </div>
+        <ProjectsTable
+          canCreate={hasPermission(role, "project:create")}
+          canDelete={hasPermission(role, "project:delete")}
+          canManageMembers={hasPermission(role, "member:manage")}
+          currentUserId={session.user.id}
+        />
+      </div>
+    </HydrateClient>
   );
 }

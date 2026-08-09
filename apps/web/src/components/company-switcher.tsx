@@ -43,7 +43,7 @@ export default function CompanySwitcher() {
     writeCompanyCookie(companyId);
     // The cookie changes what every query resolves to, so nothing cached under
     // the old company may survive — and server components need re-rendering too.
-    await queryClient.invalidateQueries();
+    queryClient.clear();
     router.refresh();
     setPending(false);
   }

@@ -12,7 +12,7 @@ import {
 } from "@DashboardV2/db/schema";
 import type { ActivityAction, PeriodStatus } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { aliasedTable, and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { aliasedTable, and, asc, desc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
@@ -29,6 +29,7 @@ import {
   stampFor,
 } from "../lib/progress-workflow";
 import { assertProjectAccess, type ProjectScopeCtx } from "../lib/scope";
+import { aggregateWorkStages } from "../lib/work-stages";
 
 /**
  * Three aliases of `user`, because one period names up to three different
@@ -205,6 +206,70 @@ async function periodCompleteness(projectId: string, periodId: string) {
 }
 
 export const progressRouter = router({
+  /** Top-level baseline progress for the project overview, without the report matrix. */
+  workStages: companyPermissionProcedure("project:read")
+    .input(z.object({ projectId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      await assertProjectAccess(ctx, input.projectId);
+
+      const [[target], [active]] = await Promise.all([
+        db.select({ dataDate: project.dataDate }).from(project).where(eq(project.id, input.projectId)),
+        db
+          .select({ id: boqVersion.id })
+          .from(boqVersion)
+          .where(and(eq(boqVersion.projectId, input.projectId), eq(boqVersion.status, "active")))
+          .limit(1),
+      ]);
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+      }
+      if (!active) return [];
+
+      const [items, latestReadings] = await Promise.all([
+        db
+          .select({
+            id: boqItem.id,
+            parentId: boqItem.parentId,
+            code: boqItem.code,
+            description: boqItem.description,
+            weight: boqItem.weight,
+            sortOrder: boqItem.sortOrder,
+          })
+          .from(boqItem)
+          .where(and(eq(boqItem.boqVersionId, active.id), isNull(boqItem.deletedAt))),
+        target.dataDate
+          ? db
+              .selectDistinctOn([progressEntry.boqItemId], {
+                boqItemId: progressEntry.boqItemId,
+                pctComplete: progressEntry.pctComplete,
+              })
+              .from(progressEntry)
+              .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
+              .innerJoin(reportingPeriod, eq(reportingPeriod.id, progressEntry.periodId))
+              .where(
+                and(
+                  eq(boqItem.boqVersionId, active.id),
+                  isNull(boqItem.deletedAt),
+                  lte(reportingPeriod.endDate, target.dataDate),
+                  or(
+                    isNotNull(progressEntry.cumulativeQuantity),
+                    isNotNull(progressEntry.cumulativePercent),
+                  ),
+                ),
+              )
+              .orderBy(progressEntry.boqItemId, desc(reportingPeriod.periodIndex))
+          : Promise.resolve([]),
+      ]);
+
+      return aggregateWorkStages(
+        items.map((item) => ({ ...item, weight: toAmount(item.weight) })),
+        latestReadings.map((reading) => ({
+          boqItemId: reading.boqItemId,
+          pctComplete: toAmount(reading.pctComplete),
+        })),
+      );
+    }),
+
   /**
    * Everything the BoQ, schedule and progress tabs need, in one round trip.
    *

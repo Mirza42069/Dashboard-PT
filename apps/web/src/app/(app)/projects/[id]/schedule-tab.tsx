@@ -35,7 +35,12 @@ import { useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
-import { MonthBandRow } from "@/components/month-band-row";
+import {
+  MatrixColumnSpacer,
+  MatrixRowSpacer,
+  useMatrixWindow,
+  WindowedMonthBandRow,
+} from "@/components/matrix-window";
 import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
@@ -52,6 +57,12 @@ const ROW_TOLERANCE = 0.5;
 const LEADING_COLUMNS = 6;
 /** Columns after it: row total and the row menu. */
 const TRAILING_COLUMNS = 2;
+const ESTIMATED_ROW_HEIGHT = 44;
+const PERIOD_WIDTH = 80;
+const ESTIMATED_HEADER_HEIGHT = 72;
+const LEADING_WIDTH = 648;
+const STICKY_LEADING_WIDTH = 40;
+const TRAILING_WIDTH = 168;
 
 const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
 
@@ -83,10 +94,21 @@ export default function ScheduleTab({
   const [bulkPlan, setBulkPlan] = useState<PlanDraft>({ start: "", finish: "" });
   const [saving, setSaving] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [showFullMatrix, setShowFullMatrix] = useState(false);
 
   const reportQuery = useQuery(
     trpc.progress.report.queryOptions({ projectId, versionId: targetVersionId }),
   );
+  const matrixWindow = useMatrixWindow({
+    rowCount: scheduleRows(reportQuery.data?.items ?? []).length,
+    columnCount: reportQuery.data?.periods.length ?? 0,
+    estimatedRowHeight: ESTIMATED_ROW_HEIGHT,
+    columnWidth: PERIOD_WIDTH,
+    estimatedHeaderHeight: ESTIMATED_HEADER_HEIGHT,
+    leadingWidth: LEADING_WIDTH,
+    stickyLeadingWidth: STICKY_LEADING_WIDTH,
+    windowed: !showFullMatrix,
+  });
   const generatePeriods = useMutation(trpc.schedule.generatePeriods.mutationOptions());
   const setCells = useMutation(trpc.schedule.setDistributionCells.mutationOptions());
   const setItemPlan = useMutation(trpc.schedule.setItemPlan.mutationOptions());
@@ -176,7 +198,22 @@ export default function ScheduleTab({
   }
 
   const rows = scheduleRows(items);
-  const header = buildPeriodHeader(format, periods, report?.project.dataDate ?? null);
+  const visibleRows = rows.slice(matrixWindow.rowWindow.start, matrixWindow.rowWindow.end);
+  const visiblePeriods = periods.slice(
+    matrixWindow.columnWindow.start,
+    matrixWindow.columnWindow.end,
+  );
+  const visibleHeader = buildPeriodHeader(
+    format,
+    visiblePeriods,
+    report?.project.dataDate ?? null,
+  );
+  const renderedColumnCount =
+    LEADING_COLUMNS +
+    visiblePeriods.length +
+    TRAILING_COLUMNS +
+    Number(matrixWindow.columnWindow.beforeSize > 0) +
+    Number(matrixWindow.columnWindow.afterSize > 0);
   const firstIndex = periods[0]?.periodIndex ?? 1;
   const lastIndex = periods[periods.length - 1]?.periodIndex ?? 1;
 
@@ -211,8 +248,10 @@ export default function ScheduleTab({
   }
 
   async function refresh() {
-    await queryClient.invalidateQueries(trpc.progress.pathFilter());
-    await queryClient.invalidateQueries(trpc.schedule.pathFilter());
+    await Promise.all([
+      queryClient.invalidateQueries(trpc.progress.pathFilter()),
+      queryClient.invalidateQueries(trpc.schedule.pathFilter()),
+    ]);
   }
 
   /**
@@ -406,34 +445,41 @@ export default function ScheduleTab({
                 {editable ? t.schedule.planHint : t.schedule.lockedNote}
               </CardDescription>
             </div>
-            {editable && (
-              <div className="flex flex-wrap gap-2">
-                {drafts.size > 0 && (
-                  <>
-                    <Button variant="outline" size="sm" onClick={() => setDrafts(new Map())}>
-                      {t.schedule.discard}
-                    </Button>
-                    <Button
-                      size="sm"
-                      disabled={saving}
-                      onClick={() => void save(setupMode ? onReview : undefined)}
-                    >
-                      <Save />
-                      {saving
-                        ? t.schedule.saving
-                        : setupMode
-                          ? t.baseline.saveReview
-                          : interpolate(t.schedule.save, { count: drafts.size })}
-                    </Button>
-                  </>
-                )}
-                {setupMode && drafts.size === 0 && onReview && (
-                  <Button size="sm" disabled={!allComplete} onClick={onReview}>
-                    {t.baseline.reviewBaseline}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant={showFullMatrix ? "secondary" : "outline"}
+                size="sm"
+                aria-pressed={showFullMatrix}
+                aria-controls="schedule-matrix-table"
+                onClick={() => setShowFullMatrix((current) => !current)}
+              >
+                {t.common.fullTable}
+              </Button>
+              {editable && drafts.size > 0 && (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => setDrafts(new Map())}>
+                    {t.schedule.discard}
                   </Button>
-                )}
-              </div>
-            )}
+                  <Button
+                    size="sm"
+                    disabled={saving}
+                    onClick={() => void save(setupMode ? onReview : undefined)}
+                  >
+                    <Save />
+                    {saving
+                      ? t.schedule.saving
+                      : setupMode
+                        ? t.baseline.saveReview
+                        : interpolate(t.schedule.save, { count: drafts.size })}
+                  </Button>
+                </>
+              )}
+              {editable && setupMode && drafts.size === 0 && onReview && (
+                <Button size="sm" disabled={!allComplete} onClick={onReview}>
+                  {t.baseline.reviewBaseline}
+                </Button>
+              )}
+            </div>
           </div>
         </CardHeader>
 
@@ -444,17 +490,62 @@ export default function ScheduleTab({
               aria-hidden
               className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-card to-transparent"
             />
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div
+              ref={matrixWindow.scrollRef}
+              role="region"
+              aria-label={t.schedule.title}
+              tabIndex={0}
+              onScroll={matrixWindow.onScroll}
+              className={`max-h-[36rem] max-w-[120rem] overflow-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
+                showFullMatrix ? "" : "[overflow-anchor:none]"
+              }`}
+            >
+              <table
+                id="schedule-matrix-table"
+                aria-rowcount={rows.length + 4}
+                aria-colcount={LEADING_COLUMNS + periods.length + TRAILING_COLUMNS}
+                className="table-fixed text-sm"
+                style={{
+                  width: LEADING_WIDTH + periods.length * PERIOD_WIDTH + TRAILING_WIDTH,
+                  minWidth: "100%",
+                }}
+              >
+                <caption className="sr-only">
+                  {t.schedule.title}. {t.schedule.planHint}
+                </caption>
+                <colgroup>
+                  <col style={{ width: 40 }} />
+                  <col style={{ width: 256 }} />
+                  <col style={{ width: 72 }} />
+                  <col style={{ width: 72 }} />
+                  <col style={{ width: 96 }} />
+                  <col style={{ width: 112 }} />
+                  {matrixWindow.columnWindow.beforeSize > 0 && (
+                    <col style={{ width: matrixWindow.columnWindow.beforeSize }} />
+                  )}
+                  {visiblePeriods.map((period) => (
+                    <col key={period.id} style={{ width: PERIOD_WIDTH }} />
+                  ))}
+                  {matrixWindow.columnWindow.afterSize > 0 && (
+                    <col style={{ width: matrixWindow.columnWindow.afterSize }} />
+                  )}
+                  <col style={{ width: 88 }} />
+                  <col style={{ width: 80 }} />
+                </colgroup>
                 <thead>
-                  <MonthBandRow
-                    header={header}
+                  <WindowedMonthBandRow
+                    header={visibleHeader}
                     leadingLabel={t.schedule.line}
                     leadingColSpan={LEADING_COLUMNS}
                     trailingColSpan={TRAILING_COLUMNS}
+                    beforeSize={matrixWindow.columnWindow.beforeSize}
+                    afterSize={matrixWindow.columnWindow.afterSize}
                   />
                   <tr className="border-b">
-                    <th className="sticky left-0 z-10 bg-card px-2 py-2">
+                    <th
+                      className="sticky left-0 z-10 bg-card px-2 py-2"
+                      style={{ width: 40 }}
+                    >
                       {editable && (
                         <Checkbox
                           aria-label={t.schedule.selectAll}
@@ -468,27 +559,49 @@ export default function ScheduleTab({
                         />
                       )}
                     </th>
-                    <th scope="col" className="px-2 py-2 text-left font-medium">
+                    <th
+                      scope="col"
+                      className="px-2 py-2 text-left font-medium"
+                      style={{ width: 256 }}
+                    >
                       {t.schedule.line}
                     </th>
-                    <th scope="col" className="px-2 py-2 text-right font-medium">
+                    <th
+                      scope="col"
+                      className="px-2 py-2 text-right font-medium"
+                      style={{ width: 72 }}
+                    >
                       {t.schedule.planStart}
                     </th>
-                    <th scope="col" className="px-2 py-2 text-right font-medium">
+                    <th
+                      scope="col"
+                      className="px-2 py-2 text-right font-medium"
+                      style={{ width: 72 }}
+                    >
                       {t.schedule.planFinish}
                     </th>
-                    <th scope="col" className="px-2 py-2 text-right font-medium">
+                    <th
+                      scope="col"
+                      className="px-2 py-2 text-right font-medium"
+                      style={{ width: 96 }}
+                    >
                       {t.schedule.planDuration}
                     </th>
-                    <th scope="col" className="px-2 py-2 text-right font-medium">
+                    <th
+                      scope="col"
+                      className="px-2 py-2 text-right font-medium"
+                      style={{ width: 112 }}
+                    >
                       {t.schedule.planWeightPerPeriod}
                     </th>
-                    {header.columns.map((column) => (
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} header />
+                    {visibleHeader.columns.map((column, index) => (
                       <th
                         key={column.period.id}
                         scope="col"
+                        aria-colindex={LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1}
                         aria-current={column.isCurrent ? "true" : undefined}
-                        className={`min-w-20 px-2 py-2 text-right font-medium ${
+                        className={`w-20 px-2 py-2 text-right font-medium ${
                           column.isCurrent ? "border-b-2 border-b-[var(--chart-3)]" : ""
                         }`}
                       >
@@ -498,17 +611,33 @@ export default function ScheduleTab({
                         </span>
                       </th>
                     ))}
-                    <th scope="col" className="px-3 py-2 text-right font-medium">
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} header />
+                    <th
+                      scope="col"
+                      aria-colindex={LEADING_COLUMNS + periods.length + 1}
+                      className="px-3 py-2 text-right font-medium"
+                      style={{ width: 88 }}
+                    >
                       {t.schedule.rowTotal}
                     </th>
-                    <th scope="col" className="px-2 py-2">
+                    <th
+                      scope="col"
+                      aria-colindex={LEADING_COLUMNS + periods.length + 2}
+                      className="px-2 py-2"
+                      style={{ width: 80 }}
+                    >
                       <span className="sr-only">{t.common.actions}</span>
                     </th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {rows.map((row) => {
+                  <MatrixRowSpacer
+                    height={matrixWindow.rowWindow.beforeSize}
+                    colSpan={renderedColumnCount}
+                  />
+                  {visibleRows.map((row, visibleRowIndex) => {
+                    const rowIndex = matrixWindow.rowWindow.start + visibleRowIndex;
                     const total = rowTotal(row.leaf.id);
                     const isComplete = Math.abs(total - 100) <= ROW_TOLERANCE;
                     const draft = planValue(row.leaf);
@@ -537,7 +666,12 @@ export default function ScheduleTab({
                     };
 
                     return (
-                      <tr key={row.leaf.id} className="border-b last:border-0">
+                      <tr
+                        key={row.leaf.id}
+                        data-matrix-row-index={rowIndex}
+                        aria-rowindex={rowIndex + 3}
+                        className="border-b last:border-0"
+                      >
                         <td className="sticky left-0 z-10 bg-card px-2 py-1">
                           {editable && (
                             <Checkbox
@@ -615,11 +749,18 @@ export default function ScheduleTab({
                           {rate === null ? "—" : rate.toFixed(3)}
                         </td>
 
-                        {header.columns.map(({ period, accessibleName }) => {
+                        <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
+                        {visibleHeader.columns.map(({ period, accessibleName }, index) => {
                           const value = cells.get(cellKey(row.leaf.id, period.id)) ?? 0;
                           const key = cellKey(row.leaf.id, period.id);
                           return (
-                            <td key={period.id} className="px-1 py-1">
+                            <td
+                              key={period.id}
+                              aria-colindex={
+                                LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
+                              }
+                              className="px-1 py-1"
+                            >
                               {editable ? (
                                 <Input
                                   type="number"
@@ -643,8 +784,10 @@ export default function ScheduleTab({
                             </td>
                           );
                         })}
+                        <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
 
                         <td
+                          aria-colindex={LEADING_COLUMNS + periods.length + 1}
                           className={`px-3 py-1 text-right tabular-nums ${
                             isComplete ? "text-muted-foreground" : "font-medium text-destructive"
                           }`}
@@ -660,7 +803,10 @@ export default function ScheduleTab({
                           )}
                         </td>
 
-                        <td className="px-2 py-1">
+                        <td
+                          aria-colindex={LEADING_COLUMNS + periods.length + 2}
+                          className="px-2 py-1"
+                        >
                           {editable && (
                             <div className="flex justify-end gap-1">
                               <Button
@@ -691,10 +837,14 @@ export default function ScheduleTab({
                       </tr>
                     );
                   })}
+                  <MatrixRowSpacer
+                    height={matrixWindow.rowWindow.afterSize}
+                    colSpan={renderedColumnCount}
+                  />
                 </tbody>
 
                 <tfoot className="border-t-2">
-                  <tr>
+                  <tr aria-rowindex={rows.length + 3}>
                     <th
                       scope="row"
                       colSpan={LEADING_COLUMNS}
@@ -702,17 +852,24 @@ export default function ScheduleTab({
                     >
                       {t.schedule.plannedPerPeriod}
                     </th>
-                    {planned.perPeriod.map((value, index) => (
-                      <td
-                        key={periods[index]?.id ?? index}
-                        className="px-2 py-2 text-right tabular-nums text-muted-foreground"
-                      >
-                        {value.toFixed(1)}
-                      </td>
-                    ))}
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
+                    {planned.perPeriod
+                      .slice(matrixWindow.columnWindow.start, matrixWindow.columnWindow.end)
+                      .map((value, index) => (
+                        <td
+                          key={visiblePeriods[index]?.id ?? index}
+                          aria-colindex={
+                            LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
+                          }
+                          className="px-2 py-2 text-right tabular-nums text-muted-foreground"
+                        >
+                          {value.toFixed(1)}
+                        </td>
+                      ))}
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
                     <td colSpan={TRAILING_COLUMNS} />
                   </tr>
-                  <tr>
+                  <tr aria-rowindex={rows.length + 4}>
                     <th
                       scope="row"
                       colSpan={LEADING_COLUMNS}
@@ -720,14 +877,21 @@ export default function ScheduleTab({
                     >
                       {t.schedule.plannedCumulative}
                     </th>
-                    {planned.cumulative.map((value, index) => (
-                      <td
-                        key={periods[index]?.id ?? index}
-                        className="px-2 py-2 text-right font-medium tabular-nums"
-                      >
-                        {value.toFixed(1)}
-                      </td>
-                    ))}
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
+                    {planned.cumulative
+                      .slice(matrixWindow.columnWindow.start, matrixWindow.columnWindow.end)
+                      .map((value, index) => (
+                        <td
+                          key={visiblePeriods[index]?.id ?? index}
+                          aria-colindex={
+                            LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
+                          }
+                          className="px-2 py-2 text-right font-medium tabular-nums"
+                        >
+                          {value.toFixed(1)}
+                        </td>
+                      ))}
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
                     <td colSpan={TRAILING_COLUMNS} />
                   </tr>
                 </tfoot>

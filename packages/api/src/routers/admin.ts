@@ -328,6 +328,43 @@ export const adminRouter = router({
       return { user: created.user, temporaryPassword };
     }),
 
+  renameUser: companyPermissionProcedure("user:rename")
+    .input(
+      userIdSchema.extend({
+        name: z.string().trim().min(1, "Name is required").max(120),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [target] = await db
+        .select({ name: user.name, email: user.email, companyId: user.companyId })
+        .from(user)
+        .where(eq(user.id, input.userId));
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+      }
+      const previousLabel = `${target.name} - ${target.email}`;
+
+      await auth.api.adminUpdateUser({
+        headers: ctx.headers,
+        body: { userId: input.userId, data: { name: input.name } },
+      });
+
+      // Unpinned System accounts are global. Filing their name/email under the
+      // actor's currently selected tenant would leak global-account PII into a
+      // company activity feed, so only tenant-owned accounts produce this row.
+      if (target.companyId) {
+        await recordActivity({ session: ctx.session, companyId: target.companyId }, {
+          action: "updated",
+          entityType: "user",
+          entityId: input.userId,
+          entityLabel: previousLabel,
+          detail: input.name,
+        });
+      }
+
+      return { success: true };
+    }),
+
   resetPassword: companyPermissionProcedure("user:manage")
     .input(userIdSchema)
     .mutation(async ({ ctx, input }) => {

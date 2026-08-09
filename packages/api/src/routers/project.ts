@@ -14,6 +14,11 @@ import z from "zod";
 
 import { companyPermissionProcedure, companyProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
+import {
+  createdAtCursorCondition,
+  createdAtCursorSchema,
+  exactCursorTimestamp,
+} from "../lib/created-at-cursor";
 import { isBehindDeviation } from "../lib/deviation";
 import { runBatch } from "../lib/batch";
 import { type BoqMetrics, boqMetricsByProject, projectExceptions } from "../lib/boq-metrics";
@@ -129,7 +134,7 @@ export const projectRouter = router({
         search: z.string().trim().max(200).default(""),
         status: statusSchema.optional(),
         limit: z.number().int().min(1).max(100).default(25),
-        offset: z.number().int().min(0).default(0),
+        cursor: createdAtCursorSchema.optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -143,31 +148,50 @@ export const projectRouter = router({
             )
           : undefined,
         input.status ? eq(project.status, input.status) : undefined,
-      ].filter(Boolean);
-      const where = filters.length > 0 ? and(...filters) : undefined;
+      ];
+      const filteredWhere = and(...filters);
+
+      const where = and(
+        filteredWhere,
+        input.cursor
+          ? createdAtCursorCondition(project.createdAt, project.id, input.cursor)
+          : undefined,
+      );
 
       const [rows, [total]] = await Promise.all([
         db
-          .select()
+          .select({
+            row: project,
+            cursorCreatedAt: exactCursorTimestamp(project.createdAt),
+          })
           .from(project)
           .where(where)
-          .orderBy(desc(project.createdAt))
-          .limit(input.limit)
-          .offset(input.offset),
-        db.select({ value: count() }).from(project).where(where),
+          .orderBy(desc(project.createdAt), desc(project.id))
+          .limit(input.limit + 1),
+        input.cursor
+          ? Promise.resolve([])
+          : db.select({ value: count() }).from(project).where(filteredWhere),
       ]);
 
-      const ids = rows.map((row) => row.id);
+      const hasMore = rows.length > input.limit;
+      const page = rows.slice(0, input.limit);
+      const ids = page.map(({ row }) => row.id);
       const [openTickets, boq] = await Promise.all([
         openTicketsByProject(ids),
         boqMetricsByProject(ids),
       ]);
 
       return {
-        projects: rows.map((row) =>
+        projects: page.map(({ row }) =>
           decorate(row, openTickets.get(row.id) ?? 0, boq.get(row.id)),
         ),
-        total: total?.value ?? 0,
+        total: total?.value ?? null,
+        nextCursor: hasMore && page.length > 0
+          ? {
+              createdAt: page[page.length - 1]!.cursorCreatedAt,
+              id: page[page.length - 1]!.row.id,
+            }
+          : null,
       };
     }),
 
@@ -283,7 +307,22 @@ export const projectRouter = router({
    * by it — but silence is itself the exception worth surfacing, which is what
    * `reportAgeDays` is for.
    */
-  exceptions: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
+  exceptions: companyPermissionProcedure("project:read")
+    .input(
+      z
+        .object({
+          filter: z.enum(["all", "behind", "reporting", "review", "actions"]).default("all"),
+          limit: z.number().int().min(1).max(100).default(25),
+          offset: z.number().int().min(0).default(0),
+        })
+        .optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const { filter, limit, offset } = {
+        filter: input?.filter ?? ("all" as const),
+        limit: input?.limit ?? 25,
+        offset: input?.offset ?? 0,
+      };
       const rows = await projectExceptions(projectAccessFilter(ctx));
       const canReview = hasPermission(roleOf(ctx.session.user), "progress:review");
 
@@ -323,6 +362,32 @@ export const projectRouter = router({
         return a.code.localeCompare(b.code);
       });
 
+      const withReasons = ranked.map((row) => ({
+        ...row,
+        reasons: {
+          behind: isBehindDeviation(row.deviation),
+          baselineMissing: !row.hasBaseline,
+          unreported: row.hasBaseline && row.dataDate === null,
+          stale: row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS,
+          reportsDue: row.reportsDue > 0,
+          awaitingReview: canReview && row.reportsAwaitingReview > 0,
+          openActions: row.openTickets > 0,
+        },
+      }));
+      const filtered = withReasons.filter((row) => {
+        if (filter === "behind") return row.reasons.behind;
+        if (filter === "reporting") {
+          return row.reasons.unreported || row.reasons.stale || row.reasons.reportsDue;
+        }
+        if (filter === "review") return row.reasons.awaitingReview;
+        if (filter === "actions") return row.reasons.openActions;
+        return true;
+      });
+      const projects = filtered.slice(offset, offset + limit);
+      const nextOffset = offset + projects.length < filtered.length
+        ? offset + projects.length
+        : null;
+
       return {
         counts: {
           live: live.length,
@@ -334,18 +399,9 @@ export const projectRouter = router({
           awaitingReview: live.filter((row) => canReview && row.reportsAwaitingReview > 0).length,
           openTickets: live.filter((row) => row.openTickets > 0).length,
         },
-        projects: ranked.map((row) => ({
-          ...row,
-          reasons: {
-            behind: isBehindDeviation(row.deviation),
-            baselineMissing: !row.hasBaseline,
-            unreported: row.hasBaseline && row.dataDate === null,
-            stale: row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS,
-            reportsDue: row.reportsDue > 0,
-            awaitingReview: canReview && row.reportsAwaitingReview > 0,
-            openActions: row.openTickets > 0,
-          },
-        })),
+        total: filtered.length,
+        projects,
+        nextOffset,
       };
     }),
 
