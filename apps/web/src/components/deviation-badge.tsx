@@ -37,6 +37,7 @@ export function DeviationBadge({
   const position = deviationPosition(value);
   const isBehind = position === "behind";
   const isAhead = position === "ahead";
+  const isOnTrack = position === "on_track";
 
   return (
     <span className={cn("inline-flex items-baseline gap-1.5", className)}>
@@ -48,7 +49,7 @@ export function DeviationBadge({
           // borrowing a step from it to mean "good" said something it does not
           // mean — and --chart-3 sits at L 0.55, which fails contrast as text on
           // the dark card.
-          isAhead && "text-success",
+          (isAhead || isOnTrack) && "text-success",
         )}
       >
         {formatDeviation(value)}

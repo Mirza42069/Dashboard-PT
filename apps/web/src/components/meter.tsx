@@ -25,6 +25,7 @@ export function Meter({
   label,
   ariaLabel,
   segments = SEGMENTS,
+  tone = "default",
   className,
 }: {
   value: number;
@@ -34,6 +35,8 @@ export function Meter({
   ariaLabel?: string;
   /** Lower this where the meter sits in a narrow column. */
   segments?: number;
+  /** Semantic status when this meter represents more than neutral magnitude. */
+  tone?: "default" | "success" | "destructive";
   className?: string;
 }) {
   const t = useT();
@@ -70,7 +73,11 @@ export function Meter({
             <div
               className={cn(
                 "h-full transition-[width] duration-300",
-                isOver ? "bg-destructive" : "bg-[var(--chart-3)]",
+                isOver || tone === "destructive"
+                  ? "bg-destructive"
+                  : tone === "success"
+                    ? "bg-success"
+                    : "bg-[var(--chart-3)]",
               )}
               style={{ width: `${Math.min(Math.max(filled - index, 0), 1) * 100}%` }}
             />

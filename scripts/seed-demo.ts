@@ -18,7 +18,17 @@
  * Override with `--company=<code>`.
  */
 import { db } from "@DashboardV2/db";
-import { company, project, ticket, user } from "@DashboardV2/db/schema";
+import {
+  boqItem,
+  boqItemDistribution,
+  boqVersion,
+  company,
+  progressEntry,
+  project,
+  reportingPeriod,
+  ticket,
+  user,
+} from "@DashboardV2/db/schema";
 import type { ProjectStatus } from "@DashboardV2/db/schema";
 import { and, eq, inArray } from "drizzle-orm";
 
@@ -54,7 +64,14 @@ const PROJECT_SEEDS: {
   { suffix: "004", name: "Eastfield Warehouse", client: "Eastfield Logistics", location: "Eastfield", status: "on_hold", progress: 18, start: -60, end: 240 },
   { suffix: "005", name: "Civic Centre Refurbishment", client: "Borough Council", location: "Civic Square", status: "planning", progress: 0, start: 30, end: 420 },
   { suffix: "006", name: "Lakeside Apartments", client: "Lakeside Developments", location: "Lakeside", status: "completed", progress: 100, start: -520, end: -40 },
+  { suffix: "007", name: "Contoh - Terlambat", client: "Klien Contoh", location: "Jakarta", status: "active", progress: 45, start: -30, end: 30 },
+  { suffix: "008", name: "Contoh - Sesuai Jadwal", client: "Klien Contoh", location: "Jakarta", status: "active", progress: 60, start: -30, end: 30 },
 ];
+
+const PROGRESS_EXAMPLES: Record<string, { actual: number; planned: number }> = {
+  "PRJ-007": { actual: 45, planned: 60 },
+  "PRJ-008": { actual: 60, planned: 60 },
+};
 
 const TICKET_SEEDS = [
   ["Water ingress reported in basement", "Inspect the west wall and confirm the source of the leak."],
@@ -111,6 +128,7 @@ async function main() {
     startDate: isoDate(entry.start),
     endDate: isoDate(entry.end),
     progress: entry.progress,
+    dataDate: PROGRESS_EXAMPLES[projectCode(entry.suffix)] ? isoDate(0) : undefined,
     managerId: admin.id,
   }));
 
@@ -119,6 +137,96 @@ async function main() {
     .values(projectRows)
     .returning({ id: project.id, code: project.code });
   console.log(`Inserted ${projects.length} projects`);
+
+  // --- Schedule-aware progress examples ----------------------------------
+  // One weighted line and two periods are enough to produce a real planned
+  // versus actual comparison. The second period holds the remaining plan, so
+  // the active data date reads 60% planned rather than the final 100%.
+  for (const seededProject of projects) {
+    const example = PROGRESS_EXAMPLES[seededProject.code];
+    if (!example) continue;
+
+    const [version] = await db
+      .insert(boqVersion)
+      .values({
+        projectId: seededProject.id,
+        versionNo: 1,
+        title: "Baseline contoh progres",
+        status: "active",
+        scheduleStatus: "active",
+        totalValue: "1000000000",
+        baselinedAt: new Date(),
+        baselinedById: admin.id,
+        scheduleBaselinedAt: new Date(),
+        scheduleBaselinedById: admin.id,
+      })
+      .returning({ id: boqVersion.id });
+    if (!version) throw new Error(`Could not create baseline for ${seededProject.code}`);
+
+    const [item] = await db
+      .insert(boqItem)
+      .values({
+        boqVersionId: version.id,
+        code: "1.1",
+        description: "Pekerjaan utama",
+        unit: "%",
+        quantity: "1",
+        unitRate: "1000000000",
+        weight: "100",
+        weightSource: "manual",
+        distribution: "manual",
+        progressMode: "by_percent",
+        plannedStartPeriodIndex: 0,
+        plannedFinishPeriodIndex: 1,
+      })
+      .returning({ id: boqItem.id });
+    if (!item) throw new Error(`Could not create BoQ item for ${seededProject.code}`);
+
+    const periods = await db
+      .insert(reportingPeriod)
+      .values([
+        {
+          projectId: seededProject.id,
+          periodIndex: 0,
+          label: "W1",
+          startDate: isoDate(-6),
+          endDate: isoDate(0),
+          status: "locked",
+        },
+        {
+          projectId: seededProject.id,
+          periodIndex: 1,
+          label: "W2",
+          startDate: isoDate(1),
+          endDate: isoDate(7),
+          status: "open",
+        },
+      ])
+      .returning({ id: reportingPeriod.id, periodIndex: reportingPeriod.periodIndex });
+    const currentPeriod = periods.find((period) => period.periodIndex === 0);
+    const futurePeriod = periods.find((period) => period.periodIndex === 1);
+    if (!currentPeriod || !futurePeriod) {
+      throw new Error(`Could not create reporting periods for ${seededProject.code}`);
+    }
+
+    await db.insert(boqItemDistribution).values([
+      { boqItemId: item.id, periodId: currentPeriod.id, plannedPct: String(example.planned) },
+      {
+        boqItemId: item.id,
+        periodId: futurePeriod.id,
+        plannedPct: String(100 - example.planned),
+      },
+    ]);
+    await db.insert(progressEntry).values({
+      projectId: seededProject.id,
+      periodId: currentPeriod.id,
+      boqItemId: item.id,
+      cumulativePercent: String(example.actual),
+      pctComplete: String(example.actual),
+      recordedById: admin.id,
+    });
+  }
+  console.log(`Inserted ${Object.keys(PROGRESS_EXAMPLES).length} schedule-aware progress examples`);
 
   // --- Tickets ------------------------------------------------------------
   const ticketRows = projects.map((row, projectIndex) => {

@@ -8,8 +8,10 @@ import {
   CardTitle,
 } from "@DashboardV2/ui/components/card";
 import { CheckCircle2, CircleDashed, CircleDot } from "@DashboardV2/ui/components/icons";
+import { cn } from "@DashboardV2/ui/lib/utils";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
+import { deviationPosition } from "@DashboardV2/api/lib/deviation";
 
 import { DeviationBadge } from "@/components/deviation-badge";
 import { Meter } from "@/components/meter";
@@ -55,6 +57,14 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
     trpc.progress.workStages.queryOptions({ projectId: project.id }),
   );
   const complete = Math.min(100, Math.max(0, project.progressPercent));
+  const progressPosition =
+    project.progressSource === "boq" ? deviationPosition(project.deviation) : null;
+  const progressTone =
+    progressPosition === "behind"
+      ? "destructive"
+      : progressPosition === "on_track" || progressPosition === "ahead"
+        ? "success"
+        : "default";
   const cadence = {
     weekly: t.projects.periodWeekly,
     biweekly: t.projects.periodBiweekly,
@@ -102,12 +112,18 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <p className="text-2xl font-semibold tabular-nums">
+            <p
+              className={cn(
+                "text-2xl font-semibold tabular-nums",
+                progressTone === "destructive" && "text-destructive",
+                progressTone === "success" && "text-success",
+              )}
+            >
               {complete.toFixed(project.progressSource === "boq" ? 1 : 0)}%
             </p>
             <p className="text-muted-foreground">{t.projects.complete}</p>
           </div>
-          <Meter value={complete} max={100} label={percent(complete)} />
+          <Meter value={complete} max={100} label={percent(complete)} tone={progressTone} />
           {project.progressSource === "boq" && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-3">
               <span className="text-muted-foreground">
