@@ -3,14 +3,14 @@
  *
  * `bun run --filter '*' dev` spawns child processes that do not always die with
  * Ctrl+C on Windows, so a previous run can keep listening on 3001 while the new
- * one only manages to claim 3000. That leaves the web app and the API running
+ * one only manages to claim 3000. That leaves the web app, marketing site, and API running
  * different revisions of the code — which looks like a caching bug rather than
  * a stale process, and costs far more time than it should.
  *
  * Runs automatically via the `predev` script. Only kills whatever is listening
  * on these exact ports; nothing else is touched.
  */
-const PORTS = [3000, 3001];
+const PORTS = [3000, 3001, 3002];
 
 async function pidsOnPort(port: number): Promise<number[]> {
   const isWindows = process.platform === "win32";
