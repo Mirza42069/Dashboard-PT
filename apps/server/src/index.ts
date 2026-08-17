@@ -19,6 +19,12 @@ import { Hono, type Context as HonoRequestContext } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 
+import {
+  decodeWorkbookTransport,
+  WORKBOOK_TRANSPORT_CONTENT_TYPE,
+  WorkbookTransportError,
+} from "./workbook-transport";
+
 /**
  * Mirrors MAX_IMPORT_BYTES in ./boq-import, which cannot be imported here — that
  * module pulls exceljs, and naming any of its exports at the top level puts
@@ -330,12 +336,44 @@ async function requireProjectWrite(c: HonoRequestContext, projectId: string) {
 }
 
 /** Reads the uploaded workbook, refusing anything past the body limit. */
-async function readUpload(bytes: Uint8Array) {
+function readUpload(
+  bytes: Uint8Array,
+): { bytes: Uint8Array } | { error: string; status: 400 | 413 } {
   if (bytes.byteLength === 0) return { error: "Empty upload", status: 400 as const };
   if (bytes.byteLength > MAX_IMPORT_BYTES) {
     return { error: "The workbook exceeds the 4 MB upload limit", status: 413 as const };
   }
   return { bytes };
+}
+
+async function readWorkbookRequest(c: HonoRequestContext) {
+  if ((c.req.header("content-type") ?? "").startsWith(WORKBOOK_TRANSPORT_CONTENT_TYPE)) {
+    try {
+      const decoded = decodeWorkbookTransport(new Uint8Array(await c.req.arrayBuffer()));
+      const upload = readUpload(decoded.bytes);
+      if ("error" in upload) return upload;
+      return {
+        bytes: upload.bytes,
+        fields: decoded.metadata,
+        filename:
+          typeof decoded.metadata.filename === "string"
+            ? decoded.metadata.filename
+            : "workbook.xlsx",
+      };
+    } catch (error) {
+      if (error instanceof WorkbookTransportError) {
+        return { error: error.message, status: 400 as const };
+      }
+      throw error;
+    }
+  }
+
+  const form = await c.req.parseBody();
+  const file = form.file;
+  if (!(file instanceof File)) return { error: "No workbook was attached.", status: 400 as const };
+  const upload = readUpload(new Uint8Array(await file.arrayBuffer()));
+  if ("error" in upload) return upload;
+  return { bytes: upload.bytes, fields: form, filename: file.name || "workbook.xlsx" };
 }
 
 function isPublicImportError(error: unknown) {
@@ -395,10 +433,7 @@ app.post("/project-import/analyze", async (c) => {
     return c.json({ error: "Too many workbook analyses. Try again in a few minutes." }, 429);
   }
 
-  const form = await c.req.parseBody();
-  const file = form.file;
-  if (!(file instanceof File)) return c.json({ error: "No workbook was attached." }, 400);
-  const upload = await readUpload(new Uint8Array(await file.arrayBuffer()));
+  const upload = await readWorkbookRequest(c);
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
 
   try {
@@ -425,15 +460,16 @@ app.post("/project-import/review", async (c) => {
   if (!(await consumeWorkbookRequestLimit(access.session.user.id, "review", 30))) {
     return c.json({ error: "Too many workbook reviews. Try again in a few minutes." }, 429);
   }
-  const form = await c.req.parseBody();
-  const file = form.file;
-  if (!(file instanceof File)) return c.json({ error: "No workbook was attached." }, 400);
-  const upload = await readUpload(new Uint8Array(await file.arrayBuffer()));
+  const upload = await readWorkbookRequest(c);
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
 
   try {
     const { reviewProjectWorkbook, workbookPlanSchema } = await import("./project-workbook");
-    const plan = workbookPlanSchema.parse(JSON.parse(String(form.plan)));
+    const plan = workbookPlanSchema.parse(
+      typeof upload.fields.plan === "string"
+        ? JSON.parse(upload.fields.plan)
+        : upload.fields.plan,
+    );
     return c.json(await reviewProjectWorkbook(upload.bytes, plan));
   } catch (error) {
     const invalidRequest = isInvalidImportRequest(error);
@@ -457,15 +493,16 @@ app.post("/project-import/commit", async (c) => {
     return c.json({ error: "Too many workbook imports. Try again in a few minutes." }, 429);
   }
 
-  const form = await c.req.parseBody();
-  const file = form.file;
-  if (!(file instanceof File)) return c.json({ error: "No workbook was attached." }, 400);
-  const upload = await readUpload(new Uint8Array(await file.arrayBuffer()));
+  const upload = await readWorkbookRequest(c);
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
 
   let submitted: unknown;
   try {
-    submitted = JSON.parse(String(form.confirmed));
+    submitted =
+      typeof upload.fields.confirmed === "string"
+        ? JSON.parse(upload.fields.confirmed)
+        : upload.fields.confirmed;
+    if (!submitted) throw new Error();
   } catch {
     return c.json({ error: "The confirmed import plan could not be read." }, 400);
   }
@@ -474,7 +511,7 @@ app.post("/project-import/commit", async (c) => {
     const { commitProjectWorkbook } = await import("./project-workbook-commit");
     const outcome = await commitProjectWorkbook({
       bytes: upload.bytes,
-      filename: file.name || "workbook.xlsx",
+      filename: upload.filename,
       confirmed: submitted as Parameters<typeof commitProjectWorkbook>[0]["confirmed"],
       companyId: access.companyId,
       actor: {
@@ -490,7 +527,7 @@ app.post("/project-import/commit", async (c) => {
         entityType: "project",
         entityId: outcome.projectId,
         entityLabel: `${String((submitted as { project?: { code?: string } }).project?.code ?? "").toUpperCase()} - ${String((submitted as { project?: { name?: string } }).project?.name ?? "")}`,
-        detail: `Created from ${file.name}: ${outcome.rowsImported} BoQ row(s), ${outcome.periodCount} period(s)`,
+        detail: `Created from ${upload.filename}: ${outcome.rowsImported} BoQ row(s), ${outcome.periodCount} period(s)`,
       },
     );
     return c.json(outcome);

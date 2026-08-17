@@ -20,6 +20,10 @@ import { useState } from "react";
 import { interpolate } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
 import { getServerUrl } from "@/lib/server-url";
+import {
+  createWorkbookTransport,
+  WORKBOOK_TRANSPORT_CONTENT_TYPE,
+} from "@/lib/workbook-transport";
 
 type PeriodType = "weekly" | "biweekly" | "monthly";
 type MappingField =
@@ -261,11 +265,15 @@ export default function ProjectWorkbookImportDialog({
     setBusy(true);
     setError(null);
     try {
-      const data = new FormData();
-      data.set("file", chosen);
+      const data = await createWorkbookTransport(chosen);
       const response = await fetch(
         `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/analyze`,
-        { method: "POST", credentials: "include", body: data },
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": WORKBOOK_TRANSPORT_CONTENT_TYPE },
+          body: data,
+        },
       );
       const body = await readJson<Analysis & { error?: string }>(response);
       if (!response.ok || !body?.plan) throw new Error(body?.error ?? t.projectImport.analyzeFailed);
@@ -476,12 +484,15 @@ export default function ProjectWorkbookImportDialog({
     setBusy(true);
     setError(null);
     try {
-      const data = new FormData();
-      data.set("file", file);
-      data.set("plan", JSON.stringify(analysis.plan));
+      const data = await createWorkbookTransport(file, { plan: analysis.plan });
       const response = await fetch(
         `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/review`,
-        { method: "POST", credentials: "include", body: data },
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": WORKBOOK_TRANSPORT_CONTENT_TYPE },
+          body: data,
+        },
       );
       const body = await readJson<Analysis & { error?: string }>(response);
       if (!response.ok || !body?.plan) throw new Error(body?.error ?? t.projectImport.reviewFailed);
@@ -545,11 +556,8 @@ export default function ProjectWorkbookImportDialog({
     setError(null);
     setRowErrors([]);
     try {
-      const data = new FormData();
-      data.set("file", file);
-      data.set(
-        "confirmed",
-        JSON.stringify({
+      const data = await createWorkbookTransport(file, {
+        confirmed: {
           plan: analysis.plan,
           project: {
             code: answers.code.trim().toUpperCase(),
@@ -561,11 +569,16 @@ export default function ProjectWorkbookImportDialog({
             endDate: answers.endDate,
             periodType: answers.periodType,
           },
-        }),
-      );
+        },
+      });
       const response = await fetch(
         `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/commit`,
-        { method: "POST", credentials: "include", body: data },
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": WORKBOOK_TRANSPORT_CONTENT_TYPE },
+          body: data,
+        },
       );
       const body = await readJson<{
         projectId?: string;

@@ -88,20 +88,31 @@ const jsonSchema = {
 
 /** Interprets workbook metadata only. It has no tools and no authority to write data. */
 export async function interpretWorkbook(summary: unknown): Promise<WorkbookInterpretation | null> {
-  if (!env.OPENAI_API_KEY || !env.OPENAI_MODEL) return null;
+  if (!env.OPENROUTER_API_KEY || !env.OPENROUTER_MODEL) return null;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       signal: controller.signal,
       headers: {
-        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
+        "HTTP-Referer": env.CORS_ORIGIN,
+        "X-OpenRouter-Title": "Dashboard PT",
       },
       body: JSON.stringify({
-        model: env.OPENAI_MODEL,
+        model: env.OPENROUTER_MODEL,
+        ...(env.OPENROUTER_PROVIDER
+          ? {
+              provider: {
+                order: [env.OPENROUTER_PROVIDER],
+                allow_fallbacks: false,
+                require_parameters: true,
+              },
+            }
+          : {}),
         max_completion_tokens: 1_500,
         response_format: {
           type: "json_schema",

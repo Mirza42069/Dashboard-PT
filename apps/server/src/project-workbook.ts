@@ -645,7 +645,7 @@ export async function analyzeProjectWorkbook(bytes: Uint8Array): Promise<Workboo
   let plan = referencePlan(workbook, fileHash);
 
   if (!plan) {
-    const { interpretWorkbook } = await import("./openai");
+    const { interpretWorkbook } = await import("./openrouter");
     const interpreted = await interpretWorkbook(workbookSummary(workbook));
     const selected = interpreted
       ? workbook.worksheets.find((sheet) => sheet.name === interpreted.sheetName)

@@ -23,6 +23,7 @@
     "@vercel/speed-insights": "^2.0.0",
     "babel-plugin-react-compiler": "^1.0.0",
     "better-auth": "catalog:",
+    "brotli-wasm": "3.0.1",
     "dotenv": "catalog:",
     "next": "^16.3.0",
     "react": "catalog:",
