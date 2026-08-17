@@ -6,6 +6,7 @@ import {
   boqVersion,
   progressEntry,
   project,
+  projectActualCurve,
   reportingPeriod,
   reportingPeriodEvent,
   user,
@@ -311,18 +312,32 @@ export const progressRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "BoQ version not found" });
       }
 
-      const periods = await db
-        .select({
-          id: reportingPeriod.id,
-          periodIndex: reportingPeriod.periodIndex,
-          label: reportingPeriod.label,
-          startDate: reportingPeriod.startDate,
-          endDate: reportingPeriod.endDate,
-          status: reportingPeriod.status,
-        })
-        .from(reportingPeriod)
-        .where(eq(reportingPeriod.projectId, input.projectId))
-        .orderBy(asc(reportingPeriod.periodIndex));
+      const [periods, actualSnapshots] = await Promise.all([
+        db
+          .select({
+            id: reportingPeriod.id,
+            periodIndex: reportingPeriod.periodIndex,
+            label: reportingPeriod.label,
+            startDate: reportingPeriod.startDate,
+            endDate: reportingPeriod.endDate,
+            status: reportingPeriod.status,
+          })
+          .from(reportingPeriod)
+          .where(eq(reportingPeriod.projectId, input.projectId))
+          .orderBy(asc(reportingPeriod.periodIndex)),
+        db
+          .select({
+            periodId: projectActualCurve.periodId,
+            cumulativePercent: projectActualCurve.cumulativePercent,
+          })
+          .from(projectActualCurve)
+          .where(eq(projectActualCurve.projectId, input.projectId)),
+      ]);
+
+      const serializedSnapshots = actualSnapshots.map((row) => ({
+        periodId: row.periodId,
+        cumulativePercent: toAmount(row.cumulativePercent),
+      }));
 
       if (!current) {
         return {
@@ -332,6 +347,7 @@ export const progressRouter = router({
           periods,
           distribution: [],
           entries: [],
+          actualSnapshots: serializedSnapshots,
         };
       }
 
@@ -386,6 +402,7 @@ export const progressRouter = router({
           noProgress: row.noProgress,
           note: row.note,
         })),
+        actualSnapshots: serializedSnapshots,
       };
     }),
 
@@ -534,26 +551,34 @@ export const progressRouter = router({
           returning id
         ), refreshed as (
           update project set data_date = (
-            select max(period.end_date)
-            from reporting_period period
-            where period.project_id = ${period.projectId}
-              and (
-                exists (
-                  select 1 from progress_entry entry
-                  where entry.period_id = period.id
-                    and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
-                    and not exists (
-                      select 1 from input_rows input
-                      where input."periodId" = entry.period_id
-                        and input."boqItemId" = entry.boq_item_id
-                    )
+            select max(reported.end_date)
+            from (
+              select period.end_date
+              from reporting_period period
+              where period.project_id = ${period.projectId}
+                and (
+                  exists (
+                    select 1 from progress_entry entry
+                    where entry.period_id = period.id
+                      and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
+                      and not exists (
+                        select 1 from input_rows input
+                        where input."periodId" = entry.period_id
+                          and input."boqItemId" = entry.boq_item_id
+                      )
+                  )
+                  or exists (
+                    select 1 from input_rows input
+                    where input."periodId" = period.id
+                      and (input."cumulativePercent" is not null or input."cumulativeQuantity" is not null)
+                  )
                 )
-                or exists (
-                  select 1 from input_rows input
-                  where input."periodId" = period.id
-                    and (input."cumulativePercent" is not null or input."cumulativeQuantity" is not null)
-                )
-              )
+              union all
+              select period.end_date
+              from project_actual_curve snapshot
+              join reporting_period period on period.id = snapshot.period_id
+              where snapshot.project_id = ${period.projectId}
+            ) reported
           )
           where id = ${period.projectId} and exists (select 1 from editable)
         )

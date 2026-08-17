@@ -1,4 +1,5 @@
 import { planCells } from "@DashboardV2/api/lib/schedule-plan";
+import { runBatch } from "@DashboardV2/api/lib/batch";
 import { db } from "@DashboardV2/db";
 import {
   boqImport,
@@ -10,7 +11,13 @@ import {
 } from "@DashboardV2/db/schema";
 import { and, asc, desc, eq } from "drizzle-orm";
 
-import { type ImportError, type ImportMapping, loadWorkbook, parseRows } from "./boq-import-parse";
+import {
+  type ImportError,
+  type ImportMapping,
+  type ParsedRow,
+  loadWorkbook,
+  parseRows,
+} from "./boq-import-parse";
 
 /**
  * Turning a validated spreadsheet into a draft BoQ revision.
@@ -63,6 +70,159 @@ export type ImportOutcome =
       lineCount: number;
       scheduledCount: number;
     };
+
+const MAX_DISTRIBUTION_CELLS = 50_000;
+const DISTRIBUTION_INSERT_SIZE = 10_000;
+
+export class BoqImportCapacityError extends Error {
+  readonly kind = "invalid";
+  readonly code = "schedule_capacity_exceeded";
+  readonly details = null;
+  readonly errors = [];
+}
+
+function chunks<T>(values: T[], size: number) {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
+}
+
+export function prepareBoqRevision(input: {
+  projectId: string;
+  rows: ParsedRow[];
+  periods: { id: string; periodIndex: number }[];
+  versionNo: number;
+  filename: string;
+  sheetName: string;
+  mapping: ImportMapping;
+  mappingAudit?: unknown;
+  actor: { id: string; name: string };
+}) {
+  const versionId = crypto.randomUUID();
+  const periodIdByIndex = new Map(input.periods.map((period) => [period.periodIndex, period.id]));
+  const periodIndexes = input.periods.map((period) => period.periodIndex);
+
+  const idByCode = new Map<string, string>();
+  for (const row of input.rows) {
+    if (row.parentCode === null) idByCode.set(row.code, crypto.randomUUID());
+  }
+
+  const itemValues = input.rows.map((row, index) => {
+    const id = row.parentCode === null ? idByCode.get(row.code)! : crypto.randomUUID();
+    const parentId = row.parentCode === null ? null : idByCode.get(row.parentCode);
+    if (row.parentCode !== null && !parentId) {
+      throw new Error(`Import invariant failed: parent ${row.parentCode} was not prepared.`);
+    }
+    return {
+      id,
+      boqVersionId: versionId,
+      parentId,
+      code: row.code,
+      description: row.description,
+      unit: row.unit,
+      quantity: row.quantity === null ? null : row.quantity.toFixed(4),
+      unitRate: row.unitRate === null ? null : row.unitRate.toFixed(4),
+      weight: row.weight === null ? "0" : row.weight.toFixed(6),
+      weightSource: (row.weight === null ? "derived" : "manual") as "derived" | "manual",
+      distribution: (row.cells ? "manual" : "linear") as "manual" | "linear",
+      plannedStartPeriodIndex: row.start,
+      plannedFinishPeriodIndex: row.finish,
+      sortOrder: index,
+    };
+  });
+
+  const itemIdByRow = new Map(input.rows.map((row, index) => [row.row, itemValues[index]!.id]));
+  const sectionIds = new Set(itemValues.map((item) => item.parentId).filter(Boolean) as string[]);
+  const totalValue = input.rows.reduce((total, row, index) => {
+    if (sectionIds.has(itemValues[index]!.id)) return total;
+    const value = (row.quantity ?? 0) * (row.unitRate ?? 0);
+    return total + Math.round(value * 100) / 100;
+  }, 0);
+  let plannedCellCount = 0;
+  for (const [index, row] of input.rows.entries()) {
+    if (sectionIds.has(itemValues[index]!.id)) continue;
+    if (row.cells) {
+      plannedCellCount += row.cells.length;
+    } else if (row.start !== null && row.finish !== null) {
+      plannedCellCount += periodIndexes.filter(
+        (periodIndex) => periodIndex >= row.start! && periodIndex <= row.finish!,
+      ).length;
+    }
+    if (plannedCellCount > MAX_DISTRIBUTION_CELLS) {
+      throw new BoqImportCapacityError(
+        `The schedule contains more than ${MAX_DISTRIBUTION_CELLS.toLocaleString("en-US")} planned cells. Reduce the imported rows or periods.`,
+      );
+    }
+  }
+  const distributionValues = input.rows.flatMap((row) => {
+    const boqItemId = itemIdByRow.get(row.row)!;
+    if (sectionIds.has(boqItemId)) return [];
+
+    if (row.cells) {
+      return row.cells.flatMap((cell) => {
+        const periodId = periodIdByIndex.get(cell.periodIndex);
+        return periodId
+          ? [{ boqItemId, periodId, plannedPct: cell.plannedPct.toFixed(6) }]
+          : [];
+      });
+    }
+    if (row.start === null || row.finish === null) return [];
+    return planCells(periodIndexes, { startIndex: row.start, finishIndex: row.finish })
+      .filter((cell) => cell.plannedPct > 0)
+      .map((cell) => ({
+        boqItemId,
+        periodId: periodIdByIndex.get(cell.periodIndex)!,
+        plannedPct: cell.plannedPct.toFixed(6),
+      }));
+  });
+
+  const importId = crypto.randomUUID();
+  const statements = [
+    db.insert(boqVersion).values({
+      id: versionId,
+      projectId: input.projectId,
+      versionNo: input.versionNo,
+      title: `Rev ${input.versionNo}`,
+      status: "draft",
+      scheduleStatus: "draft",
+      totalValue: totalValue.toFixed(2),
+    }),
+    db.insert(boqItem).values(itemValues),
+    ...chunks(distributionValues, DISTRIBUTION_INSERT_SIZE).map((values) =>
+      db.insert(boqItemDistribution).values(values),
+    ),
+    db.insert(boqImport).values({
+      id: importId,
+      projectId: input.projectId,
+      boqVersionId: versionId,
+      filename: input.filename,
+      sheetName: input.sheetName,
+      importedById: input.actor.id,
+      importedByName: input.actor.name,
+      mapping: JSON.stringify(input.mappingAudit ?? input.mapping),
+      status: "succeeded",
+      rowsTotal: input.rows.length,
+      rowsImported: input.rows.length,
+      errorCount: 0,
+    }),
+  ];
+
+  return {
+    statements,
+    result: {
+      status: "succeeded" as const,
+      importId,
+      versionId,
+      versionNo: input.versionNo,
+      rowsImported: input.rows.length,
+      sectionCount: sectionIds.size,
+      lineCount: itemValues.length - sectionIds.size,
+      scheduledCount: new Set(distributionValues.map((cell) => cell.boqItemId)).size,
+    },
+  };
+}
 
 export async function commitImport(input: {
   projectId: string;
@@ -167,100 +327,18 @@ export async function commitImport(input: {
     .limit(1);
 
   const versionNo = (latest?.versionNo ?? 0) + 1;
-  const versionId = crypto.randomUUID();
-  const periodIdByIndex = new Map(periods.map((period) => [period.periodIndex, period.id]));
-  const periodIndexes = periods.map((period) => period.periodIndex);
-
-  const idByCode = new Map<string, string>();
-  for (const row of rows) {
-    if (row.parentCode === null) idByCode.set(row.code, crypto.randomUUID());
-  }
-
-  const itemValues = rows.map((row, index) => {
-    const id = row.parentCode === null ? idByCode.get(row.code)! : crypto.randomUUID();
-    return {
-      id,
-      boqVersionId: versionId,
-      parentId: row.parentCode === null ? null : (idByCode.get(row.parentCode) ?? null),
-      code: row.code,
-      description: row.description,
-      unit: row.unit,
-      quantity: row.quantity === null ? null : row.quantity.toFixed(4),
-      unitRate: row.unitRate === null ? null : row.unitRate.toFixed(4),
-      // A mapped weight is somebody's stated figure and must survive the
-      // recalculation; an unmapped one is derived from value like any other line.
-      weight: row.weight === null ? "0" : row.weight.toFixed(6),
-      weightSource: (row.weight === null ? "derived" : "manual") as "derived" | "manual",
-      distribution: (row.cells ? "manual" : "linear") as "manual" | "linear",
-      plannedStartPeriodIndex: row.start,
-      plannedFinishPeriodIndex: row.finish,
-      sortOrder: index,
-    };
-  });
-
-  const itemIdByRow = new Map(rows.map((row, index) => [row.row, itemValues[index]!.id]));
-  const leafIds = new Set(itemValues.filter((item) => item.parentId !== null).map((item) => item.id));
-  const hasChildren = new Set(itemValues.map((item) => item.parentId).filter(Boolean) as string[]);
-
-  const distributionValues = rows.flatMap((row) => {
-    const boqItemId = itemIdByRow.get(row.row)!;
-    // Sections roll up from their lines and carry no plan of their own — the
-    // same leaf rule the schedule router enforces.
-    if (hasChildren.has(boqItemId)) return [];
-
-    if (row.cells) {
-      return row.cells.flatMap((cell) => {
-        const periodId = periodIdByIndex.get(cell.periodIndex);
-        return periodId ? [{ boqItemId, periodId, plannedPct: cell.plannedPct.toFixed(6) }] : [];
-      });
-    }
-
-    if (row.start === null || row.finish === null) return [];
-    return planCells(periodIndexes, { startIndex: row.start, finishIndex: row.finish })
-      .filter((cell) => cell.plannedPct > 0)
-      .map((cell) => ({
-        boqItemId,
-        periodId: periodIdByIndex.get(cell.periodIndex)!,
-        plannedPct: cell.plannedPct.toFixed(6),
-      }));
-  });
-
-  const importId = crypto.randomUUID();
-
-  await db.batch([
-    db.insert(boqVersion).values({
-      id: versionId,
-      projectId: input.projectId,
-      versionNo,
-      title: `Rev ${versionNo}`,
-      status: "draft",
-      scheduleStatus: "draft",
-    }),
-    db.insert(boqItem).values(itemValues),
-    ...(distributionValues.length > 0
-      ? [db.insert(boqItemDistribution).values(distributionValues)]
-      : []),
-    db.insert(boqImport).values({
-      ...record,
-      id: importId,
-      boqVersionId: versionId,
-      status: "succeeded",
-      rowsTotal: rows.length,
-      rowsImported: rows.length,
-      errorCount: 0,
-    }),
-  ]);
-
-  return {
-    status: "succeeded",
-    importId,
-    versionId,
+  const prepared = prepareBoqRevision({
+    projectId: input.projectId,
+    rows,
+    periods,
     versionNo,
-    rowsImported: rows.length,
-    sectionCount: itemValues.length - leafIds.size,
-    lineCount: leafIds.size,
-    scheduledCount: new Set(distributionValues.map((cell) => cell.boqItemId)).size,
-  };
+    filename: input.filename,
+    sheetName: input.sheetName,
+    mapping: input.mapping,
+    actor: input.actor,
+  });
+  await runBatch(prepared.statements);
+  return prepared.result;
 }
 
 /** The project a stored import belongs to, so the route can scope the download. */

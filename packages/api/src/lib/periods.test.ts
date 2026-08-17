@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { generatePeriods, groupPeriodsByMonth, monthKeyOf } from "./periods";
+import { endDateForPeriodCount, generatePeriods, groupPeriodsByMonth, monthKeyOf } from "./periods";
 
 /**
  * The month bands above a schedule grid.
@@ -74,4 +74,18 @@ test("a biweekly axis still bands by month", () => {
 
 test("an empty axis has no bands", () => {
   expect(groupPeriodsByMonth([])).toEqual([]);
+});
+
+test("an exact period count produces the completion date used by the importer", () => {
+  expect(endDateForPeriodCount("2026-05-03", 17, "weekly")).toBe("2026-08-29");
+  expect(generatePeriods("2026-05-03", "2026-08-29", "weekly")).toHaveLength(17);
+});
+
+test("monthly completion follows calendar-month boundaries", () => {
+  expect(endDateForPeriodCount("2026-01-15", 3, "monthly")).toBe("2026-03-31");
+});
+
+test("the documented maximum period count is accepted", () => {
+  const end = endDateForPeriodCount("2026-01-01", 600, "weekly");
+  expect(generatePeriods("2026-01-01", end, "weekly")).toHaveLength(600);
 });

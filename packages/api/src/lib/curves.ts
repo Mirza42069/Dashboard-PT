@@ -30,6 +30,13 @@ export type EntryLike = {
   cumulativePercent: number | null;
 };
 
+export type ActualSnapshotLike = {
+  periodId: string;
+  cumulativePercent: number;
+};
+
+export type ActualCurveSource = "itemized" | "imported" | null;
+
 export type LeafLike = { id: string; weight: number };
 
 export type Section<T extends BoqItemLike> = { header: T; leaves: T[] };
@@ -128,7 +135,7 @@ export function computePlannedCurve(
 /**
  * The actual S-curve.
  *
- * Three rules, each of which exists because of a way the naive version lies:
+ * Four rules, each of which exists because of a way the naive version lies:
  *
  * 1. **A period with no entry carries the previous reading forward.** Readings
  *    are cumulative, so a line nobody updated this week is still as complete as
@@ -139,32 +146,48 @@ export function computePlannedCurve(
  *    no entry at all. An explicit zero, on the other hand, is somebody saying
  *    the work has not started, and *does* reset the line.
  *
- * 3. **The line stops at the last real reading**, rather than running flat to
- *    the data date. Trailing nulls leave a gap the chart does not draw, so an
- *    unreported period reads as unknown instead of as "no progress made".
+ * 3. **Item readings win over an imported project snapshot in the same
+ *    period.** A snapshot can draw the project curve, but cannot honestly be
+ *    attributed back to individual BoQ lines.
+ *
+ * 4. **The line stops at the last real reading or snapshot**, rather than
+ *    running flat to the data date. Trailing nulls leave a gap the chart does
+ *    not draw, so an unreported period reads as unknown instead of as "no
+ *    progress made".
  */
 export function computeActualCurve(
   rows: { leaf: LeafLike }[],
   periods: PeriodLike[],
   entries: EntryLike[],
   dataDate: string | null,
-): { cumulative: (number | null)[] } {
+  snapshots: ActualSnapshotLike[] = [],
+): { cumulative: (number | null)[]; sources: ActualCurveSource[] } {
   const readings = new Map<string, number>();
-  const periodsWithReadings = new Set<string>();
+  const periodsWithItemReadings = new Set<string>();
 
   for (const entry of entries) {
     if (entry.cumulativePercent === null && entry.cumulativeQuantity === null) continue;
     readings.set(cellKey(entry.boqItemId, entry.periodId), entry.pctComplete);
-    periodsWithReadings.add(entry.periodId);
+    periodsWithItemReadings.add(entry.periodId);
   }
 
+  const snapshotsByPeriod = new Map(
+    snapshots.map((snapshot) => [snapshot.periodId, snapshot.cumulativePercent]),
+  );
+
   const lastRead = periods
-    .filter((period) => periodsWithReadings.has(period.id))
+    .filter(
+      (period) =>
+        periodsWithItemReadings.has(period.id) || snapshotsByPeriod.has(period.id),
+    )
     .reduce((latest, period) => (period.endDate > latest ? period.endDate : latest), "");
 
   // Running completion per leaf — this is what "carries forward".
   const running = new Map<string, number>();
   const cumulative: (number | null)[] = [];
+  const sources: ActualCurveSource[] = [];
+  let carriedActual: number | null = null;
+  let carriedSource: ActualCurveSource = null;
 
   for (const period of periods) {
     for (const row of rows) {
@@ -172,17 +195,33 @@ export function computeActualCurve(
       if (reading !== undefined) running.set(row.leaf.id, reading);
     }
 
+    if (periodsWithItemReadings.has(period.id)) {
+      carriedActual = rows.reduce(
+        (total, row) => total + (row.leaf.weight * (running.get(row.leaf.id) ?? 0)) / 100,
+        0,
+      );
+      carriedSource = "itemized";
+    } else {
+      const snapshot = snapshotsByPeriod.get(period.id);
+      if (snapshot !== undefined) {
+        carriedActual = snapshot;
+        carriedSource = "imported";
+      }
+    }
+
     if (!lastRead || period.endDate > lastRead || (dataDate && period.endDate > dataDate)) {
       cumulative.push(null);
+      sources.push(null);
       continue;
     }
 
-    cumulative.push(
-      rows.reduce((total, row) => total + (row.leaf.weight * (running.get(row.leaf.id) ?? 0)) / 100, 0),
-    );
+    // Preserve the established pre-first-reading zero while keeping periods
+    // after the last source unknown.
+    cumulative.push(carriedActual ?? 0);
+    sources.push(carriedActual === null ? null : carriedSource);
   }
 
-  return { cumulative };
+  return { cumulative, sources };
 }
 
 /**
@@ -205,6 +244,8 @@ export type PeriodSummary<P> = {
   actualCumulative: number | null;
   deviationPeriod: number | null;
   deviationCumulative: number | null;
+  /** Whether this actual can be attributed to BoQ lines. */
+  actualSource: ActualCurveSource;
   /** The period the data date falls inside. False everywhere when there is no data date. */
   isCurrent: boolean;
 };
@@ -235,9 +276,10 @@ export function buildPeriodSummary<P extends PeriodLike & { startDate: string }>
   cells: Map<string, number>,
   entries: EntryLike[],
   dataDate: string | null,
+  snapshots: ActualSnapshotLike[] = [],
 ): PeriodSummary<P>[] {
   const planned = computePlannedCurve(rows, periods, cells);
-  const actual = computeActualCurve(rows, periods, entries, dataDate);
+  const actual = computeActualCurve(rows, periods, entries, dataDate, snapshots);
 
   return periods.map((period, index) => {
     const actualCumulative = actual.cumulative[index] ?? null;
@@ -260,6 +302,7 @@ export function buildPeriodSummary<P extends PeriodLike & { startDate: string }>
       deviationPeriod: actualPeriod === null ? null : actualPeriod - plannedPeriod,
       deviationCumulative:
         actualCumulative === null ? null : actualCumulative - plannedCumulative,
+      actualSource: actual.sources[index] ?? null,
       isCurrent:
         dataDate !== null && period.startDate <= dataDate && dataDate <= period.endDate,
     };

@@ -62,6 +62,8 @@ import { trpc } from "@/utils/trpc";
 import { EMPTY_PROJECT } from "./project-form-values";
 
 const ProjectFormDialog = dynamic(() => import("./project-form-dialog"));
+const ProjectCreateSourceDialog = dynamic(() => import("./project-create-source-dialog"));
+const ProjectWorkbookImportDialog = dynamic(() => import("./project-workbook-import-dialog"));
 
 const PAGE_SIZE = 25;
 const STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
@@ -103,6 +105,8 @@ export default function ProjectsTable({
     return requested && (STATUSES as readonly string[]).includes(requested) ? requested : ALL;
   });
   const [formOpen, setFormOpen] = useState(false);
+  const [createSourceOpen, setCreateSourceOpen] = useState(false);
+  const [workbookOpen, setWorkbookOpen] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
@@ -139,7 +143,7 @@ export default function ProjectsTable({
   const selection = useRowSelection(projects, `${debouncedSearch}\u0000${status}`);
 
   function openCreate() {
-    setFormOpen(true);
+    setCreateSourceOpen(true);
   }
 
   async function downloadSpreadsheet() {
@@ -388,6 +392,32 @@ export default function ProjectsTable({
           onCreated={(projectId) =>
             router.push(`/projects/${projectId}?tab=baseline` as Route)
           }
+        />
+      )}
+
+      {canCreate && createSourceOpen && (
+        <ProjectCreateSourceDialog
+          open={createSourceOpen}
+          onOpenChange={setCreateSourceOpen}
+          onManual={() => {
+            setCreateSourceOpen(false);
+            setFormOpen(true);
+          }}
+          onExcel={() => {
+            setCreateSourceOpen(false);
+            setWorkbookOpen(true);
+          }}
+        />
+      )}
+
+      {canCreate && workbookOpen && (
+        <ProjectWorkbookImportDialog
+          open={workbookOpen}
+          onOpenChange={setWorkbookOpen}
+          onCreated={(projectId) => {
+            void queryClient.invalidateQueries(trpc.project.pathFilter());
+            router.push(`/projects/${projectId}?tab=baseline` as Route);
+          }}
         />
       )}
 

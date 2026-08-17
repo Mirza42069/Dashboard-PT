@@ -128,15 +128,17 @@ export default function ProgressTab({
 
   const rows = scheduleRows(items);
   const entries = report?.entries ?? [];
+  const actualSnapshots = report?.actualSnapshots ?? [];
   const cells = distributionMap(report?.distribution ?? []);
   const planned = computePlannedCurve(rows, periods, cells);
-  const actual = computeActualCurve(rows, periods, entries, dataDate);
+  const actual = computeActualCurve(rows, periods, entries, dataDate, actualSnapshots);
   const position = latestPosition(actual.cumulative, planned.cumulative);
+  const actualSource = position.index < 0 ? null : (actual.sources[position.index] ?? null);
 
   // The chart and the table below it are built from this one call, so the line
   // someone is looking at and the figure they are about to quote cannot
   // disagree.
-  const summary = buildPeriodSummary(rows, periods, cells, entries, dataDate);
+  const summary = buildPeriodSummary(rows, periods, cells, entries, dataDate, actualSnapshots);
   const visibleRows = rows.slice(matrixWindow.rowWindow.start, matrixWindow.rowWindow.end);
   const visiblePeriods = periods.slice(
     matrixWindow.columnWindow.start,
@@ -316,6 +318,7 @@ export default function ProgressTab({
           contributors={contributors}
           dataDate={dataDate}
           totalDeviation={hasReadings ? position.deviation : null}
+          actualSource={actualSource}
         />
       )}
 

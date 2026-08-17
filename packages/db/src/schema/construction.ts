@@ -2,8 +2,10 @@ import { relations, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   boolean,
+  check,
   customType,
   date,
+  foreignKey,
   index,
   integer,
   numeric,
@@ -431,6 +433,7 @@ export const reportingPeriod = pgTable(
   },
   (table) => [
     uniqueIndex("reportingPeriod_project_index_idx").on(table.projectId, table.periodIndex),
+    uniqueIndex("reportingPeriod_project_id_idx").on(table.projectId, table.id),
     index("reportingPeriod_project_endDate_idx").on(table.projectId, table.endDate),
     index("reportingPeriod_project_status_idx").on(table.projectId, table.status),
   ],
@@ -588,7 +591,71 @@ export const boqImport = pgTable(
   },
   (table) => [
     index("boqImport_projectId_idx").on(table.projectId),
+    uniqueIndex("boqImport_project_id_idx").on(table.projectId, table.id),
     index("boqImport_createdAt_idx").on(table.createdAt),
+  ],
+);
+
+export const workbookRequestLimit = pgTable(
+  "workbook_request_limit",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull(),
+    windowStartedAt: timestamp("window_started_at").defaultNow().notNull(),
+    requestCount: integer("request_count").default(1).notNull(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.scope] }),
+    index("workbookRequestLimit_window_idx").on(table.windowStartedAt),
+    check("workbook_request_limit_count_check", sql`${table.requestCount} > 0`),
+  ],
+);
+
+export const projectActualCurve = pgTable(
+  "project_actual_curve",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    periodId: text("period_id")
+      .notNull()
+      .references(() => reportingPeriod.id, { onDelete: "cascade" }),
+    boqImportId: text("boq_import_id").references(() => boqImport.id, { onDelete: "set null" }),
+    cumulativePercent: numeric("cumulative_percent", { precision: 9, scale: 6 }).notNull(),
+    sourceFilename: text("source_filename").notNull(),
+    sourceSheetName: text("source_sheet_name").notNull(),
+    sourceRow: integer("source_row").notNull(),
+    sourceColumn: integer("source_column").notNull(),
+    sourceValue: text("source_value").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("projectActualCurve_project_period_idx").on(table.projectId, table.periodId),
+    index("projectActualCurve_periodId_idx").on(table.periodId),
+    index("projectActualCurve_boqImportId_idx").on(table.boqImportId),
+    foreignKey({
+      columns: [table.projectId, table.periodId],
+      foreignColumns: [reportingPeriod.projectId, reportingPeriod.id],
+      name: "project_actual_curve_project_period_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.projectId, table.boqImportId],
+      foreignColumns: [boqImport.projectId, boqImport.id],
+      name: "project_actual_curve_project_import_fk",
+    }),
+    check(
+      "project_actual_curve_cumulative_percent_check",
+      sql`${table.cumulativePercent} between 0 and 100`,
+    ),
+    check(
+      "project_actual_curve_source_position_check",
+      sql`${table.sourceRow} > 0 and ${table.sourceColumn} > 0`,
+    ),
   ],
 );
 
@@ -723,12 +790,29 @@ export const projectRelations = relations(project, ({ one, many }) => ({
   progressEntries: many(progressEntry),
   members: many(projectMember),
   boqImports: many(boqImport),
+  actualCurve: many(projectActualCurve),
 }));
 
-export const boqImportRelations = relations(boqImport, ({ one }) => ({
+export const boqImportRelations = relations(boqImport, ({ one, many }) => ({
   project: one(project, { fields: [boqImport.projectId], references: [project.id] }),
   version: one(boqVersion, { fields: [boqImport.boqVersionId], references: [boqVersion.id] }),
   importedBy: one(user, { fields: [boqImport.importedById], references: [user.id] }),
+  actualCurve: many(projectActualCurve),
+}));
+
+export const projectActualCurveRelations = relations(projectActualCurve, ({ one }) => ({
+  project: one(project, {
+    fields: [projectActualCurve.projectId],
+    references: [project.id],
+  }),
+  period: one(reportingPeriod, {
+    fields: [projectActualCurve.periodId],
+    references: [reportingPeriod.id],
+  }),
+  boqImport: one(boqImport, {
+    fields: [projectActualCurve.boqImportId],
+    references: [boqImport.id],
+  }),
 }));
 
 export const projectMemberRelations = relations(projectMember, ({ one }) => ({
@@ -759,6 +843,7 @@ export const reportingPeriodRelations = relations(reportingPeriod, ({ one, many 
   distribution: many(boqItemDistribution),
   progressEntries: many(progressEntry),
   events: many(reportingPeriodEvent),
+  actualCurve: many(projectActualCurve),
 }));
 
 export const reportingPeriodEventRelations = relations(reportingPeriodEvent, ({ one }) => ({

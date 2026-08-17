@@ -5,7 +5,13 @@ import { appRouter } from "@DashboardV2/api/routers/index";
 import { auth } from "@DashboardV2/auth";
 import { projectAccessFilter, resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
 import { db } from "@DashboardV2/db";
-import { notePhoto, project, projectMember, projectNote } from "@DashboardV2/db/schema";
+import {
+  notePhoto,
+  project,
+  projectMember,
+  projectNote,
+  workbookRequestLimit,
+} from "@DashboardV2/db/schema";
 import { trustedOrigins } from "@DashboardV2/env/server";
 import { trpcServer } from "@hono/trpc-server";
 import { and, eq, exists, sql } from "drizzle-orm";
@@ -332,6 +338,202 @@ async function readUpload(bytes: Uint8Array) {
   return { bytes };
 }
 
+function isPublicImportError(error: unknown) {
+  return (
+    error instanceof Error &&
+    ((typeof error === "object" && "kind" in error) || error.name === "WorkbookLimitError")
+  );
+}
+
+function isInvalidImportRequest(error: unknown) {
+  return error instanceof Error && (error.name === "ZodError" || error instanceof SyntaxError);
+}
+
+function logUnexpectedImportError(error: unknown) {
+  console.error("Unexpected workbook import error", error);
+}
+
+type AuthSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
+type ProjectCreateAccess =
+  | { error: string; status: 401 | 403 | 404 | 409 }
+  | { session: AuthSession; companyId: string };
+
+async function requireProjectCreate(c: HonoRequestContext): Promise<ProjectCreateAccess> {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session?.user) return { error: "Unauthorized", status: 401 as const };
+  if (!hasPermission(roleOf(session.user), "project:create")) {
+    return { error: "Not found", status: 404 as const };
+  }
+  const scope = await resolveCompany(session.user, c.req.raw.headers);
+  if (!scope.companyId) {
+    return { error: scope.error ?? "No company assigned", status: scope.status ?? 409 };
+  }
+  return { session, companyId: scope.companyId };
+}
+
+async function consumeWorkbookRequestLimit(userId: string, scope: string, limit: number) {
+  const expired = sql`${workbookRequestLimit.windowStartedAt} <= now() - interval '10 minutes'`;
+  const [consumed] = await db
+    .insert(workbookRequestLimit)
+    .values({ userId, scope, requestCount: 1 })
+    .onConflictDoUpdate({
+      target: [workbookRequestLimit.userId, workbookRequestLimit.scope],
+      set: {
+        requestCount: sql`case when ${expired} then 1 else ${workbookRequestLimit.requestCount} + 1 end`,
+        windowStartedAt: sql`case when ${expired} then now() else ${workbookRequestLimit.windowStartedAt} end`,
+      },
+      where: sql`${expired} or ${workbookRequestLimit.requestCount} < ${limit}`,
+    })
+    .returning({ requestCount: workbookRequestLimit.requestCount });
+  return Boolean(consumed);
+}
+
+app.post("/project-import/analyze", async (c) => {
+  const access = await requireProjectCreate(c);
+  if (!("session" in access)) return c.json({ error: access.error }, access.status);
+  if (!(await consumeWorkbookRequestLimit(access.session.user.id, "analyze", 10))) {
+    return c.json({ error: "Too many workbook analyses. Try again in a few minutes." }, 429);
+  }
+
+  const form = await c.req.parseBody();
+  const file = form.file;
+  if (!(file instanceof File)) return c.json({ error: "No workbook was attached." }, 400);
+  const upload = await readUpload(new Uint8Array(await file.arrayBuffer()));
+  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
+
+  try {
+    const { analyzeProjectWorkbook } = await import("./project-workbook");
+    return c.json(await analyzeProjectWorkbook(upload.bytes));
+  } catch (error) {
+    const invalidRequest = isInvalidImportRequest(error);
+    if (!isPublicImportError(error) && !invalidRequest) logUnexpectedImportError(error);
+    return c.json(
+      {
+        error:
+          isPublicImportError(error) && error instanceof Error
+            ? error.message
+            : "The workbook could not be analyzed.",
+      },
+      isPublicImportError(error) ? 400 : 500,
+    );
+  }
+});
+
+app.post("/project-import/review", async (c) => {
+  const access = await requireProjectCreate(c);
+  if (!("session" in access)) return c.json({ error: access.error }, access.status);
+  if (!(await consumeWorkbookRequestLimit(access.session.user.id, "review", 30))) {
+    return c.json({ error: "Too many workbook reviews. Try again in a few minutes." }, 429);
+  }
+  const form = await c.req.parseBody();
+  const file = form.file;
+  if (!(file instanceof File)) return c.json({ error: "No workbook was attached." }, 400);
+  const upload = await readUpload(new Uint8Array(await file.arrayBuffer()));
+  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
+
+  try {
+    const { reviewProjectWorkbook, workbookPlanSchema } = await import("./project-workbook");
+    const plan = workbookPlanSchema.parse(JSON.parse(String(form.plan)));
+    return c.json(await reviewProjectWorkbook(upload.bytes, plan));
+  } catch (error) {
+    const invalidRequest = isInvalidImportRequest(error);
+    if (!isPublicImportError(error) && !invalidRequest) logUnexpectedImportError(error);
+    return c.json(
+      {
+        error:
+          isPublicImportError(error) && error instanceof Error
+            ? error.message
+            : "The import plan could not be reviewed.",
+      },
+      isPublicImportError(error) || invalidRequest ? 422 : 500,
+    );
+  }
+});
+
+app.post("/project-import/commit", async (c) => {
+  const access = await requireProjectCreate(c);
+  if (!("session" in access)) return c.json({ error: access.error }, access.status);
+  if (!(await consumeWorkbookRequestLimit(access.session.user.id, "commit", 10))) {
+    return c.json({ error: "Too many workbook imports. Try again in a few minutes." }, 429);
+  }
+
+  const form = await c.req.parseBody();
+  const file = form.file;
+  if (!(file instanceof File)) return c.json({ error: "No workbook was attached." }, 400);
+  const upload = await readUpload(new Uint8Array(await file.arrayBuffer()));
+  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
+
+  let submitted: unknown;
+  try {
+    submitted = JSON.parse(String(form.confirmed));
+  } catch {
+    return c.json({ error: "The confirmed import plan could not be read." }, 400);
+  }
+
+  try {
+    const { commitProjectWorkbook } = await import("./project-workbook-commit");
+    const outcome = await commitProjectWorkbook({
+      bytes: upload.bytes,
+      filename: file.name || "workbook.xlsx",
+      confirmed: submitted as Parameters<typeof commitProjectWorkbook>[0]["confirmed"],
+      companyId: access.companyId,
+      actor: {
+        id: access.session.user.id,
+        name: access.session.user.name,
+        role: roleOf(access.session.user),
+      },
+    });
+    await recordActivity(
+      { session: access.session, companyId: access.companyId },
+      {
+        action: "created",
+        entityType: "project",
+        entityId: outcome.projectId,
+        entityLabel: `${String((submitted as { project?: { code?: string } }).project?.code ?? "").toUpperCase()} - ${String((submitted as { project?: { name?: string } }).project?.name ?? "")}`,
+        detail: `Created from ${file.name}: ${outcome.rowsImported} BoQ row(s), ${outcome.periodCount} period(s)`,
+      },
+    );
+    return c.json(outcome);
+  } catch (error) {
+    const databaseCode =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : error && typeof error === "object" && "cause" in error
+          ? String((error as { cause?: { code?: unknown } }).cause?.code ?? "")
+          : "";
+    if (databaseCode === "23505") {
+      return c.json({ error: "That project code is already in use." }, 409);
+    }
+    const isPublic = isPublicImportError(error);
+    const invalidRequest = isInvalidImportRequest(error);
+    if (!isPublic && !invalidRequest) logUnexpectedImportError(error);
+    const body = {
+      error:
+        isPublic && error instanceof Error
+          ? error.message
+          : "The project could not be created.",
+      code:
+        error && typeof error === "object" && "kind" in error && "code" in error
+          ? (error as { code: unknown }).code
+          : undefined,
+      details:
+        error && typeof error === "object" && "kind" in error && "details" in error
+          ? (error as { details: unknown }).details
+          : undefined,
+      errors:
+        error && typeof error === "object" && "errors" in error
+          ? (error as { errors: unknown }).errors
+          : undefined,
+    };
+    if (error && typeof error === "object" && "kind" in error) {
+      return c.json(body, (error as { kind: string }).kind === "conflict" ? 409 : 422);
+    }
+    if (isPublic) return c.json(body, 422);
+    if (invalidRequest) return c.json(body, 400);
+    return c.json(body, 500);
+  }
+});
+
 app.post("/projects/:id/boq-import/preview", async (c) => {
   const projectId = c.req.param("id");
   const access = await requireProjectWrite(c, projectId);
@@ -373,16 +575,25 @@ app.post("/projects/:id/boq-import/commit", async (c) => {
     return c.json({ error: "The column mapping could not be read." }, 400);
   }
 
-  const { commitImport } = await import("./boq-import");
-  const outcome = await commitImport({
-    projectId,
-    bytes: upload.bytes,
-    filename: file.name || "workbook.xlsx",
-    sheetName: plan.sheetName,
-    headerRow: plan.headerRow,
-    mapping: plan.mapping as Parameters<typeof commitImport>[0]["mapping"],
-    actor: { id: access.session.user.id, name: access.session.user.name },
-  });
+  let outcome;
+  try {
+    const { commitImport } = await import("./boq-import");
+    outcome = await commitImport({
+      projectId,
+      bytes: upload.bytes,
+      filename: file.name || "workbook.xlsx",
+      sheetName: plan.sheetName,
+      headerRow: plan.headerRow,
+      mapping: plan.mapping as Parameters<typeof commitImport>[0]["mapping"],
+      actor: { id: access.session.user.id, name: access.session.user.name },
+    });
+  } catch (error) {
+    if (isPublicImportError(error)) {
+      return c.json({ error: error instanceof Error ? error.message : "Import rejected." }, 422);
+    }
+    logUnexpectedImportError(error);
+    return c.json({ error: "The workbook could not be imported." }, 500);
+  }
 
   if (outcome.status === "rejected") {
     return c.json({ error: outcome.message }, 409);

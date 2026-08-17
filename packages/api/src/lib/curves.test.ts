@@ -9,6 +9,7 @@ import {
   latestPosition,
   scheduleRows,
   type BoqItemLike,
+  type ActualSnapshotLike,
   type EntryLike,
   type PeriodLike,
 } from "./curves";
@@ -42,6 +43,11 @@ const periods = [
   period("p2", "2026-01-14"),
   period("p3", "2026-01-21"),
 ];
+
+const snapshot = (periodId: string, cumulativePercent: number): ActualSnapshotLike => ({
+  periodId,
+  cumulativePercent,
+});
 
 test("an intermediate period with no entry carries the prior reading forward", () => {
   const entries = [entry("a", "p1", 50, 50), entry("a", "p3", 80, 80)];
@@ -90,6 +96,58 @@ test("weights combine across leaves", () => {
   const { cumulative } = computeActualCurve(twoLeaves, periods, entries, "2026-01-07");
   // 60 × 50% + 40 × 100% = 30 + 40
   expect(cumulative[0]).toBeCloseTo(70, 6);
+});
+
+test("imported cumulative snapshots produce an actual curve without item readings", () => {
+  const actual = computeActualCurve(
+    rows,
+    periods,
+    [],
+    "2026-01-21",
+    [snapshot("p1", 12), snapshot("p3", 45)],
+  );
+
+  expect(actual.cumulative).toEqual([12, 12, 45]);
+  expect(actual.sources).toEqual(["imported", "imported", "imported"]);
+});
+
+test("item readings take precedence over an imported snapshot in the same period", () => {
+  const actual = computeActualCurve(
+    rows,
+    periods,
+    [entry("a", "p2", 35, 35)],
+    "2026-01-21",
+    [snapshot("p1", 10), snapshot("p2", 90), snapshot("p3", 60)],
+  );
+
+  expect(actual.cumulative).toEqual([10, 35, 60]);
+  expect(actual.sources).toEqual(["imported", "itemized", "imported"]);
+});
+
+test("a cleared item cell does not mask an imported snapshot", () => {
+  const actual = computeActualCurve(
+    rows,
+    periods,
+    [entry("a", "p2", 0, null)],
+    "2026-01-14",
+    [snapshot("p2", 25)],
+  );
+
+  expect(actual.cumulative).toEqual([0, 25, null]);
+  expect(actual.sources).toEqual([null, "imported", null]);
+});
+
+test("imported snapshots preserve trailing nulls and respect the data date", () => {
+  const actual = computeActualCurve(
+    rows,
+    periods,
+    [],
+    "2026-01-14",
+    [snapshot("p1", 10), snapshot("p3", 80)],
+  );
+
+  expect(actual.cumulative).toEqual([10, 10, null]);
+  expect(actual.sources).toEqual(["imported", "imported", null]);
 });
 
 test("the planned curve is the running total of weight x cell", () => {
@@ -244,6 +302,22 @@ test("the summary agrees with the curves it is built from", () => {
   // reason buildPeriodSummary composes these rather than recomputing them.
   expect(summary.map((row) => row.plannedCumulative)).toEqual(planned.cumulative);
   expect(summary.map((row) => row.actualCumulative)).toEqual(actual.cumulative);
+});
+
+test("the summary exposes imported cumulative values and their source", () => {
+  const snapshots = [snapshot("p1", 15), snapshot("p2", 40)];
+  const summary = buildPeriodSummary(
+    rows,
+    summaryPeriods,
+    evenPlan,
+    [],
+    "2026-01-14",
+    snapshots,
+  );
+
+  expect(summary.map((row) => row.actualCumulative)).toEqual([15, 40, null]);
+  expect(summary.map((row) => row.actualPeriod)).toEqual([15, 25, null]);
+  expect(summary.map((row) => row.actualSource)).toEqual(["imported", "imported", null]);
 });
 
 /* ------------------------------------------------- delay contributors */

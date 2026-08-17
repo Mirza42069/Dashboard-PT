@@ -1,6 +1,6 @@
 "use client";
 
-import type { DelayContributor } from "@DashboardV2/api/lib/curves";
+import type { ActualCurveSource, DelayContributor } from "@DashboardV2/api/lib/curves";
 import {
   Card,
   CardContent,
@@ -44,11 +44,13 @@ export default function DelayContributors<T extends { id: string; code: string; 
   contributors,
   dataDate,
   totalDeviation,
+  actualSource,
 }: {
   contributors: DelayContributor<T>[];
   dataDate: string | null;
   /** The project-level deviation these rows add up to. Null when unreported. */
   totalDeviation: number | null;
+  actualSource: ActualCurveSource;
 }) {
   const t = useT();
   const { formatDate } = useFormat();
@@ -90,7 +92,13 @@ export default function DelayContributors<T extends { id: string; code: string; 
       </CardHeader>
 
       <CardContent className="px-0">
-        {dataDate === null ? (
+        {actualSource === "imported" ? (
+          <Empty>
+            <EmptyHeader>
+              <EmptyDescription>{t.delay.importedSnapshot}</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : dataDate === null ? (
           <Empty>
             <EmptyHeader>
               <EmptyDescription>{t.delay.noData}</EmptyDescription>

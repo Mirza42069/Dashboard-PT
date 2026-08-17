@@ -50,6 +50,9 @@ export const env = createEnv({
     ADMIN_EMAIL: z.string().optional(),
     ADMIN_PASSWORD: z.string().optional(),
     ADMIN_NAME: z.string().optional(),
+    // Optional so unrelated API routes still boot when AI import is not configured.
+    OPENAI_API_KEY: z.string().min(1).optional(),
+    OPENAI_MODEL: z.string().min(1).optional(),
   },
   runtimeEnv: runtimeEnv,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

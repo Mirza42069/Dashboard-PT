@@ -1,4 +1,5 @@
 import { PLAN_TOLERANCE, validatePlanWindow } from "@DashboardV2/api/lib/schedule-plan";
+import { inflateRawSync } from "node:zlib";
 // Type-only for the reason given in project-export.ts: exceljs is CommonJS over
 // a tree of dynamic requires that Vercel's bundler will not resolve at boot.
 import type ExcelJS from "exceljs";
@@ -16,6 +17,13 @@ import type ExcelJS from "exceljs";
 
 /** Matches the photo upload ceiling, and for the same reason: Vercel's 4.5 MB body limit. */
 export const MAX_IMPORT_BYTES = 4 * 1024 * 1024;
+const MAX_XLSX_ENTRIES = 5_000;
+const MAX_XLSX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
+const MAX_XLSX_ENTRY_BYTES = 32 * 1024 * 1024;
+const MAX_WORKBOOK_SHEETS = 20;
+export const MAX_WORKBOOK_ROWS = 10_000;
+export const MAX_WORKBOOK_COLUMNS = 1_000;
+const MAX_WORKBOOK_CELLS = 250_000;
 
 /** How far down a sheet to look for the header row before giving up. */
 const HEADER_SEARCH_ROWS = 25;
@@ -24,7 +32,7 @@ const HEADER_SEARCH_ROWS = 25;
 const SAMPLE_ROWS = 3;
 
 /** Guards against a mapped 200,000-row sheet becoming one insert. */
-const MAX_IMPORT_ROWS = 2000;
+export const MAX_IMPORT_ROWS = 2000;
 
 export const IMPORT_FIELDS = [
   "code",
@@ -33,6 +41,7 @@ export const IMPORT_FIELDS = [
   "unit",
   "quantity",
   "unitRate",
+  "amount",
   "weight",
   "start",
   "finish",
@@ -186,13 +195,136 @@ export type SheetPreview = {
   columns: { index: number; letter: string; header: string; samples: string[] }[];
 };
 
+export class WorkbookLimitError extends Error {
+  override readonly name = "WorkbookLimitError";
+}
+
+function validateXlsxArchive(bytes: Uint8Array) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const minimumOffset = Math.max(0, bytes.byteLength - 65_557);
+  let endOffset = -1;
+  for (let offset = bytes.byteLength - 22; offset >= minimumOffset; offset--) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      endOffset = offset;
+      break;
+    }
+  }
+  if (endOffset < 0) throw new WorkbookLimitError("The upload is not a valid .xlsx archive.");
+  if (endOffset + 22 + view.getUint16(endOffset + 20, true) !== bytes.byteLength) {
+    throw new WorkbookLimitError("The workbook archive footer is malformed.");
+  }
+  if (view.getUint16(endOffset + 4, true) !== 0 || view.getUint16(endOffset + 6, true) !== 0) {
+    throw new WorkbookLimitError("Multi-part .xlsx archives are not supported.");
+  }
+
+  const entryCount = view.getUint16(endOffset + 10, true);
+  const centralSize = view.getUint32(endOffset + 12, true);
+  const centralOffset = view.getUint32(endOffset + 16, true);
+  if (entryCount > MAX_XLSX_ENTRIES || centralOffset + centralSize > bytes.byteLength) {
+    throw new WorkbookLimitError("The workbook archive is too large or malformed.");
+  }
+
+  let cursor = centralOffset;
+  let totalDeclaredUncompressed = 0;
+  let totalActualUncompressed = 0;
+  for (let index = 0; index < entryCount; index++) {
+    if (cursor + 46 > bytes.byteLength || view.getUint32(cursor, true) !== 0x02014b50) {
+      throw new WorkbookLimitError("The workbook archive directory is malformed.");
+    }
+    const flags = view.getUint16(cursor + 8, true);
+    const compressionMethod = view.getUint16(cursor + 10, true);
+    const compressedSize = view.getUint32(cursor + 20, true);
+    const uncompressedSize = view.getUint32(cursor + 24, true);
+    const nameLength = view.getUint16(cursor + 28, true);
+    const extraLength = view.getUint16(cursor + 30, true);
+    const commentLength = view.getUint16(cursor + 32, true);
+    const localHeaderOffset = view.getUint32(cursor + 42, true);
+    if ((flags & 1) !== 0) throw new WorkbookLimitError("Encrypted workbooks are not supported.");
+    if (uncompressedSize > MAX_XLSX_ENTRY_BYTES) {
+      throw new WorkbookLimitError("A workbook entry exceeds the extraction limit.");
+    }
+    totalDeclaredUncompressed += uncompressedSize;
+    if (totalDeclaredUncompressed > MAX_XLSX_UNCOMPRESSED_BYTES) {
+      throw new WorkbookLimitError("The workbook exceeds the extraction limit.");
+    }
+    if (
+      localHeaderOffset + 30 > bytes.byteLength ||
+      view.getUint32(localHeaderOffset, true) !== 0x04034b50
+    ) {
+      throw new WorkbookLimitError("The workbook archive contains a malformed entry.");
+    }
+    const localNameLength = view.getUint16(localHeaderOffset + 26, true);
+    const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
+    const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    if (dataOffset + compressedSize > bytes.byteLength) {
+      throw new WorkbookLimitError("The workbook archive contains a truncated entry.");
+    }
+    const compressed = Buffer.from(
+      bytes.buffer,
+      bytes.byteOffset + dataOffset,
+      compressedSize,
+    );
+    let actualSize: number;
+    if (compressionMethod === 0) {
+      actualSize = compressedSize;
+    } else if (compressionMethod === 8) {
+      try {
+        actualSize = inflateRawSync(compressed, {
+          maxOutputLength:
+            Math.min(
+              MAX_XLSX_ENTRY_BYTES,
+              MAX_XLSX_UNCOMPRESSED_BYTES - totalActualUncompressed,
+            ) + 1,
+        }).byteLength;
+      } catch {
+        throw new WorkbookLimitError("The workbook exceeds the extraction limit or is malformed.");
+      }
+    } else {
+      throw new WorkbookLimitError("The workbook uses an unsupported ZIP compression method.");
+    }
+    totalActualUncompressed += actualSize;
+    if (
+      actualSize > MAX_XLSX_ENTRY_BYTES ||
+      totalActualUncompressed > MAX_XLSX_UNCOMPRESSED_BYTES
+    ) {
+      throw new WorkbookLimitError("The workbook exceeds the extraction limit.");
+    }
+    cursor += 46 + nameLength + extraLength + commentLength;
+    if (cursor > centralOffset + centralSize || cursor > bytes.byteLength) {
+      throw new WorkbookLimitError("The workbook archive directory is malformed.");
+    }
+  }
+}
+
 export async function loadWorkbook(bytes: Uint8Array) {
+  validateXlsxArchive(bytes);
   // Same lazy import as the exports next door — see the note at the top.
   const { default: excel } = (await import("exceljs")) as unknown as { default: typeof ExcelJS };
   const workbook = new excel.Workbook();
   // Cast: exceljs types this as Node's Buffer, and a Uint8Array is what a Hono
   // request body gives us. The reader only indexes it.
   await workbook.xlsx.load(bytes as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+  if (workbook.worksheets.length > MAX_WORKBOOK_SHEETS) {
+    throw new WorkbookLimitError(`A workbook can contain at most ${MAX_WORKBOOK_SHEETS} sheets.`);
+  }
+  let populatedCells = 0;
+  for (const sheet of workbook.worksheets) {
+    if (sheet.rowCount > MAX_WORKBOOK_ROWS || sheet.columnCount > MAX_WORKBOOK_COLUMNS) {
+      throw new WorkbookLimitError(
+        `Each sheet is limited to ${MAX_WORKBOOK_ROWS} rows and ${MAX_WORKBOOK_COLUMNS} columns.`,
+      );
+    }
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, () => {
+        populatedCells++;
+      });
+    });
+    if (populatedCells > MAX_WORKBOOK_CELLS) {
+      throw new WorkbookLimitError(
+        `A workbook can contain at most ${MAX_WORKBOOK_CELLS.toLocaleString("en-US")} populated cells.`,
+      );
+    }
+  }
   return workbook;
 }
 
@@ -286,6 +418,15 @@ export type ParseResult = { rows: ParsedRow[]; errors: ImportError[] };
 
 export type PeriodRef = { periodIndex: number; startDate: string; endDate: string };
 
+export type ParseOptions = {
+  dataStartRow?: number;
+  dataEndRow?: number;
+  sectionRows?: number[];
+  excludedRows?: number[];
+  requirePricing?: boolean;
+  parentAssignments?: { row: number; parentRow: number | null }[];
+};
+
 /**
  * Reads and checks every mapped row.
  *
@@ -297,6 +438,7 @@ export function parseRows(
   headerRow: number,
   mapping: ImportMapping,
   periods: PeriodRef[],
+  options: ParseOptions = {},
 ): ParseResult {
   const errors: ImportError[] = [];
   const rows: ParsedRow[] = [];
@@ -359,16 +501,33 @@ export function parseRows(
   }
 
   let autoCode = 0;
+  let sectionNumber = 0;
+  let currentSectionCode: string | null = null;
+  const sectionRows = new Set(options.sectionRows ?? []);
+  const excludedRows = new Set(options.excludedRows ?? []);
+  const assignments = options.parentAssignments
+    ? new Map(options.parentAssignments.map((assignment) => [assignment.row, assignment.parentRow]))
+    : null;
+  const firstRow = options.dataStartRow ?? headerRow + 1;
+  const lastRow = Math.min(options.dataEndRow ?? sheet.rowCount, sheet.rowCount);
+  const sectionCodeByRow = new Map<number, string>();
+  for (const rowNumber of [...sectionRows].sort((a, b) => a - b)) {
+    const mappedCode = cellText(at(rowNumber, fields.code)).trim();
+    sectionCodeByRow.set(rowNumber, mappedCode || `S${sectionCodeByRow.size + 1}`);
+  }
 
-  for (let rowNumber = headerRow + 1; rowNumber <= sheet.rowCount; rowNumber++) {
+  for (let rowNumber = firstRow; rowNumber <= lastRow; rowNumber++) {
+    if (excludedRows.has(rowNumber)) continue;
     const description = cellText(at(rowNumber, fields.description)).trim();
     const codeText = cellText(at(rowNumber, fields.code)).trim();
     const parentText = cellText(at(rowNumber, fields.parent)).trim();
 
-    // A blank line in the middle of a BoQ is spacing, not a row. Only rows with
-    // nothing at all in any mapped identity column are skipped, so a row with a
-    // code but no description is still reported rather than quietly dropped.
-    if (description === "" && codeText === "" && parentText === "") continue;
+    // A blank line in the middle of a BoQ is spacing, but a row with a mapped
+    // amount or schedule value and no description is malformed, not blank.
+    const hasMappedValue = Object.values(fields).some(
+      (column) => column !== undefined && at(rowNumber, column).kind !== "empty",
+    );
+    if (description === "" && codeText === "" && parentText === "" && !hasMappedValue) continue;
 
     if (rows.length >= MAX_IMPORT_ROWS) {
       errors.push({
@@ -384,24 +543,77 @@ export function parseRows(
     if (description === "") {
       fail(rowNumber, "description", "Description is required.");
       rowFailed = true;
+    } else if (description.length > 2_000) {
+      fail(rowNumber, "description", "Description must not exceed 2,000 characters.");
+      rowFailed = true;
     }
     if (fields.code !== undefined && codeText === "") {
       fail(rowNumber, "code", "BoQ code is required.");
       rowFailed = true;
+    } else if (codeText.length > 200 || parentText.length > 200) {
+      fail(rowNumber, fields.code !== undefined ? "code" : null, "BoQ codes must not exceed 200 characters.");
+      rowFailed = true;
     }
 
-    const quantity = numberField(rowNumber, "quantity", "Quantity");
-    const unitRate = numberField(rowNumber, "unitRate", "Unit rate");
+    const isSection = sectionRows.has(rowNumber);
+    if (isSection) {
+      const carriesLineData = (
+        ["amount", "quantity", "unitRate", "weight", "start", "finish"] as ImportField[]
+      ).some(
+        (field) => fields[field] !== undefined && at(rowNumber, fields[field]).kind !== "empty",
+      );
+      if (carriesLineData) {
+        fail(rowNumber, null, "A section row cannot contain pricing, weight, or schedule values.");
+        rowFailed = true;
+      }
+    }
+    const quantity = isSection ? null : numberField(rowNumber, "quantity", "Quantity");
+    const unitRate = isSection ? null : numberField(rowNumber, "unitRate", "Unit rate");
+    const amount = isSection ? null : numberField(rowNumber, "amount", "Amount");
     const weight = numberField(rowNumber, "weight", "Weight");
-    if (quantity === "invalid" || unitRate === "invalid" || weight === "invalid") rowFailed = true;
+    if (
+      quantity === "invalid" ||
+      unitRate === "invalid" ||
+      amount === "invalid" ||
+      weight === "invalid"
+    ) {
+      rowFailed = true;
+    }
+    if (
+      amount !== "invalid" &&
+      amount !== null &&
+      quantity !== "invalid" &&
+      quantity !== null &&
+      unitRate !== "invalid" &&
+      unitRate !== null
+    ) {
+      const calculated = quantity * unitRate;
+      const tolerance = Math.max(0.01, Math.abs(amount) * 0.005);
+      if (Math.abs(calculated - amount) > tolerance) {
+        fail(rowNumber, "amount", "Amount does not match quantity × unit rate.");
+        rowFailed = true;
+      }
+    }
+    if (
+      options.requirePricing &&
+      !isSection &&
+      amount !== "invalid" &&
+      quantity !== "invalid" &&
+      unitRate !== "invalid" &&
+      amount === null &&
+      (quantity === null || unitRate === null)
+    ) {
+      fail(rowNumber, null, "Map an amount, or both quantity and unit rate, for every BoQ line.");
+      rowFailed = true;
+    }
 
     if (weight !== "invalid" && weight !== null && weight > 100) {
       fail(rowNumber, "weight", "Weight cannot exceed 100%.");
       rowFailed = true;
     }
 
-    const start = resolvePeriod(rowNumber, "start");
-    const finish = resolvePeriod(rowNumber, "finish");
+    const start = isSection ? null : resolvePeriod(rowNumber, "start");
+    const finish = isSection ? null : resolvePeriod(rowNumber, "finish");
     if (start === "invalid" || finish === "invalid") rowFailed = true;
 
     if (start !== "invalid" && finish !== "invalid") {
@@ -456,19 +668,51 @@ export function parseRows(
 
     if (rowFailed) continue;
 
-    autoCode++;
+    if (isSection) {
+      sectionNumber++;
+      currentSectionCode = sectionCodeByRow.get(rowNumber) ?? (codeText || `S${sectionNumber}`);
+    } else {
+      autoCode++;
+    }
+    const hasQuantityPrice =
+      quantity !== "invalid" &&
+      quantity !== null &&
+      unitRate !== "invalid" &&
+      unitRate !== null;
+    const lumpSum = !hasQuantityPrice && amount !== "invalid" && amount !== null;
+    let parentCode: string | null;
+    if (isSection) {
+      parentCode = null;
+    } else if (assignments) {
+      if (!assignments.has(rowNumber)) {
+        fail(rowNumber, null, "Choose a parent section or Top level for this row.");
+        continue;
+      }
+      const parentRow = assignments.get(rowNumber) ?? null;
+      parentCode = parentRow === null ? null : (sectionCodeByRow.get(parentRow) ?? null);
+      if (parentRow !== null && parentCode === null) {
+        fail(rowNumber, null, `The selected parent row ${parentRow} is not a section.`);
+        continue;
+      }
+    } else {
+      parentCode = parentText || currentSectionCode;
+    }
     rows.push({
       row: rowNumber,
       // An unmapped code column numbers the lines in sheet order. Codes are
       // identity within a section, not meaning, so inventing them is safe —
       // inventing a description or a quantity would not be.
-      code: fields.code === undefined ? String(autoCode) : codeText,
+      code: isSection
+        ? currentSectionCode!
+        : fields.code === undefined
+          ? String(autoCode)
+          : codeText,
       description,
-      parentCode: parentText === "" ? null : parentText,
-      unit: cellText(at(rowNumber, fields.unit)).trim() || null,
-      quantity: quantity as number | null,
-      unitRate: unitRate as number | null,
-      weight: weight as number | null,
+      parentCode,
+      unit: isSection ? null : cellText(at(rowNumber, fields.unit)).trim() || (lumpSum ? "LS" : null),
+      quantity: isSection ? null : lumpSum ? 1 : (quantity as number | null),
+      unitRate: isSection ? null : lumpSum ? amount : (unitRate as number | null),
+      weight: isSection ? null : (weight as number | null),
       start: start as number | null,
       finish: finish as number | null,
       cells,
@@ -490,7 +734,9 @@ export function parseRows(
  */
 function checkStructure(rows: ParsedRow[], mapping: ImportMapping): ImportError[] {
   const errors: ImportError[] = [];
-  const sectionCodes = new Set(rows.filter((row) => row.parentCode === null).map((row) => row.code));
+  const topLevelByCode = new Map(
+    rows.filter((row) => row.parentCode === null).map((row) => [row.code, row]),
+  );
   const parentColumn = mapping.fields.parent ? columnLetter(mapping.fields.parent) : null;
   const codeColumn = mapping.fields.code ? columnLetter(mapping.fields.code) : null;
 
@@ -500,11 +746,30 @@ function checkStructure(rows: ParsedRow[], mapping: ImportMapping): ImportError[
       errors.push({ row: row.row, column: parentColumn, message: "A line cannot be its own section." });
       continue;
     }
-    if (!sectionCodes.has(row.parentCode)) {
+    if (!topLevelByCode.has(row.parentCode)) {
       errors.push({
         row: row.row,
         column: parentColumn,
         message: `No section with code "${row.parentCode}" appears in this sheet.`,
+      });
+    }
+  }
+
+  for (const parentCode of new Set(rows.flatMap((row) => row.parentCode ?? []))) {
+    const parent = topLevelByCode.get(parentCode);
+    if (
+      parent &&
+      (parent.quantity !== null ||
+        parent.unitRate !== null ||
+        parent.weight !== null ||
+        parent.start !== null ||
+        parent.finish !== null ||
+        parent.cells !== null)
+    ) {
+      errors.push({
+        row: parent.row,
+        column: null,
+        message: "A section referenced by child rows cannot contain pricing, weight, or schedule values.",
       });
     }
   }

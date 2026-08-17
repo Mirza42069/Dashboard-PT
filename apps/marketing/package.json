@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@swc/helpers": "^0.5.23",
+    "@vercel/analytics": "^2.0.1",
+    "@vercel/speed-insights": "^2.0.0",
     "next": "^16.3.0",
     "react": "catalog:",
     "react-dom": "catalog:",

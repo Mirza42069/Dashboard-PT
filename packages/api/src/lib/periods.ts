@@ -26,6 +26,25 @@ export type GeneratedPeriod = {
 
 export class PeriodRangeError extends Error {}
 
+/** The inclusive end date of an exact number of reporting periods. */
+export function endDateForPeriodCount(start: string, count: number, type: PeriodType): string {
+  if (!Number.isInteger(count) || count < 1 || count > MAX_PERIODS) {
+    throw new PeriodRangeError(`The schedule must contain between 1 and ${MAX_PERIODS} periods.`);
+  }
+  let end = parse(start);
+  if (Number.isNaN(end.getTime())) throw new PeriodRangeError("Choose a valid schedule start date.");
+
+  for (let index = 0; index < count; index++) {
+    if (type === "monthly") {
+      end = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0));
+    } else {
+      end = addDays(end, (type === "biweekly" ? 14 : 7) - 1);
+    }
+    if (index < count - 1) end = addDays(end, 1);
+  }
+  return iso(end);
+}
+
 /**
  * Buckets covering [start, finish] at the project's cadence. The last bucket is
  * clamped to `finish`, so the grid ends exactly on the contract date rather
@@ -48,6 +67,9 @@ export function generatePeriods(
   let index = 1;
 
   while (cursor <= to) {
+    if (index > MAX_PERIODS) {
+      throw new PeriodRangeError("That date range needs too many periods — check the contract dates.");
+    }
     let end: Date;
     let label: string;
 
@@ -72,10 +94,6 @@ export function generatePeriods(
 
     cursor = addDays(end, 1);
     index++;
-
-    if (index > MAX_PERIODS) {
-      throw new PeriodRangeError("That date range needs too many periods — check the contract dates.");
-    }
   }
 
   return periods;

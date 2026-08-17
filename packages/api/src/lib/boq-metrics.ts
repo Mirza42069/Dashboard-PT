@@ -31,7 +31,7 @@ const outerDataDate = sql.raw(`"project"."data_date"`);
  * period that holds a real reading, so a leaf nobody has touched since week 3
  * still counts at its week-3 figure rather than dropping to zero.
  */
-const actualPercent = sql<string | null>`(
+const itemizedActualPercentAt = (asOf: SQL) => sql<string | null>`(
   select sum(item.weight * reading.pct_complete / 100.0)
   from boq_version version
   join boq_item item
@@ -46,7 +46,7 @@ const actualPercent = sql<string | null>`(
     from progress_entry entry
     join reporting_period period on period.id = entry.period_id
     where entry.boq_item_id = item.id
-      and (${outerDataDate} is null or period.end_date <= ${outerDataDate})
+      and period.end_date <= ${asOf}
       and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
     order by period.end_date desc
     limit 1
@@ -56,8 +56,61 @@ const actualPercent = sql<string | null>`(
     and version.schedule_status = 'active'
 )`;
 
+const importedActualPercentAt = (asOf: SQL) => sql<string | null>`(
+  select snapshot.cumulative_percent
+  from project_actual_curve snapshot
+  join reporting_period period on period.id = snapshot.period_id
+  where snapshot.project_id = ${outerProjectId}
+    and period.end_date <= ${asOf}
+  order by period.end_date desc
+  limit 1
+)`;
+
+/** The newest source wins; item readings win when both sources share a period. */
+const latestActualSourceAt = (asOf: SQL) => sql<string | null>`(
+  select source
+  from (
+    select period.end_date, 1 as priority, 'itemized' as source
+    from progress_entry entry
+    join boq_item item on item.id = entry.boq_item_id
+    join boq_version version on version.id = item.boq_version_id
+    join reporting_period period on period.id = entry.period_id
+    where version.project_id = ${outerProjectId}
+      and version.status = 'active'
+      and version.schedule_status = 'active'
+      and period.end_date <= ${asOf}
+      and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
+    union all
+    select period.end_date, 0 as priority, 'imported' as source
+    from project_actual_curve snapshot
+    join reporting_period period on period.id = snapshot.period_id
+    where snapshot.project_id = ${outerProjectId}
+      and period.end_date <= ${asOf}
+  ) sources
+  order by end_date desc, priority desc
+  limit 1
+)`;
+
+const actualPercentAt = (asOf: SQL) => sql<string | null>`case
+  when ${latestActualSourceAt(asOf)} = 'itemized' then ${itemizedActualPercentAt(asOf)}
+  else ${importedActualPercentAt(asOf)}
+end`;
+
+const actualPercent = actualPercentAt(outerDataDate);
+
+/** Contract value belongs to the complete active baseline, never a draft revision. */
+const activeContractValue = sql<string | null>`(
+  select version.total_value
+  from boq_version version
+  where version.project_id = ${outerProjectId}
+    and version.status = 'active'
+    and version.schedule_status = 'active'
+  order by version.version_no desc
+  limit 1
+)`;
+
 /** Contract-rate value of measured work, calculated from each line rather than progress weights. */
-const workCompletedValue = sql<string | null>`(
+const itemizedWorkCompletedValueAt = (asOf: SQL) => sql<string | null>`(
   select sum(coalesce(item.value, 0) * reading.pct_complete / 100.0)
   from boq_version version
   join boq_item item
@@ -72,7 +125,7 @@ const workCompletedValue = sql<string | null>`(
     from progress_entry entry
     join reporting_period period on period.id = entry.period_id
     where entry.boq_item_id = item.id
-      and (${outerDataDate} is null or period.end_date <= ${outerDataDate})
+      and period.end_date <= ${asOf}
       and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
     order by period.end_date desc
     limit 1
@@ -81,6 +134,11 @@ const workCompletedValue = sql<string | null>`(
     and version.status = 'active'
     and version.schedule_status = 'active'
 )`;
+
+const workCompletedValue = sql<string | null>`case
+  when ${latestActualSourceAt(outerDataDate)} = 'itemized' then ${itemizedWorkCompletedValueAt(outerDataDate)}
+  else (${activeContractValue}) * (${importedActualPercentAt(outerDataDate)}) / 100.0
+end`;
 
 /** Everything the plan said should be finished by the data date. */
 const plannedPercent = sql<string | null>`(
@@ -107,17 +165,6 @@ const hasBaseline = sql<boolean>`exists (
   where version.project_id = ${outerProjectId}
     and version.status = 'active'
     and version.schedule_status = 'active'
-)`;
-
-/** Contract value belongs to the complete active baseline, never a draft revision. */
-const activeContractValue = sql<string | null>`(
-  select version.total_value
-  from boq_version version
-  where version.project_id = ${outerProjectId}
-    and version.status = 'active'
-    and version.schedule_status = 'active'
-  order by version.version_no desc
-  limit 1
 )`;
 
 export type BoqMetrics = {
@@ -190,36 +237,18 @@ const previousDataDate = sql<string | null>`(
   from reporting_period period
   where period.project_id = ${outerProjectId}
     and period.end_date < ${outerDataDate}
-    and exists (
-      select 1 from progress_entry entry
-      where entry.period_id = period.id
-        and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
+    and (
+      exists (
+        select 1 from progress_entry entry
+        where entry.period_id = period.id
+          and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
+      )
+      or exists (
+        select 1 from project_actual_curve snapshot
+        where snapshot.project_id = ${outerProjectId}
+          and snapshot.period_id = period.id
+      )
     )
-)`;
-
-const actualPercentAt = (asOf: SQL<string | null>) => sql<string | null>`(
-  select sum(item.weight * reading.pct_complete / 100.0)
-  from boq_version version
-  join boq_item item
-    on item.boq_version_id = version.id
-   and item.deleted_at is null
-   and not exists (
-     select 1 from boq_item child
-     where child.parent_id = item.id and child.deleted_at is null
-   )
-  join lateral (
-    select entry.pct_complete
-    from progress_entry entry
-    join reporting_period period on period.id = entry.period_id
-    where entry.boq_item_id = item.id
-      and period.end_date <= ${asOf}
-      and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
-    order by period.end_date desc
-    limit 1
-  ) reading on true
-  where version.project_id = ${outerProjectId}
-    and version.status = 'active'
-    and version.schedule_status = 'active'
 )`;
 
 const plannedPercentAt = (asOf: SQL<string | null>) => sql<string | null>`(
@@ -357,14 +386,19 @@ export function refreshDataDateStatement(projectId: string) {
   return sql`
     update project
     set data_date = (
-      select max(period.end_date)
-      from reporting_period period
-      where period.project_id = ${projectId}
-        and exists (
-          select 1 from progress_entry entry
-          where entry.period_id = period.id
-            and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
-        )
+      select max(reported.end_date)
+      from (
+        select period.end_date
+        from progress_entry entry
+        join reporting_period period on period.id = entry.period_id
+        where period.project_id = ${projectId}
+          and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
+        union all
+        select period.end_date
+        from project_actual_curve snapshot
+        join reporting_period period on period.id = snapshot.period_id
+        where snapshot.project_id = ${projectId}
+      ) reported
     )
     where id = ${projectId}
   `;

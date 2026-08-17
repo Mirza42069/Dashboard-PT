@@ -2,7 +2,14 @@ import { expect, test } from "bun:test";
 import ExcelJS from "exceljs";
 import { resolve } from "node:path";
 
-import { columnLetter, parseNumber, parseRows, readCell, errorReportCsv } from "./boq-import-parse";
+import {
+  columnLetter,
+  errorReportCsv,
+  loadWorkbook,
+  parseNumber,
+  parseRows,
+  readCell,
+} from "./boq-import-parse";
 
 /**
  * The importer, against the workbook it was written for.
@@ -30,6 +37,12 @@ const periods = Array.from({ length: 17 }, (_, index) => ({
   startDate: `2026-05-${String(2 + index * 7).padStart(2, "0")}`,
   endDate: `2026-05-${String(8 + index * 7).padStart(2, "0")}`,
 }));
+
+test("a non-xlsx payload is rejected before ExcelJS expands it", async () => {
+  await expect(loadWorkbook(new Uint8Array([1, 2, 3, 4]))).rejects.toThrow(
+    "not a valid .xlsx archive",
+  );
+});
 
 async function referenceSheet() {
   const workbook = new ExcelJS.Workbook();
@@ -157,6 +170,34 @@ test("the workbook's MINGGU columns import as a planning window", async () => {
   expect(preliminaries?.weight).toBeCloseTo(5.920528, 4);
 });
 
+test("the reference profile produces sections, lump-sum lines, and excludes summaries", async () => {
+  const sheet = await referenceSheet();
+  const { rows, errors } = parseRows(
+    sheet,
+    HEADER_ROW,
+    { fields: { description: 3, amount: 4, weight: 5, start: 6, finish: 7 } },
+    periods,
+    { dataStartRow: 13, dataEndRow: 34, sectionRows: [14, 20, 25] },
+  );
+
+  expect(errors).toEqual([]);
+  expect(rows.filter((row) => row.parentCode === null && row.quantity === null)).toHaveLength(3);
+  expect(rows.some((row) => row.description === "TOTAL")).toBe(false);
+
+  const demolition = rows.find((row) => row.description === "Bongkaran Struktur atap existing");
+  expect(demolition).toMatchObject({
+    parentCode: "S1",
+    unit: "LS",
+    quantity: 1,
+    start: 6,
+    finish: 14,
+  });
+  expect(demolition?.unitRate).toBeCloseTo(38_275_727, 2);
+
+  const importedTotal = rows.reduce((total, row) => total + (row.unitRate ?? 0), 0);
+  expect(importedTotal).toBeCloseTo(2_542_143_270.0877023, 2);
+});
+
 /* ------------------------------------------------------------ synthetic faults */
 
 async function sheetFrom(rows: (string | number | null)[][]) {
@@ -194,6 +235,18 @@ test("the same code under different sections is fine", async () => {
   expect(parseRows(sheet, 1, FULL, periods).errors).toEqual([]);
 });
 
+test("a row used as a section cannot also carry priced work", async () => {
+  const sheet = await sheetFrom([
+    ["1", "Groundworks", null, 1, 1_000, 1, 2],
+    ["1.1", "Excavation", "1", 10, 100, 1, 2],
+  ]);
+  const { errors } = parseRows(sheet, 1, FULL, periods);
+
+  expect(errors.some((error) => error.row === 2 && error.message.includes("cannot contain pricing"))).toBe(
+    true,
+  );
+});
+
 test("a line pointing at a section that is not in the sheet is a broken hierarchy", async () => {
   const sheet = await sheetFrom([["1.1", "Excavation", "9", 10, 100, 1, 2]]);
   const { errors } = parseRows(sheet, 1, FULL, periods);
@@ -219,6 +272,40 @@ test("a non-numeric quantity is a row error, not a zero", async () => {
 test("a negative rate is refused", async () => {
   const sheet = await sheetFrom([["1", "Excavation", null, 10, -5, 1, 2]]);
   expect(parseRows(sheet, 1, FULL, periods).errors[0]?.message).toBe("Unit rate cannot be negative.");
+});
+
+test("a priced row without a description is reported rather than skipped", async () => {
+  const sheet = await sheetFrom([[null, null, null, null, null, null, null]]);
+  sheet.getRow(2).getCell(8).value = 1_000;
+  const result = parseRows(
+    sheet,
+    1,
+    { fields: { description: 2, amount: 8 } },
+    periods,
+    { requirePricing: true },
+  );
+  expect(result.errors[0]?.message).toBe("Description is required.");
+});
+
+test("quantity and rate remain authoritative when a matching amount is also mapped", async () => {
+  const sheet = await sheetFrom([["1", "Excavation", null, 2, 10, 1, 2]]);
+  sheet.getRow(2).getCell(8).value = 20;
+  const result = parseRows(
+    sheet,
+    1,
+    { fields: { ...FULL.fields, amount: 8 } },
+    periods,
+    { requirePricing: true },
+  );
+  expect(result.errors).toEqual([]);
+  expect(result.rows[0]).toMatchObject({ quantity: 2, unitRate: 10, unit: null });
+
+  sheet.getRow(2).getCell(8).value = 50;
+  expect(
+    parseRows(sheet, 1, { fields: { ...FULL.fields, amount: 8 } }, periods, {
+      requirePricing: true,
+    }).errors[0]?.message,
+  ).toContain("does not match");
 });
 
 test("a finish before the start is refused", async () => {

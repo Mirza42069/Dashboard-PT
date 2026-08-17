@@ -1,4 +1,6 @@
 import { cn } from "@DashboardV2/ui/lib/utils";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import type { Metadata } from "next";
 
 import "../index.css";
@@ -46,6 +48,8 @@ export default async function RootLayout({
         <Providers locale={locale} theme={theme}>
           {children}
         </Providers>
+        <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );
