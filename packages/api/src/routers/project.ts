@@ -465,6 +465,19 @@ export const projectRouter = router({
     };
   }),
 
+  codeAvailability: companyPermissionProcedure("project:create")
+    .input(z.object({ code: upsertSchema.shape.code }))
+    .query(async ({ ctx, input }) => {
+      const code = input.code.toUpperCase();
+      const [existing] = await db
+        .select({ id: project.id })
+        .from(project)
+        .where(and(eq(project.code, code), eq(project.companyId, ctx.companyId)))
+        .limit(1);
+
+      return { available: !existing };
+    }),
+
   create: companyPermissionProcedure("project:create")
     .input(createSchema)
     .mutation(async ({ ctx, input }) => {

@@ -57,6 +57,7 @@ export const env = createEnv({
       .string()
       .regex(/^[a-z0-9-]+(?:\/[a-z0-9-]+)?$/)
       .optional(),
+    OPENROUTER_REASONING_EFFORT: z.enum(["low", "medium", "high"]).optional(),
   },
   runtimeEnv: runtimeEnv,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

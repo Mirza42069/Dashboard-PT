@@ -15,15 +15,18 @@ import {
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
 import { Loader2, TriangleAlert, Upload } from "@DashboardV2/ui/components/icons";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { interpolate } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
 import { getServerUrl } from "@/lib/server-url";
+import { useDebounced } from "@/lib/use-debounced";
 import {
   createWorkbookTransport,
   WORKBOOK_TRANSPORT_CONTENT_TYPE,
 } from "@/lib/workbook-transport";
+import { trpc } from "@/utils/trpc";
 
 type PeriodType = "weekly" | "biweekly" | "monthly";
 type MappingField =
@@ -126,6 +129,7 @@ const QUESTIONS = [
   "endDate",
 ] as const;
 type Question = (typeof QUESTIONS)[number];
+const CODE_QUESTION_INDEX = QUESTIONS.indexOf("code");
 
 type PeriodCountIssue = {
   code: "period_count_mismatch";
@@ -235,6 +239,7 @@ export default function ProjectWorkbookImportDialog({
 }) {
   const t = useT();
   const { locale } = useLocale();
+  const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [answers, setAnswers] = useState<Answers>(EMPTY);
@@ -244,8 +249,35 @@ export default function ProjectWorkbookImportDialog({
   const [endDateInferred, setEndDateInferred] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [codeConflict, setCodeConflict] = useState<string | null>(null);
   const [serverScheduleIssue, setServerScheduleIssue] = useState<ScheduleIssue | null>(null);
   const [rowErrors, setRowErrors] = useState<Analysis["summary"]["validationErrors"]>([]);
+  const question = QUESTIONS[questionIndex]!;
+  const canonicalCode = answers.code.trim().toUpperCase();
+  const debouncedCode = useDebounced(canonicalCode);
+  const codeSyntaxValid = /^[A-Z0-9-]+$/.test(canonicalCode) && canonicalCode.length <= 32;
+  const codeAvailability = useQuery({
+    ...trpc.project.codeAvailability.queryOptions({ code: debouncedCode }),
+    enabled:
+      open &&
+      Boolean(analysis) &&
+      !reviewing &&
+      question === "code" &&
+      codeSyntaxValid &&
+      debouncedCode === canonicalCode,
+    retry: false,
+  });
+  const codeTaken =
+    codeConflict === canonicalCode ||
+    (debouncedCode === canonicalCode && codeAvailability.data?.available === false);
+  const codeCheckPending =
+    question === "code" &&
+    codeSyntaxValid &&
+    (debouncedCode !== canonicalCode || codeAvailability.isFetching);
+  const codeCheckFailed =
+    question === "code" &&
+    debouncedCode === canonicalCode &&
+    codeAvailability.isError;
 
   function reset() {
     setFile(null);
@@ -257,6 +289,7 @@ export default function ProjectWorkbookImportDialog({
     setEndDateInferred(false);
     setBusy(false);
     setError(null);
+    setCodeConflict(null);
     setServerScheduleIssue(null);
     setRowErrors([]);
   }
@@ -327,12 +360,32 @@ export default function ProjectWorkbookImportDialog({
     return null;
   }
 
-  function nextQuestion() {
-    const question = QUESTIONS[questionIndex]!;
+  async function nextQuestion() {
     const problem = questionError(question);
     if (problem) {
       setError(problem);
       return;
+    }
+    if (question === "code") {
+      setBusy(true);
+      try {
+        const availability = await queryClient.fetchQuery({
+          ...trpc.project.codeAvailability.queryOptions({ code: canonicalCode }),
+          retry: false,
+          staleTime: 0,
+        });
+        if (!availability.available) {
+          setCodeConflict(canonicalCode);
+          setError(null);
+          return;
+        }
+        setCodeConflict(null);
+      } catch {
+        setError(t.projectImport.codeCheckFailed);
+        return;
+      } finally {
+        setBusy(false);
+      }
     }
     setError(null);
     if (
@@ -589,6 +642,13 @@ export default function ProjectWorkbookImportDialog({
       }>(response);
       if (!response.ok || !body?.projectId) {
         setRowErrors(body?.errors ?? []);
+        if (response.status === 409) {
+          setCodeConflict(answers.code.trim().toUpperCase());
+          setReviewing(false);
+          setQuestionIndex(CODE_QUESTION_INDEX);
+          setError(null);
+          return;
+        }
         if (
           body?.code === "period_count_mismatch" &&
           body.details &&
@@ -644,7 +704,6 @@ export default function ProjectWorkbookImportDialog({
     }
   }
 
-  const question = QUESTIONS[questionIndex]!;
   const questionLabels: Record<Question, string> = {
     name: t.projectImport.questionName,
     code: t.projectImport.questionCode,
@@ -835,9 +894,16 @@ export default function ProjectWorkbookImportDialog({
                       : "text"
                   }
                   value={answers[question]}
-                  aria-invalid={question === "endDate" && scheduleIssue ? true : undefined}
+                  aria-invalid={
+                    (question === "code" && codeTaken) ||
+                    (question === "endDate" && scheduleIssue)
+                      ? true
+                      : undefined
+                  }
                   aria-describedby={
-                    question === "endDate" && scheduleIssue
+                    question === "code"
+                      ? "project-import-code-status"
+                      : question === "endDate" && scheduleIssue
                       ? "project-import-schedule-issue"
                       : undefined
                   }
@@ -846,16 +912,34 @@ export default function ProjectWorkbookImportDialog({
                   onChange={(event) => {
                     const value = question === "code" ? event.target.value.toUpperCase() : event.target.value;
                     if (question === "endDate") setEndDateInferred(false);
+                    if (question === "code") setCodeConflict(null);
                     setServerScheduleIssue(null);
+                    setError(null);
                     setAnswers((current) => ({ ...current, [question]: value }));
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
-                      nextQuestion();
+                      void nextQuestion();
                     }
                   }}
                 />
+              )}
+              {question === "code" && (
+                <p
+                  id="project-import-code-status"
+                  className={`mt-2 min-h-4 ${codeTaken || codeCheckFailed ? "text-destructive" : "text-muted-foreground"}`}
+                  role="status"
+                  aria-live="polite"
+                >
+                  {codeTaken
+                    ? interpolate(t.projects.codeTaken, { code: canonicalCode })
+                    : codeCheckFailed
+                      ? t.projectImport.codeCheckFailed
+                      : codeCheckPending
+                        ? t.projectImport.codeChecking
+                        : ""}
+                </p>
               )}
               {(question === "client" || question === "location") && (
                 <p className="mt-2 text-muted-foreground">{t.projectImport.optionalHint}</p>
@@ -1090,7 +1174,10 @@ export default function ProjectWorkbookImportDialog({
                 </Button>
               )
             ) : (
-              <Button disabled={busy} onClick={nextQuestion}>{t.common.continue}</Button>
+              <Button disabled={busy} onClick={() => void nextQuestion()}>
+                {busy && <Loader2 className="animate-spin" />}
+                {t.common.continue}
+              </Button>
             )}
           </DialogFooter>
         )}

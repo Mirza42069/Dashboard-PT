@@ -113,6 +113,9 @@ export async function interpretWorkbook(summary: unknown): Promise<WorkbookInter
               },
             }
           : {}),
+        ...(env.OPENROUTER_REASONING_EFFORT
+          ? { reasoning_effort: env.OPENROUTER_REASONING_EFFORT }
+          : {}),
         max_completion_tokens: 1_500,
         response_format: {
           type: "json_schema",
