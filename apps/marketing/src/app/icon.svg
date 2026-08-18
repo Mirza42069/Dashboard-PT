@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Fushin</title>
   <rect width="64" height="64" rx="12" fill="#101a2b" />
-  <path d="M49 49H38L49 38Z" fill="#2c64e8" />
-  <text x="32" y="33" fill="#fffefa" font-family="ui-sans-serif,system-ui,sans-serif" font-size="29" font-weight="600" letter-spacing="-1" text-anchor="middle" dominant-baseline="central">V2</text>
+  <text x="32" y="34" fill="#fffefa" font-family="Yu Mincho,Hiragino Mincho ProN,Noto Serif JP,serif" font-size="22" font-weight="600" letter-spacing="1" text-anchor="middle" dominant-baseline="central">普請</text>
 </svg>

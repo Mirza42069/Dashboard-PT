@@ -7,14 +7,13 @@ import { Button } from "@DashboardV2/ui/components/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@DashboardV2/ui/components/dialog";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
-import { Loader2, TriangleAlert, Upload } from "@DashboardV2/ui/components/icons";
+import { Loader2, TriangleAlert, Upload, X } from "@DashboardV2/ui/components/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -805,7 +804,6 @@ export default function ProjectWorkbookImportDialog({
       <DialogContent className="max-h-[min(90svh,52rem)] overflow-y-auto sm:max-w-2xl" closeLabel={t.common.close}>
         <DialogHeader>
           <DialogTitle>{t.projectImport.wizardTitle}</DialogTitle>
-          <DialogDescription>{t.projectImport.wizardDescription}</DialogDescription>
         </DialogHeader>
         <p className="sr-only" role="status" aria-live="polite">
           {busy ? t.projectImport.analyzing : ""}
@@ -1034,12 +1032,13 @@ export default function ProjectWorkbookImportDialog({
                           ))}
                         </select>
                         <Button
-                          size="sm"
+                          size="icon-sm"
                           variant="destructive"
-                          aria-label={interpolate(t.projectImport.excludeRowLabel, { row: row.row })}
+                          aria-label={interpolate(t.projectImport.removeRowLabel, { row: row.row })}
+                          title={interpolate(t.projectImport.removeRowLabel, { row: row.row })}
                           onClick={() => excludeRow(row.row)}
                         >
-                          {t.projectImport.excludeRow}
+                          <X />
                         </Button>
                       </div>
                     ) : row.kind === "excluded" ? (
@@ -1054,7 +1053,7 @@ export default function ProjectWorkbookImportDialog({
                           variant="outline"
                           onClick={() => restoreRow(row.row)}
                         >
-                          {t.projectImport.includeRow}
+                          {t.projectImport.restoreRow}
                         </Button>
                       )
                     ) : (

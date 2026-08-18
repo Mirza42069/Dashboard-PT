@@ -19,7 +19,7 @@ const id = {
     titleStart: "Ketahui proyek mana yang perlu perhatian",
     titleAccent: "sebelum keterlambatan membesar.",
     body:
-      "V2 menyatukan baseline BoQ, progres rencana versus realisasi, pelaporan lapangan, dan tindakan proyek dalam satu ruang kontrol.",
+      "Fushin menyatukan baseline BoQ, progres rencana versus realisasi, pelaporan lapangan, dan tindakan proyek dalam satu ruang kontrol.",
     primary: "Jadwalkan demo",
     secondary: "Lihat cara kerjanya",
     note: "Demo 30 menit. Tanpa komitmen.",
@@ -99,7 +99,7 @@ const id = {
     eyebrow: "Kontrol dan akuntabilitas",
     title: "Akses dibatasi. Keputusan tetap dapat ditelusuri.",
     body:
-      "V2 menerapkan batas perusahaan dan proyek di server, memisahkan hak input dari hak review, serta menyimpan riwayat perubahan penting.",
+      "Fushin menerapkan batas perusahaan dan proyek di server, memisahkan hak input dari hak review, serta menyimpan riwayat perubahan penting.",
     items: [
       ["Ruang data perusahaan", "Akun biasa hanya mengakses data perusahaan dan proyek yang ditugaskan kepadanya."],
       ["Pemisahan tanggung jawab", "Hak mencatat progres tidak otomatis memberi hak review, persetujuan, atau penguncian."],
@@ -121,7 +121,7 @@ const id = {
     eyebrow: "Pertanyaan umum",
     title: "Hal yang biasanya ditanyakan sebelum demo.",
     items: [
-      ["Apakah BoQ yang sudah ada dapat diimpor?", "Ya. V2 menerima workbook .xlsx, menyediakan pemetaan kolom dan pratinjau, lalu membuat draft untuk ditinjau sebelum diaktifkan."],
+      ["Apakah BoQ yang sudah ada dapat diimpor?", "Ya. Fushin menerima workbook .xlsx, menyediakan pemetaan kolom dan pratinjau, lalu membuat draft untuk ditinjau sebelum diaktifkan."],
       ["Bagaimana progres dihitung?", "Progres aktual dan rencana dihitung dari item serta bobot pada baseline aktif, kemudian dibandingkan pada tanggal data yang sama."],
       ["Apakah pencatat progres dapat menyetujuinya sendiri?", "Hak input, review, persetujuan, dan penguncian dipisahkan berdasarkan peran. Pengaturan akses menentukan siapa yang dapat melakukan setiap langkah."],
       ["Periode pelaporan apa yang didukung?", "Proyek dapat menggunakan periode mingguan, dua mingguan, atau bulanan."],
@@ -133,8 +133,8 @@ const id = {
     eyebrow: "Jadwalkan demo",
     title: "Bawa satu alur proyek yang paling sulit dikendalikan.",
     body:
-      "Kami akan memetakan bagaimana BoQ, jadwal, progres, dan review Anda dapat berjalan di V2. Gratis, tanpa komitmen, sekitar 30 menit.",
-    unavailable: "Form demo belum dikonfigurasi. Hubungi tim V2 setelah alamat email penjualan tersedia.",
+      "Kami akan memetakan bagaimana BoQ, jadwal, progres, dan review Anda dapat berjalan di Fushin. Gratis, tanpa komitmen, sekitar 30 menit.",
+    unavailable: "Form demo belum dikonfigurasi. Hubungi tim Fushin setelah alamat email penjualan tersedia.",
     fields: {
       name: "Nama",
       company: "Perusahaan",
@@ -146,7 +146,7 @@ const id = {
       submit: "Kirim permintaan demo",
       submitting: "Mengirim…",
     },
-    privacy: "Dengan mengirim form ini, Anda setuju dihubungi terkait demo V2.",
+    privacy: "Dengan mengirim form ini, Anda setuju dihubungi terkait demo Fushin.",
   },
   footer: {
     tagline: "Kontrol progres konstruksi dari baseline hingga keputusan.",
@@ -190,7 +190,7 @@ const en: Content = {
     titleStart: "Know which projects need attention",
     titleAccent: "before delays get bigger.",
     body:
-      "V2 brings BoQ baselines, planned-versus-actual progress, field reporting, and project actions into one control room.",
+      "Fushin brings BoQ baselines, planned-versus-actual progress, field reporting, and project actions into one control room.",
     primary: "Book a demo",
     secondary: "See how it works",
     note: "30-minute demo. No commitment.",
@@ -270,7 +270,7 @@ const en: Content = {
     eyebrow: "Control and accountability",
     title: "Access stays scoped. Decisions remain traceable.",
     body:
-      "V2 enforces company and project boundaries on the server, separates entry from review, and retains the history of important changes.",
+      "Fushin enforces company and project boundaries on the server, separates entry from review, and retains the history of important changes.",
     items: [
       ["Company data boundary", "Standard accounts only reach their company and the projects assigned to them."],
       ["Separation of duties", "The right to enter progress does not automatically grant review, approval, or locking rights."],
@@ -292,7 +292,7 @@ const en: Content = {
     eyebrow: "Frequently asked",
     title: "What teams usually ask before a demo.",
     items: [
-      ["Can we import an existing BoQ?", "Yes. V2 accepts .xlsx workbooks, provides column mapping and preview, then creates a draft for review before activation."],
+      ["Can we import an existing BoQ?", "Yes. Fushin accepts .xlsx workbooks, provides column mapping and preview, then creates a draft for review before activation."],
       ["How is progress calculated?", "Planned and actual progress use the items and weights in the active baseline and are compared at the same data date."],
       ["Can the person entering progress approve it?", "Entry, review, approval, and locking rights are separated by role. Access settings determine who can perform each step."],
       ["Which reporting periods are supported?", "Projects can use weekly, biweekly, or monthly reporting periods."],
@@ -304,8 +304,8 @@ const en: Content = {
     eyebrow: "Book a demo",
     title: "Bring the project workflow that is hardest to control.",
     body:
-      "We will map how your BoQ, schedule, progress, and review process could run in V2. Free, non-binding, about 30 minutes.",
-    unavailable: "Demo delivery is not configured yet. Contact the V2 team once a sales address is available.",
+      "We will map how your BoQ, schedule, progress, and review process could run in Fushin. Free, non-binding, about 30 minutes.",
+    unavailable: "Demo delivery is not configured yet. Contact the Fushin team once a sales address is available.",
     fields: {
       name: "Name",
       company: "Company",
@@ -317,7 +317,7 @@ const en: Content = {
       submit: "Send demo request",
       submitting: "Sending…",
     },
-    privacy: "By submitting this form, you agree to be contacted about a V2 demo.",
+    privacy: "By submitting this form, you agree to be contacted about a Fushin demo.",
   },
   footer: {
     tagline: "Construction progress control from baseline to decision.",

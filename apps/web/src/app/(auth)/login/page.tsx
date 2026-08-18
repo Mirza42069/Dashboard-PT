@@ -28,7 +28,7 @@ export default async function LoginPage() {
   return (
     <div className="grid min-h-svh place-items-center px-4 py-10">
       <div className="w-full max-w-sm space-y-6">
-        {/* The mark carries the brand — no repeated "V2" heading under it. */}
+        {/* The mark carries the brand without a separate Latin wordmark. */}
         <div className="space-y-1 text-center">
           <BrandMark size="lg" className="mx-auto mb-3" />
           <p className="text-xs text-muted-foreground">{dict.auth.tagline}</p>

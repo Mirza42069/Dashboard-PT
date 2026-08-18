@@ -35,10 +35,7 @@ svg { display: block; }
 .site-header[data-scrolled], .site-header[data-open] { border-color: var(--border); background: color-mix(in oklab, var(--background) 94%, transparent); backdrop-filter: blur(14px); }
 .nav-shell { display: flex; width: min(100% - 4rem, 1240px); min-height: 64px; margin-inline: auto; align-items: center; gap: 2rem; }
 .brand-link { display: inline-flex; border-radius: 6px; }
-.brand { display: inline-flex; align-items: center; gap: .6rem; font-weight: 650; letter-spacing: -.02em; }
-.brand-mark { position: relative; display: grid; width: 2rem; height: 2rem; place-items: center; overflow: hidden; border-radius: 6px; background: var(--primary); color: var(--primary-foreground); font-family: var(--font-mono); font-size: .68rem; }
-.brand-mark i { position: absolute; inset-inline-end: -5px; inset-block-end: -5px; width: 11px; height: 11px; transform: rotate(45deg); background: var(--chart); }
-.brand-name { font-size: 1rem; }
+.brand { display: inline-flex; align-items: center; color: inherit; font-family: "Yu Mincho", "Hiragino Mincho ProN", "Noto Serif JP", serif; font-size: 1.35rem; font-weight: 600; letter-spacing: .12em; line-height: 1; white-space: nowrap; }
 .desktop-nav { display: flex; margin-inline-start: auto; align-items: center; gap: 2rem; }
 .desktop-nav a, .sign-in-link, .language-link { position: relative; padding-block: .3rem; font-size: .84rem; font-weight: 500; }
 .desktop-nav a::after, .sign-in-link::after, .language-link::after { position: absolute; inset-inline: 0; inset-block-end: 0; height: 1px; transform: scaleX(0); background: currentColor; content: ""; transition: transform 160ms ease; }
@@ -86,7 +83,7 @@ svg { display: block; }
 .window-sync i { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
 .app-layout { display: grid; grid-template-columns: 150px 1fr; min-height: 570px; }
 .mock-sidebar { padding: 1rem .75rem; border-inline-end: 1px solid var(--border); background: var(--muted); }
-.mini-brand { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 5px; background: var(--primary); color: white; font-family: var(--font-mono); font-size: .55rem; }
+.mini-brand { display: inline-block; color: var(--foreground); font-family: "Yu Mincho", "Hiragino Mincho ProN", "Noto Serif JP", serif; font-size: .72rem; font-weight: 600; letter-spacing: .08em; line-height: 1; white-space: nowrap; }
 .sidebar-line { display: flex; align-items: center; gap: .5rem; height: 29px; margin-block-start: .65rem; border-radius: 4px; padding-inline: .5rem; }
 .sidebar-line i { width: 9px; height: 9px; border: 1px solid var(--muted-foreground); border-radius: 2px; }
 .sidebar-line span { width: 64px; height: 4px; border-radius: 4px; background: color-mix(in oklab, var(--muted-foreground) 35%, transparent); }
@@ -292,7 +289,6 @@ svg { display: block; }
 
 .site-footer { padding-block: 3.5rem 1.25rem; background: var(--primary); color: var(--primary-foreground); }
 .footer-grid { display: grid; grid-template-columns: 1.6fr repeat(3,.7fr); gap: 3rem; }
-.site-footer .brand-mark { border: 1px solid color-mix(in oklab,var(--primary-foreground) 20%,transparent); background: color-mix(in oklab,var(--primary-foreground) 8%,transparent); }
 .footer-grid > div > p { max-width: 280px; margin: .9rem 0 0; color: color-mix(in oklab,var(--primary-foreground) 48%,transparent); font-size: .78rem; }
 .footer-grid nav { display: flex; flex-direction: column; align-items: flex-start; gap: .6rem; }
 .footer-grid nav strong { margin-block-end: .3rem; color: color-mix(in oklab,var(--primary-foreground) 40%,transparent); font-family: var(--font-mono); font-size: .58rem; letter-spacing: .07em; text-transform: uppercase; }

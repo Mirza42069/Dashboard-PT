@@ -31,11 +31,11 @@ export default function AppSidebar({
       )}
     >
       {/*
-       * The mark already reads "V2" — a wordmark beside it would just say it twice.
+       * The mark is the complete logo, so no Latin wordmark is added beside it.
        *
        * px-4 unconditionally, and deliberately so. The rail is w-14 (56px) and
-       * the mark is size-6 (24px), so 16px of padding leaves it in exactly the
-       * place centring would: (56 - 24) / 2 = 16. Switching to justify-center
+       * the mark keeps a size-6 (24px) layout box, so 16px of padding leaves it
+       * in exactly the place centring would: (56 - 24) / 2 = 16. Switching to justify-center
        * when collapsed looks equivalent but is not, because `width` animates
        * over a full second while the class swap is instant — the mark would jump
        * to the middle of the still-224px sidebar and slide back. Anchoring to a

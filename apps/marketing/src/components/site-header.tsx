@@ -23,7 +23,11 @@ export function SiteHeader({ t }: { t: Content }) {
   return (
     <header className="site-header" data-scrolled={scrolled || undefined} data-open={open || undefined}>
       <div className="nav-shell">
-        <a href={localeHref(t.locale)} className="brand-link" aria-label="V2 home">
+        <a
+          href={localeHref(t.locale)}
+          className="brand-link"
+          aria-label={t.locale === "id" ? "Beranda Fushin" : "Fushin home"}
+        >
           <Brand />
         </a>
         <nav className="desktop-nav" aria-label="Primary navigation">

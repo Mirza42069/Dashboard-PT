@@ -17,7 +17,7 @@ export async function requestDemo(
   }
   const { lead, errors } = parseDemoLead(data);
   if (!lead) return { status: "error", message: "", errors };
-  if (lead.website) return { status: "success", message: locale === "id" ? "Permintaan demo telah diterima." : "Your demo request has been received.", errors: {} };
+  if (lead.website) return { status: "success", message: locale === "id" ? "Permintaan demo Fushin telah diterima." : "Your Fushin demo request has been received.", errors: {} };
 
   try {
     const resend = new Resend(process.env.RESEND_API_KEY);
@@ -26,7 +26,7 @@ export async function requestDemo(
       from: process.env.DEMO_FROM_EMAIL!,
       to: process.env.DEMO_TO_EMAIL!,
       replyTo: lead.email,
-      subject: `V2 demo request · ${lead.company}`,
+      subject: `Fushin demo request · ${lead.company}`,
       ...message,
     });
     if (result.error) throw new Error(result.error.message);
@@ -34,8 +34,8 @@ export async function requestDemo(
       status: "success",
       message:
         locale === "id"
-          ? "Terima kasih. Tim V2 akan menghubungi Anda untuk menjadwalkan demo."
-          : "Thank you. The V2 team will contact you to schedule the demo.",
+          ? "Terima kasih. Tim Fushin akan menghubungi Anda untuk menjadwalkan demo."
+          : "Thank you. The Fushin team will contact you to schedule the demo.",
       errors: {},
     };
   } catch {

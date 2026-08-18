@@ -29,6 +29,7 @@
 import {
   AccessibilityIcon as HiAccessibility,
   Add01Icon as HiAdd01,
+  AiFileIcon as HiAiFile,
   Alert02Icon as HiAlert02,
   AlertCircleIcon as HiAlertCircle,
   ArrowDown01Icon as HiArrowDown01,
@@ -129,6 +130,7 @@ function icon(glyph: Glyph, name: string) {
 }
 
 export const Accessibility = icon(HiAccessibility, "Accessibility");
+export const AiFile = icon(HiAiFile, "AiFile");
 export const ArrowDownIcon = icon(HiArrowDown01, "ArrowDownIcon");
 export const ArrowLeft = icon(HiArrowLeft01, "ArrowLeft");
 export const Building2 = icon(HiBuilding03, "Building2");

@@ -16,7 +16,8 @@ import { Checkbox } from "@DashboardV2/ui/components/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@DashboardV2/ui/components/dropdown-menu";
 import { Input } from "@DashboardV2/ui/components/input";
@@ -32,9 +33,10 @@ import {
 } from "@DashboardV2/ui/components/table";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Check,
   ChevronDown,
   Download,
+  LayoutDashboard,
+  ListChecks,
   Loader2,
   Plus,
   Trash2,
@@ -59,24 +61,27 @@ import { useFormat } from "@/lib/use-format";
 import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
-import { EMPTY_PROJECT } from "./project-form-values";
+import { EMPTY_PROJECT, PROJECT_STATUSES } from "./project-form-values";
+import { ProjectsBoard } from "./projects-board";
 
 const ProjectFormDialog = dynamic(() => import("./project-form-dialog"));
 const ProjectCreateSourceDialog = dynamic(() => import("./project-create-source-dialog"));
 const ProjectWorkbookImportDialog = dynamic(() => import("./project-workbook-import-dialog"));
 
 const PAGE_SIZE = 25;
-const STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
 const ALL = "all";
-
+type ProjectStatus = (typeof PROJECT_STATUSES)[number];
+type ProjectsView = "list" | "board";
 
 export default function ProjectsTable({
   canCreate,
+  canUpdate,
   canDelete,
   canManageMembers,
   currentUserId,
 }: {
   canCreate: boolean;
+  canUpdate: boolean;
   canDelete: boolean;
   canManageMembers: boolean;
   currentUserId: string;
@@ -89,21 +94,19 @@ export default function ProjectsTable({
   const router = useRouter();
   const statusOptions = [
     { value: ALL, label: t.common.all },
-    ...STATUSES.map((value) => ({ value, label: statusLabel("project", value) })),
+    ...PROJECT_STATUSES.map((value) => ({ value, label: statusLabel("project", value) })),
   ];
 
   const [search, setSearch] = useState("");
-  /**
-   * Seeded from the URL so a dashboard card can link straight to "the projects
-   * this number counted". Read once as the initial value rather than kept in
-   * sync — after landing, the dropdown owns the filter, and a URL that fought
-   * the control would make clearing the filter impossible.
-   */
   const searchParams = useSearchParams();
-  const [status, setStatus] = useState<string>(() => {
-    const requested = searchParams.get("status");
-    return requested && (STATUSES as readonly string[]).includes(requested) ? requested : ALL;
-  });
+  const view: ProjectsView = searchParams.get("view") === "board" ? "board" : "list";
+  const requestedStatus = searchParams.get("status");
+  const status =
+    view === "list" &&
+    requestedStatus &&
+    (PROJECT_STATUSES as readonly string[]).includes(requestedStatus)
+      ? requestedStatus
+      : ALL;
   const [formOpen, setFormOpen] = useState(false);
   const [createSourceOpen, setCreateSourceOpen] = useState(false);
   const [workbookOpen, setWorkbookOpen] = useState(false);
@@ -120,17 +123,20 @@ export default function ProjectsTable({
 
   function clearFilters() {
     setSearch("");
-    setStatus(ALL);
+    selectStatus(ALL);
   }
 
   const projectsQuery = useInfiniteQuery(
     trpc.project.list.infiniteQueryOptions(
       {
         search: debouncedSearch,
-        status: status === ALL ? undefined : (status as (typeof STATUSES)[number]),
+        status: status === ALL ? undefined : (status as ProjectStatus),
         limit: PAGE_SIZE,
       },
-      { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
+      {
+        enabled: view === "list",
+        getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+      },
     ),
   );
 
@@ -141,6 +147,27 @@ export default function ProjectsTable({
   const initialError = projectsQuery.isError && projectsQuery.data === undefined;
 
   const selection = useRowSelection(projects, `${debouncedSearch}\u0000${status}`);
+
+  function replaceProjectParams(nextView: ProjectsView, nextStatus: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (nextView === "board") params.set("view", "board");
+    else params.delete("view");
+    if (nextStatus === ALL) params.delete("status");
+    else params.set("status", nextStatus);
+    const query = params.toString();
+    window.history.replaceState(null, "", query ? `/projects?${query}` : "/projects");
+  }
+
+  function selectView(nextView: ProjectsView) {
+    if (nextView === view) return;
+    selection.clear();
+    replaceProjectParams(nextView, nextView === "board" ? ALL : status);
+  }
+
+  function selectStatus(nextStatus: string) {
+    if (nextStatus === status) return;
+    replaceProjectParams(view, nextStatus);
+  }
 
   function openCreate() {
     setCreateSourceOpen(true);
@@ -183,7 +210,7 @@ export default function ProjectsTable({
   return (
     <>
       <p role="status" aria-live="polite" className="sr-only">
-        {projectsQuery.isPending ? t.common.loading : ""}
+        {view === "list" && projectsQuery.isPending ? t.common.loading : ""}
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Input
@@ -195,7 +222,35 @@ export default function ProjectsTable({
           className="w-full sm:max-w-xs"
           aria-label={t.common.search}
         />
-        {selection.selectedCount > 0 && (
+        <div
+          className="inline-flex rounded-md bg-muted p-0.5"
+          role="group"
+          aria-label={t.projects.viewLabel}
+        >
+          {([
+            ["list", t.projects.listView, ListChecks],
+            ["board", t.projects.boardView, LayoutDashboard],
+          ] as const).map(([value, label, Icon]) => (
+            <Tooltip key={value}>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant={view === value ? "secondary" : "ghost"}
+                    size="icon-sm"
+                    aria-label={label}
+                    aria-pressed={view === value}
+                    onClick={() => selectView(value)}
+                  />
+                }
+              >
+                <Icon />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{label}</TooltipContent>
+            </Tooltip>
+          ))}
+        </div>
+
+        {view === "list" && selection.selectedCount > 0 && (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -214,7 +269,7 @@ export default function ProjectsTable({
           </Tooltip>
         )}
 
-        {canDelete && selection.selectedCount > 0 && (
+        {view === "list" && canDelete && selection.selectedCount > 0 && (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -248,9 +303,10 @@ export default function ProjectsTable({
         )}
       </div>
 
-      <Card aria-busy={projectsQuery.isPending || projectsQuery.isFetchingNextPage}>
-        <CardContent className="px-0">
-          <Table className="min-w-[44rem] table-fixed">
+      {view === "list" ? (
+        <Card aria-busy={projectsQuery.isPending || projectsQuery.isFetchingNextPage}>
+          <CardContent className="px-0">
+            <Table className="min-w-[44rem] table-fixed">
             <TableHeader>
               <TableRow>
                 {canDelete && (
@@ -270,21 +326,23 @@ export default function ProjectsTable({
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       render={<Button variant="ghost" size="xs" className="-ml-2" />}
-                      aria-label={t.projects.statusLabel}
+                      aria-label={interpolate(t.projects.statusFilterLabel, {
+                        status:
+                          statusOptions.find((option) => option.value === status)?.label ??
+                          t.common.all,
+                      })}
                     >
                       {t.projects.statusLabel}
                       <ChevronDown />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="w-48 bg-card">
-                      {statusOptions.map((option) => (
-                        <DropdownMenuItem
-                          key={option.value}
-                          onClick={() => setStatus(option.value)}
-                        >
-                          <span className="flex-1">{option.label}</span>
-                          {status === option.value && <Check />}
-                        </DropdownMenuItem>
-                      ))}
+                      <DropdownMenuRadioGroup value={status} onValueChange={selectStatus}>
+                        {statusOptions.map((option) => (
+                          <DropdownMenuRadioItem key={option.value} value={option.value}>
+                            {option.label}
+                          </DropdownMenuRadioItem>
+                        ))}
+                      </DropdownMenuRadioGroup>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableHead>
@@ -363,11 +421,18 @@ export default function ProjectsTable({
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+            </Table>
+          </CardContent>
+        </Card>
+      ) : (
+        <ProjectsBoard
+          search={debouncedSearch}
+          status={status === ALL ? ALL : (status as ProjectStatus)}
+          canUpdate={canUpdate}
+        />
+      )}
 
-      {!initialError && (
+      {view === "list" && !initialError && (
         <InfiniteLoadMore
           hasNextPage={projectsQuery.hasNextPage}
           isFetchingNextPage={projectsQuery.isFetchingNextPage}

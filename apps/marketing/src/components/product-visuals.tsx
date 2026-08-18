@@ -8,11 +8,11 @@ const projects = [
 
 export function DashboardVisual() {
   return (
-    <div className="product-window dashboard-window" aria-label="V2 portfolio dashboard example">
+    <div className="product-window dashboard-window" aria-label="Fushin portfolio dashboard example">
       <WindowBar title="Portfolio control" />
       <div className="app-layout">
         <aside className="mock-sidebar" aria-hidden>
-          <span className="mini-brand">V2</span>
+          <span className="mini-brand" lang="ja">普請</span>
           <div className="sidebar-line active"><i /><span /></div>
           <div className="sidebar-line"><i /><span /></div>
           <div className="sidebar-line"><i /><span /></div>
@@ -67,7 +67,7 @@ export function WorkflowVisual() {
   ] as const;
 
   return (
-    <div className="product-window workflow-window" aria-label="V2 baseline schedule example">
+    <div className="product-window workflow-window" aria-label="Fushin baseline schedule example">
       <WindowBar title="Baseline / Schedule" />
       <div className="workflow-content">
         <div className="workflow-topbar">
@@ -100,7 +100,7 @@ export function WorkflowVisual() {
 
 export function ProgressVisual() {
   return (
-    <div className="product-window progress-window" aria-label="V2 planned and actual progress example">
+    <div className="product-window progress-window" aria-label="Fushin planned and actual progress example">
       <WindowBar title="Progress / PRJ-007" />
       <div className="progress-content">
         <div className="progress-summary">

@@ -6,6 +6,7 @@ import { getDictionary, getLocale } from "@/i18n";
 import { requireSession } from "@/lib/session";
 import { getQueryClient, getTRPC, HydrateClient } from "@/utils/trpc-server";
 
+import { PROJECT_STATUSES } from "./project-form-values";
 import ProjectsTable from "./projects-table";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -13,28 +14,43 @@ export async function generateMetadata(): Promise<Metadata> {
   return { title: `${dict.projects.title} - ${BRAND_NAME}` };
 }
 
-const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "cancelled"] as const;
-
 export default async function ProjectsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string | string[] }>;
+  searchParams: Promise<{ status?: string | string[]; view?: string | string[] }>;
 }) {
   const session = await requireSession();
   const dict = getDictionary(await getLocale());
   const role = roleOf(session.user);
-  const requestedStatus = (await searchParams).status;
+  const params = await searchParams;
+  const requestedStatus = params.status;
   const statusValue = Array.isArray(requestedStatus) ? requestedStatus[0] : requestedStatus;
   const status = PROJECT_STATUSES.find((value) => value === statusValue);
+  const requestedView = Array.isArray(params.view) ? params.view[0] : params.view;
+  const view = requestedView === "board" ? "board" : "list";
   const queryClient = getQueryClient();
   const trpc = getTRPC();
 
-  await queryClient.prefetchInfiniteQuery(
-    trpc.project.list.infiniteQueryOptions(
-      { search: "", status, limit: 25 },
-      { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
-    ),
-  );
+  const initialStatuses = view === "board" ? PROJECT_STATUSES : status ? [status] : PROJECT_STATUSES;
+  if (view === "board") {
+    await Promise.all(
+      initialStatuses.map((columnStatus) =>
+        queryClient.prefetchInfiniteQuery(
+          trpc.project.list.infiniteQueryOptions(
+            { search: "", status: columnStatus, limit: 10 },
+            { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
+          ),
+        ),
+      ),
+    );
+  } else {
+    await queryClient.prefetchInfiniteQuery(
+      trpc.project.list.infiniteQueryOptions(
+        { search: "", status, limit: 25 },
+        { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
+      ),
+    );
+  }
 
   return (
     <HydrateClient>
@@ -43,6 +59,7 @@ export default async function ProjectsPage({
 
         <ProjectsTable
           canCreate={hasPermission(role, "project:create")}
+          canUpdate={hasPermission(role, "project:update")}
           canDelete={hasPermission(role, "project:delete")}
           canManageMembers={hasPermission(role, "member:manage")}
           currentUserId={session.user.id}

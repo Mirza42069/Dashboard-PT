@@ -30,7 +30,7 @@ export function LandingPage({ t }: { t: Content }) {
               <p className="hero-note"><Check />{t.hero.note}</p>
             </div>
             <div className="hero-product">
-              <div className="product-caption"><span>PORTFOLIO / CONTOH COMPANY</span><span>V2 PRODUCT VIEW</span></div>
+              <div className="product-caption"><span>PORTFOLIO / CONTOH COMPANY</span><span>FUSHIN PRODUCT VIEW</span></div>
               <DashboardVisual />
             </div>
           </div>
@@ -158,9 +158,9 @@ export function LandingPage({ t }: { t: Content }) {
           <div><Brand inverse /><p>{t.footer.tagline}</p></div>
           <nav aria-label={t.footer.product}><strong>{t.footer.product}</strong><a href="#product">{t.nav.product}</a><a href="#workflow">{t.nav.workflow}</a><a href="#security">{t.nav.security}</a></nav>
           <nav aria-label={t.footer.legal}><strong>{t.footer.legal}</strong><a href={t.locale === "id" ? "/privacy" : "/en/privacy"}>{t.footer.privacy}</a><a href={t.locale === "id" ? "/terms" : "/en/terms"}>{t.footer.terms}</a></nav>
-          <nav aria-label="Account"><strong>V2</strong><a href={`${APP_URL}/login`}>{t.nav.signIn}</a><a href={localeHref(t.alternateLocale)} lang={t.alternateLocale}>{t.languageName} → {t.alternateLabel}</a></nav>
+          <nav aria-label="Account"><strong>Fushin</strong><a href={`${APP_URL}/login`}>{t.nav.signIn}</a><a href={localeHref(t.alternateLocale)} lang={t.alternateLocale}>{t.languageName} → {t.alternateLabel}</a></nav>
         </div>
-        <div className="page-shell footer-bottom"><span>© {new Date().getFullYear()} V2. {t.footer.rights}</span><span>BASELINE / PROGRESS / DECISION</span></div>
+        <div className="page-shell footer-bottom"><span>© {new Date().getFullYear()} Fushin. {t.footer.rights}</span><span>BASELINE / PROGRESS / DECISION</span></div>
       </footer>
     </div>
   );

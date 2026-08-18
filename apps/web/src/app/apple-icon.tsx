@@ -9,7 +9,7 @@ export const contentType = "image/png";
  * dark corners showing through.
  *
  * Rendered with next/og rather than shipping a binary PNG, so the mark stays in
- * one place: change the colour or the letters here and in icon.svg together.
+ * one place: change the colour or the glyphs here and in icon.svg together.
  */
 export default function AppleIcon() {
   return new ImageResponse(
@@ -23,12 +23,12 @@ export default function AppleIcon() {
           justifyContent: "center",
           background: "#101723",
           color: "#fafafa",
-          fontSize: 84,
+          fontFamily: '"Yu Mincho", "Hiragino Mincho ProN", "Noto Serif JP", serif',
+          fontSize: 64,
           fontWeight: 600,
-          letterSpacing: -3,
         }}
       >
-        V2
+        <span lang="ja">普請</span>
       </div>
     ),
     size,

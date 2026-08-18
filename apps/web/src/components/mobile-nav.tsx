@@ -16,7 +16,7 @@ import { useState } from "react";
 import { useT } from "@/i18n/provider";
 
 import AppNav from "./app-nav";
-import { BRAND_NAME } from "./brand";
+import { BrandMark } from "./brand";
 import SupportNavItem from "./support-nav-item";
 
 export default function MobileNav({
@@ -39,7 +39,9 @@ export default function MobileNav({
       </SheetTrigger>
       <SheetContent side="left" className="w-64" closeLabel={t.common.close}>
         <SheetHeader>
-          <SheetTitle>{BRAND_NAME}</SheetTitle>
+          <SheetTitle>
+            <BrandMark size="lg" />
+          </SheetTitle>
           <SheetDescription>{t.auth.tagline}</SheetDescription>
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col px-3 pb-4">

@@ -4,11 +4,10 @@ import { Button } from "@DashboardV2/ui/components/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@DashboardV2/ui/components/dialog";
-import { FileQuestionMark, Pencil } from "@DashboardV2/ui/components/icons";
+import { AiFile, Pencil } from "@DashboardV2/ui/components/icons";
 
 import { useT } from "@/i18n/provider";
 
@@ -30,7 +29,6 @@ export default function ProjectCreateSourceDialog({
       <DialogContent className="sm:max-w-xl" closeLabel={t.common.close}>
         <DialogHeader>
           <DialogTitle>{t.projectImport.chooseTitle}</DialogTitle>
-          <DialogDescription>{t.projectImport.chooseDescription}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 sm:grid-cols-2">
           <Button
@@ -51,7 +49,7 @@ export default function ProjectCreateSourceDialog({
             className="h-auto items-start justify-start gap-3 p-4 text-left whitespace-normal"
             onClick={onExcel}
           >
-            <FileQuestionMark className="mt-0.5 size-5 shrink-0" />
+            <AiFile className="mt-0.5 size-5 shrink-0" />
             <span>
               <strong className="block text-sm">{t.projectImport.excelTitle}</strong>
               <span className="mt-1 block font-normal text-muted-foreground">

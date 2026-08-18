@@ -1,8 +1,10 @@
 import { cn } from "@DashboardV2/ui/lib/utils";
 
+export const BRAND_NAME = "Fushin";
+
 /**
- * The V2 mark. Defined once here so the sidebar, the login card and any future
- * surface can't drift apart. Mirrors apps/web/src/app/icon.svg.
+ * The Fushin mark. Defined once here so every visible app surface stays in sync.
+ * Mirrors apps/web/src/app/icon.svg.
  */
 export function BrandMark({
   size = "sm",
@@ -13,16 +15,21 @@ export function BrandMark({
 }) {
   return (
     <span
-      aria-hidden
+      role="img"
+      aria-label={BRAND_NAME}
       className={cn(
-        "flex items-center justify-center bg-primary font-semibold text-primary-foreground",
-        size === "lg" ? "size-10 rounded-lg text-sm" : "size-6 rounded-md text-[0.6875rem]",
+        "inline-flex shrink-0 items-center justify-center whitespace-nowrap font-semibold leading-none tracking-[0.08em] text-primary",
+        size === "lg" ? "size-10 text-lg" : "size-6 text-[0.6875rem]",
         className,
       )}
     >
-      V2
+      <span
+        lang="ja"
+        aria-hidden="true"
+        style={{ fontFamily: '"Yu Mincho", "Hiragino Mincho ProN", "Noto Serif JP", serif' }}
+      >
+        普請
+      </span>
     </span>
   );
 }
-
-export const BRAND_NAME = "V2";
