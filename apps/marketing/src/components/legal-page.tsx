@@ -13,7 +13,6 @@ export function LegalPage({ locale, kind }: { locale: Locale; kind: "privacy" | 
     <main className="legal-page" lang={locale}>
       <a href={localeHref(locale)}><Brand /></a>
       <article>
-        <p className="eyebrow"><span />PRE-LAUNCH</p>
         <h1>{title}</h1>
         <p>{placeholder}</p>
         <p>{isId ? "Jangan gunakan halaman ini sebagai nasihat hukum atau kebijakan final." : "Do not treat this page as legal advice or a final policy."}</p>

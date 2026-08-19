@@ -13,13 +13,35 @@ export function DemoForm({
   t,
   action,
   configured,
+  mailtoHref,
 }: {
   t: Content;
   action: (state: DemoFormState, data: FormData) => Promise<DemoFormState>;
   configured: boolean;
+  /** Fallback route to a human while Resend delivery is unconfigured. */
+  mailtoHref: string;
 }) {
   const [state, formAction, pending] = useActionState(action, initialState);
   const error = (name: keyof DemoFormState["errors"]) => state.errors[name];
+  // The footer that used to carry this link is gone; the consent still needs it.
+  const privacyHref = t.locale === "id" ? "/privacy" : "/en/privacy";
+
+  // Presenting fields that cannot submit is a trap: the visitor types a message
+  // and loses it. While delivery is unconfigured, show the one route that works.
+  if (!configured) {
+    return (
+      <div className="demo-form demo-form-simple">
+        <p className="form-unavailable">{t.demo.unavailable}</p>
+        <a href={mailtoHref} className="button button-cobalt">
+          {t.demo.emailCta}<ArrowRight />
+        </a>
+        <p className="form-footnote">
+          {t.demo.mailNote}{" "}
+          <a href={privacyHref} className="inline-link">{t.demo.privacyLink}</a>
+        </p>
+      </div>
+    );
+  }
 
   return (
     <form action={formAction} className="demo-form" noValidate aria-busy={pending}>
@@ -48,15 +70,17 @@ export function DemoForm({
         />
         {error("challenge") && <p id={`challenge-${t.locale}-error`} className="field-error">{error("challenge")}</p>}
       </div>
-      {!configured && <p className="form-unavailable">{t.demo.unavailable}</p>}
       {state.message && (
         <p className="form-status" role={state.status === "error" ? "alert" : "status"} data-status={state.status}>
           {state.message}
         </p>
       )}
       <div className="form-footer">
-        <p>{t.demo.privacy}</p>
-        <button type="submit" className="button button-cobalt" disabled={pending || !configured}>
+        <p>
+          {t.demo.privacy}{" "}
+          <a href={privacyHref} className="inline-link">{t.demo.privacyLink}</a>
+        </p>
+        <button type="submit" className="button button-cobalt" disabled={pending}>
           {pending ? t.demo.fields.submitting : t.demo.fields.submit}<ArrowRight />
         </button>
       </div>

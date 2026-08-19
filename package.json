@@ -36,6 +36,7 @@
     "dev:web": "bun run --filter web dev",
     "dev:server": "bun run --filter server dev",
     "dev:marketing": "bun run --filter marketing dev",
+    "shots": "tsx scripts/capture-product-shots.ts",
     "db:push": "bun run --filter @DashboardV2/db db:push",
     "db:check": "bun run --filter @DashboardV2/db db:check",
     "db:studio": "bun run --filter @DashboardV2/db db:studio",
@@ -64,6 +65,7 @@
     "@DashboardV2/config": "workspace:*",
     "@types/bun": "catalog:",
     "@types/node": "^26.1.2",
+    "playwright": "^1.62.1",
     "tsx": "^4.23.5",
     "typescript": "catalog:",
     "vercel": "^58.5.1"

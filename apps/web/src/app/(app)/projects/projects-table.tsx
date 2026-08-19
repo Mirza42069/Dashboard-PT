@@ -35,8 +35,8 @@ import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import {
   ChevronDown,
   Download,
-  LayoutDashboard,
-  ListChecks,
+  Kanban,
+  ListView,
   Loader2,
   Plus,
   Trash2,
@@ -228,8 +228,8 @@ export default function ProjectsTable({
           aria-label={t.projects.viewLabel}
         >
           {([
-            ["list", t.projects.listView, ListChecks],
-            ["board", t.projects.boardView, LayoutDashboard],
+            ["list", t.projects.listView, ListView],
+            ["board", t.projects.boardView, Kanban],
           ] as const).map(([value, label, Icon]) => (
             <Tooltip key={value}>
               <TooltipTrigger

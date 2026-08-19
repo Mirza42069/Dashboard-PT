@@ -1,16 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <title>Fushin</title>
-  <rect width="64" height="64" rx="12" fill="#101723" />
-  <text
-    x="32"
-    y="33"
-    lang="ja"
-    fill="#fafafa"
-    font-family="'Yu Mincho', 'Hiragino Mincho ProN', 'Noto Serif JP', serif"
-    font-size="22"
-    font-weight="600"
-    letter-spacing="1"
-    text-anchor="middle"
-    dominant-baseline="central"
-  >普請</text>
+  <rect width="64" height="64" rx="14" fill="#5e17eb" />
+  <g transform="translate(3.25 3.27) scale(0.07099)" fill="#000000">
+    <path d="M146.847656 520.800781C156.96875 524.242188 168.476562 526.5 179.773438 526.5C191.066406 526.5 201.933594 524.5625 211.949219 521.121094C212.164062 521.015625 212.375 521.015625 212.589844 520.90625C250.203125 507.136719 277.90625 470.777344 278.4375 428.289062L278.4375 283.5L81 283.5L81 428.179688C81.53125 470.992188 108.808594 507.351562 146.847656 520.800781Z" />
+    <path d="M729 283.5L729 526.5L618.890625 488.53125L508.78125 526.5L508.78125 283.5Z" />
+  </g>
 </svg>

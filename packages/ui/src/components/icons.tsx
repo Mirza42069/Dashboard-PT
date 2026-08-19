@@ -58,7 +58,9 @@ import {
   InboxIcon as HiInbox,
   InformationCircleIcon as HiInformationCircle,
   JusticeScale01Icon as HiJusticeScale01,
+  KanbanIcon as HiKanban,
   Key01Icon as HiKey01,
+  ListViewIcon as HiListView,
   Loading03Icon as HiLoading03,
   LockIcon as HiLock,
   Logout01Icon as HiLogout01,
@@ -162,10 +164,12 @@ export const House = icon(HiHome01, "House");
 export const ImagePlus = icon(HiImageAdd01, "ImagePlus");
 export const Inbox = icon(HiInbox, "Inbox");
 export const InfoIcon = icon(HiInformationCircle, "InfoIcon");
+export const Kanban = icon(HiKanban, "Kanban");
 export const KeyRound = icon(HiKey01, "KeyRound");
 export const Languages = icon(HiTranslate, "Languages");
 export const LayoutDashboard = icon(HiDashboardSquare01, "LayoutDashboard");
 export const ListChecks = icon(HiCheckList, "ListChecks");
+export const ListView = icon(HiListView, "ListView");
 export const Loader2 = icon(HiLoading03, "Loader2");
 export const Loader2Icon = icon(HiLoading03, "Loader2Icon");
 export const Lock = icon(HiLock, "Lock");

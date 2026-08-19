@@ -1,66 +1,55 @@
-type IconProps = React.ComponentProps<"svg">;
+/**
+ * Every icon on the marketing site, as components.
+ *
+ * Same glyph family and the same wrapping approach as the product's own barrel
+ * (packages/ui/src/components/icons.tsx), so the site and the dashboard
+ * screenshots it embeds are drawn from one set. The five shared glyphs point at
+ * the exact icons the product already uses.
+ *
+ * This app deliberately does not depend on @DashboardV2/ui — it ships its own
+ * hand-written CSS and no design-system runtime — so Hugeicons is imported
+ * directly here rather than through the shared package.
+ *
+ * Hugeicons ships icons as data, not components; its own shape is
+ * `<HugeiconsIcon icon={Tick02Icon} />`. Wrapping once here keeps call sites as
+ * `<Check />`, and lets a glyph be re-pointed by editing one line.
+ *
+ * Sizing note: HugeiconsIcon renders width/height attributes of 24. Every rule
+ * in globals.css sets only `width`, so the base `svg { height: auto }` there is
+ * what keeps these in proportion. Do not remove it.
+ */
 
-function Icon({ children, ...props }: IconProps) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-      {...props}
-    >
-      {children}
-    </svg>
-  );
+import { HugeiconsIcon } from "@hugeicons/react";
+import {
+  ArrowDown01Icon as HiArrowDown01,
+  ArrowRight01Icon as HiArrowRight01,
+  File01Icon as HiFile01,
+  LockIcon as HiLock,
+  RefreshIcon as HiRefresh,
+  Tick02Icon as HiTick02,
+} from "@hugeicons/core-free-icons";
+import type { ComponentProps } from "react";
+
+type Glyph = ComponentProps<typeof HugeiconsIcon>["icon"];
+export type IconProps = Omit<ComponentProps<typeof HugeiconsIcon>, "icon">;
+
+function icon(glyph: Glyph, name: string) {
+  /*
+   * aria-hidden before the spread on purpose: every icon here sits inside a
+   * control that already carries its own accessible name, so announcing the
+   * icon again would repeat it with nothing to add. A call site that ever needs
+   * the icon named can pass aria-hidden={false} with a label and win.
+   */
+  function Icon(props: IconProps) {
+    return <HugeiconsIcon icon={glyph} aria-hidden {...props} />;
+  }
+  Icon.displayName = name;
+  return Icon;
 }
 
-export function ArrowRight(props: IconProps) {
-  return <Icon {...props}><path d="M5 12h14M13 6l6 6-6 6" /></Icon>;
-}
-
-export function ArrowDown(props: IconProps) {
-  return <Icon {...props}><path d="M12 5v14M6 13l6 6 6-6" /></Icon>;
-}
-
-export function Check(props: IconProps) {
-  return <Icon {...props}><path d="m5 12 4 4L19 6" /></Icon>;
-}
-
-export function Menu(props: IconProps) {
-  return <Icon {...props}><path d="M4 7h16M4 12h16M4 17h16" /></Icon>;
-}
-
-export function X(props: IconProps) {
-  return <Icon {...props}><path d="m6 6 12 12M18 6 6 18" /></Icon>;
-}
-
-export function HardHat(props: IconProps) {
-  return <Icon {...props}><path d="M4 17h16M6 17v-3a6 6 0 0 1 12 0v3M9 14V9m6 5V9M3 19h18" /></Icon>;
-}
-
-export function Clipboard(props: IconProps) {
-  return <Icon {...props}><path d="M9 5h6M9 3h6v4H9zM7 5H5v16h14V5h-2M8 12h8M8 16h6" /></Icon>;
-}
-
-export function Alert(props: IconProps) {
-  return <Icon {...props}><path d="M12 3 2.8 20h18.4zM12 9v4M12 17h.01" /></Icon>;
-}
-
-export function Camera(props: IconProps) {
-  return <Icon {...props}><path d="M4 8h3l1.5-2h7L17 8h3v11H4z" /><circle cx="12" cy="13" r="3" /></Icon>;
-}
-
-export function Lock(props: IconProps) {
-  return <Icon {...props}><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></Icon>;
-}
-
-export function Chart(props: IconProps) {
-  return <Icon {...props}><path d="M4 19V5M4 19h16M7 15l4-5 3 2 5-7" /></Icon>;
-}
-
-export function File(props: IconProps) {
-  return <Icon {...props}><path d="M6 3h8l4 4v14H6zM14 3v5h5M9 13h6M9 17h5" /></Icon>;
-}
+export const ArrowDown = icon(HiArrowDown01, "ArrowDown");
+export const ArrowRight = icon(HiArrowRight01, "ArrowRight");
+export const Check = icon(HiTick02, "Check");
+export const File = icon(HiFile01, "File");
+export const Lock = icon(HiLock, "Lock");
+export const Refresh = icon(HiRefresh, "Refresh");

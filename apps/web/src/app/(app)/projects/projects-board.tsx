@@ -1,6 +1,17 @@
 "use client";
 
 import type { AppRouter } from "@DashboardV2/api/routers/index";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
 import { Button } from "@DashboardV2/ui/components/button";
 import {
   Card,
@@ -25,7 +36,7 @@ import {
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Meter } from "@/components/meter";
 import { QueryError } from "@/components/query-error";
@@ -57,7 +68,31 @@ export function ProjectsBoard({
   const queryClient = useQueryClient();
   const updateProject = useMutation(trpc.project.update.mutationOptions());
   const [movingId, setMovingId] = useState<string | null>(null);
+  const [draggedRow, setDraggedRow] = useState<ProjectRow | null>(null);
+  const reducedMotion = usePrefersReducedMotion();
   const visibleStatuses = status === "all" ? PROJECT_STATUSES : [status];
+
+  /*
+   * A distance threshold, not an instant grab: the card title is a link, and
+   * without it every click would be swallowed as a drag that never happened.
+   * No touch or keyboard sensor on purpose — the per-card status menu is
+   * already a complete keyboard path, and a second one would fight its focus
+   * restoration.
+   */
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
+
+  function draggedFrom(event: DragStartEvent | DragEndEvent) {
+    return (event.active.data.current as { row?: ProjectRow } | undefined)?.row ?? null;
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const row = draggedFrom(event);
+    setDraggedRow(null);
+    if (!row || !event.over) return;
+    void moveProject(row, event.over.id as ProjectStatus);
+  }
 
   async function moveProject(row: ProjectRow, nextStatus: ProjectStatus) {
     if (row.status === nextStatus) return;
@@ -87,7 +122,7 @@ export function ProjectsBoard({
     }
   }
 
-  return (
+  const columns = (
     <div
       className="grid gap-3 md:grid-flow-col md:auto-cols-[minmax(17rem,1fr)] md:grid-cols-none md:items-start md:overflow-x-auto md:pb-2"
     >
@@ -104,6 +139,44 @@ export function ProjectsBoard({
       ))}
     </div>
   );
+
+  // Nothing to drag if this account cannot change a project's status.
+  if (!canUpdate) return columns;
+
+  return (
+    <DndContext
+      sensors={sensors}
+      onDragStart={(event) => setDraggedRow(draggedFrom(event))}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => setDraggedRow(null)}
+      /*
+       * dnd-kit otherwise renders a hidden English instructions block describing
+       * a keyboard drag this board does not implement. The app defaults to
+       * Indonesian, so that text would be both untranslated and untrue.
+       */
+      accessibility={{ screenReaderInstructions: { draggable: "" } }}
+    >
+      {columns}
+      <DragOverlay dropAnimation={reducedMotion ? null : undefined}>
+        {draggedRow ? <ProjectCard row={draggedRow} canUpdate={false} moving={false} overlay /> : null}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
+/** Matches how the rest of the app scopes motion rather than suppressing it globally. */
+function usePrefersReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReduced(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return reduced;
 }
 
 function ProjectBoardColumn({
@@ -133,12 +206,17 @@ function ProjectBoardColumn({
   const total = query.data?.pages[0]?.total ?? 0;
   const label = statusLabel("project", status);
   const headingId = `project-board-${status}`;
+  // The column id IS the status, so a drop resolves straight to the new value.
+  const { setNodeRef, isOver } = useDroppable({ id: status, disabled: !canUpdate });
 
   return (
     <section
+      ref={setNodeRef}
       aria-labelledby={headingId}
       aria-busy={query.isPending || query.isFetchingNextPage}
-      className="min-w-0 rounded-lg bg-muted/40 p-2 ring-1 ring-foreground/10 md:w-[17rem]"
+      className={`min-w-0 rounded-lg p-2 ring-1 transition-colors md:w-[17rem] ${
+        isOver ? "bg-accent/60 ring-2 ring-ring" : "bg-muted/40 ring-foreground/10"
+      }`}
     >
       <p role="status" aria-live="polite" className="sr-only">
         {query.isFetchingNextPage
@@ -227,25 +305,89 @@ function ProjectBoardCard({
   movePending: boolean;
   onMove: (row: ProjectRow, status: ProjectStatus) => Promise<void>;
 }) {
+  const { listeners, setNodeRef, isDragging } = useDraggable({
+    id: row.id,
+    data: { row },
+    disabled: !canUpdate || movePending,
+  });
+
+  /*
+   * `attributes` is deliberately not spread. It sets role="button" and
+   * tabIndex={0} on the card, which would add a focus stop that does nothing
+   * for keyboard users and would sit between the card's own link and its status
+   * menu in the tab order. Omitting it leaves the accessibility tree as it was.
+   */
+  return (
+    <ProjectCard
+      row={row}
+      canUpdate={canUpdate}
+      moving={moving}
+      movePending={movePending}
+      onMove={onMove}
+      innerRef={setNodeRef}
+      handleProps={listeners}
+      dragging={isDragging}
+    />
+  );
+}
+
+function ProjectCard({
+  row,
+  canUpdate,
+  moving,
+  movePending,
+  onMove,
+  innerRef,
+  handleProps,
+  dragging = false,
+  overlay = false,
+}: {
+  row: ProjectRow;
+  canUpdate: boolean;
+  moving: boolean;
+  movePending?: boolean;
+  onMove?: (row: ProjectRow, status: ProjectStatus) => Promise<void>;
+  innerRef?: (node: HTMLElement | null) => void;
+  handleProps?: Record<string, unknown>;
+  dragging?: boolean;
+  overlay?: boolean;
+}) {
   const t = useT();
   const { formatDate, percent } = useFormat();
   const statusLabel = useStatusLabel();
   const menuLabel = interpolate(t.projects.changeStatusLabel, { name: row.name });
 
   return (
-    <Card size="sm">
+    <Card
+      size="sm"
+      ref={innerRef}
+      {...handleProps}
+      className={[
+        handleProps && !movePending ? "cursor-grab active:cursor-grabbing" : "",
+        dragging ? "opacity-40" : "",
+        overlay ? "cursor-grabbing shadow-lg ring-2 ring-ring" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <CardHeader>
         <CardTitle as="h3" className="min-w-0">
+          {/*
+            draggable={false}: an <a> is natively draggable, so without this the
+            browser starts its own link drag with its own ghost image alongside
+            dnd-kit's overlay.
+          */}
           <Link
-            id={`project-board-link-${row.id}`}
+            id={overlay ? undefined : `project-board-link-${row.id}`}
             href={`/projects/${row.id}`}
+            draggable={false}
             className="block truncate hover:underline"
           >
             {row.name}
           </Link>
         </CardTitle>
         <p className="truncate font-mono text-muted-foreground">{row.code}</p>
-        {canUpdate && (
+        {canUpdate && onMove && (
           <CardAction>
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -256,6 +398,8 @@ function ProjectBoardCard({
                     aria-label={menuLabel}
                     title={menuLabel}
                     disabled={movePending}
+                    // Keeps a press on the menu from arming the card's drag sensor.
+                    onPointerDown={(event) => event.stopPropagation()}
                   />
                 }
               >

@@ -1,5 +1,7 @@
 import { ImageResponse } from "next/og";
 
+import { BANNER, BOWL, MARK_VIEWBOX } from "@/components/logo";
+
 export const size = { width: 180, height: 180 };
 export const contentType = "image/png";
 
@@ -24,9 +26,9 @@ export default function AppleIcon() {
           background: "#5e17eb",
         }}
       >
-        <svg viewBox="81 283.5 648 243" width={132} height={49.5} fill="#000000">
-          <path d="M146.847656 520.800781C156.96875 524.242188 168.476562 526.5 179.773438 526.5C191.066406 526.5 201.933594 524.5625 211.949219 521.121094C212.164062 521.015625 212.375 521.015625 212.589844 520.90625C250.203125 507.136719 277.90625 470.777344 278.4375 428.289062L278.4375 283.5L81 283.5L81 428.179688C81.53125 470.992188 108.808594 507.351562 146.847656 520.800781Z" />
-          <path d="M729 283.5L729 526.5L618.890625 488.53125L508.78125 526.5L508.78125 283.5Z" />
+        <svg viewBox={MARK_VIEWBOX} width={132} height={49.5} fill="#000000">
+          <path d={BOWL} />
+          <path d={BANNER} />
         </svg>
       </div>
     ),
