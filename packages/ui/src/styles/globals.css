@@ -34,6 +34,15 @@
   /* Semantic caution state; chart tokens remain reserved for data magnitude. */
   --warning: oklch(0.4800 0.1050 68);
   --warning-foreground: oklch(1 0 0);
+  /*
+   * The mark's purple, as a usable colour.
+   *
+   * Taken from the logo tile in components/brand.tsx, where it was a hardcoded
+   * hex. A token so the two cannot drift, and so the one place that decides
+   * what the brand looks like is this file.
+   */
+  --brand: #5e17eb;
+
   --border: oklch(0.9013 0.0156 257.2001);
   --input: oklch(0.9013 0.0156 257.2001);
   --ring: oklch(0.6503 0.0220 257.4949);
@@ -120,6 +129,10 @@
   --success-foreground: oklch(0.2494 0.0304 256.8623);
   --warning: oklch(0.7800 0.1400 75);
   --warning-foreground: oklch(0.2494 0.0304 256.8623);
+  /* Lifted well above the mark's own purple: #5e17eb on a dark card is nearly
+     invisible, and this is used for icons that have to be seen. */
+  --brand: oklch(0.7200 0.1800 288);
+
   --border: oklch(0.3299 0.0322 257.6775);
   --input: oklch(0.3205 0.0336 253.9373);
   --ring: oklch(0.5805 0.0297 251.8232);
@@ -248,6 +261,7 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  --color-brand: var(--brand);
 }
 
 @layer base {

@@ -2,6 +2,15 @@ import { cn } from "@DashboardV2/ui/lib/utils";
 
 export const BRAND_NAME = "Fushin";
 
+/**
+ * Where an account that cannot use the app reaches a human.
+ *
+ * Mirrors CONTACT_EMAIL in apps/marketing/src/lib/site.ts — same address, same
+ * NEXT_PUBLIC_ variable, so setting it once covers both apps. Public by design:
+ * it is rendered as a mailto link.
+ */
+export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL ?? "hyperferno@gmail.com";
+
 const BOWL =
   "M146.847656 520.800781C156.96875 524.242188 168.476562 526.5 179.773438 526.5C191.066406 526.5 201.933594 524.5625 211.949219 521.121094C212.164062 521.015625 212.375 521.015625 212.589844 520.90625C250.203125 507.136719 277.90625 470.777344 278.4375 428.289062L278.4375 283.5L81 283.5L81 428.179688C81.53125 470.992188 108.808594 507.351562 146.847656 520.800781Z";
 

@@ -639,14 +639,34 @@ function parseActualSnapshots(
   return { snapshots, errors };
 }
 
-export async function analyzeProjectWorkbook(bytes: Uint8Array): Promise<WorkbookAnalysis> {
+/**
+ * The steps this function passes through, in order.
+ *
+ * Reported rather than estimated: the caller cannot see inside a single
+ * request, and the one step that dominates the wait — the model reading the
+ * layout — is also the one a timer would guess worst. `interpreting` is
+ * genuinely skipped for the reference template, which is recognised without
+ * the model, so a progress bar driven by these never claims work that did not
+ * happen.
+ */
+export const ANALYSIS_STAGES = ["reading", "recognising", "interpreting", "building"] as const;
+export type AnalysisStage = (typeof ANALYSIS_STAGES)[number];
+
+export async function analyzeProjectWorkbook(
+  bytes: Uint8Array,
+  onStage: (stage: AnalysisStage) => void = () => {},
+): Promise<WorkbookAnalysis> {
+  onStage("reading");
   const workbook = await loadWorkbook(bytes);
   const fileHash = hash(bytes);
+  onStage("recognising");
   let plan = referencePlan(workbook, fileHash);
 
   if (!plan) {
+    onStage("interpreting");
     const { interpretWorkbook } = await import("./openrouter");
     const interpreted = await interpretWorkbook(workbookSummary(workbook));
+    onStage("building");
     const selected = interpreted
       ? workbook.worksheets.find((sheet) => sheet.name === interpreted.sheetName)
       : workbook.worksheets[0];
@@ -743,6 +763,10 @@ export async function analyzeProjectWorkbook(bytes: Uint8Array): Promise<Workboo
       warnings: interpreted?.warnings ?? ["AI interpretation is unavailable. Review every mapping before importing."],
     };
   }
+
+  // The reference path skips `interpreting` entirely and lands here still on
+  // `recognising`, so it needs its own building signal.
+  if (plan.profile === "reference-s-curve") onStage("building");
 
   return reviewProjectWorkbook(bytes, plan);
 }

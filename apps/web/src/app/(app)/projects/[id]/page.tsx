@@ -26,7 +26,8 @@ export default async function ProjectDetailPage({
   const canManageMembers = hasPermission(role, "member:manage");
   const requested = await searchParams;
   const requestedTab = Array.isArray(requested.tab) ? requested.tab[0] : requested.tab;
-  const tabs = ["overview", "tickets", "baseline", "progress", "daily", "notes", "team"];
+  // Mirrors PROJECT_TABS in ./project-detail.tsx.
+  const tabs = ["overview", "tickets", "baseline", "boq", "schedule", "progress", "daily", "notes", "team"];
   const activeTab =
     requestedTab && tabs.includes(requestedTab) && (requestedTab !== "team" || canManageMembers)
       ? requestedTab
@@ -57,7 +58,8 @@ export default async function ProjectDetailPage({
         ),
       ),
     );
-  } else if (activeTab === "baseline") {
+  } else if (activeTab === "baseline" || activeTab === "boq" || activeTab === "schedule") {
+    // All three render BaselineTab, which opens on listVersions either way.
     prefetches.push(
       queryClient.prefetchQuery(trpc.boq.listVersions.queryOptions({ projectId: id })),
     );

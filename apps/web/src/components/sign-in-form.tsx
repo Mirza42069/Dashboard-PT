@@ -1,5 +1,6 @@
 "use client";
 
+import { TRIAL_ENDED_CODE } from "@DashboardV2/api/lib/trial";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
@@ -54,6 +55,13 @@ export default function SignInForm() {
             // better-auth's raw "You have been banned" text.
             if (error.error.code === "BANNED_USER") {
               toast.error(t.auth.accountPaused, { duration: 8000 });
+              return;
+            }
+            // A lapsed trial is refused the same way but is not the same thing:
+            // "renew your subscription" is the wrong instruction for someone who
+            // never had one.
+            if (error.error.code === TRIAL_ENDED_CODE) {
+              toast.error(t.auth.trialEnded, { duration: 8000 });
               return;
             }
             toast.error(error.error.message || error.error.statusText);

@@ -31,10 +31,18 @@ import {
   TableHeader,
   TableRow,
 } from "@DashboardV2/ui/components/table";
+import {
+  isTrialAccount,
+  trialDaysRemaining,
+  trialHasEnded,
+} from "@DashboardV2/api/lib/trial";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Building2,
+  CircleCheck,
+  Clock,
   KeyRound,
+  Lock,
   MoreHorizontal,
   PauseCircle,
   Pencil,
@@ -46,13 +54,14 @@ import {
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
-import { interpolate } from "@/i18n";
+import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import CreateUserDialog from "./create-user-dialog";
+import SetTrialDialog, { type TrialTarget } from "./set-trial-dialog";
 import RenameUserDialog, { type RenameTarget } from "./rename-user-dialog";
 import TempPasswordDialog, { type TempPasswordResult } from "./temp-password-dialog";
 
@@ -77,6 +86,8 @@ export default function UsersTable({
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [companyTarget, setCompanyTarget] = useState<{ id: string; name: string } | null>(null);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
+  const [trialTarget, setTrialTarget] = useState<TrialTarget | null>(null);
+  const [pendingResume, setPendingResume] = useState<{ id: string; name: string } | null>(null);
 
   const debouncedSearch = useDebounced(search);
 
@@ -102,6 +113,7 @@ export default function UsersTable({
   const resetPassword = useMutation(trpc.admin.resetPassword.mutationOptions());
   const setRole = useMutation(trpc.admin.setRole.mutationOptions());
   const setBanned = useMutation(trpc.admin.setBanned.mutationOptions());
+  const setTrial = useMutation(trpc.admin.setTrial.mutationOptions());
   const setCompany = useMutation(trpc.admin.setCompany.mutationOptions());
   const deleteUser = useMutation(trpc.admin.deleteUser.mutationOptions());
 
@@ -114,6 +126,16 @@ export default function UsersTable({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.common.somethingWentWrong);
     }
+  }
+
+  /**
+   * "Ends today" rather than "0 days left" on the final day — the trial is
+   * still working, and a zero reads as though it has already stopped.
+   */
+  function trialLabel(row: { trialEndsAt: Date | string | null }) {
+    const days = trialDaysRemaining(row);
+    if (days === null) return t.trial.badge;
+    return days === 0 ? t.trial.endsToday : plural(t.trial.daysLeft, days);
   }
 
   const users = usersQuery.data?.users ?? [];
@@ -208,11 +230,25 @@ export default function UsersTable({
                     <TableCell className="text-muted-foreground">
                       {user.companyName ?? t.common.none}
                     </TableCell>
+                    {/* Paused first: it is the state that stops sign-in, and
+                        a paused trial account is paused before it is on trial.
+                        A running trial then outranks "pending first sign-in",
+                        which is only ever a note about the password. */}
                     <TableCell>
                       {user.banned ? (
                         <Badge variant="destructive">
                           <PauseCircle />
                           {t.users.paused}
+                        </Badge>
+                      ) : trialHasEnded(user) ? (
+                        <Badge variant="destructive">
+                          <Lock />
+                          {t.trial.ended}
+                        </Badge>
+                      ) : isTrialAccount(user) ? (
+                        <Badge variant="secondary">
+                          <Clock />
+                          {trialLabel(user)}
                         </Badge>
                       ) : user.mustChangePassword ? (
                         <Badge variant="secondary">{t.users.pendingFirstSignIn}</Badge>
@@ -318,6 +354,49 @@ export default function UsersTable({
                             {user.banned ? t.users.resume : t.users.pause}
                           </DropdownMenuItem>
 
+                          {/* A trial is a commercial arrangement with a clock;
+                              pausing is a judgement about an account. Both can
+                              be true at once, so they are separate controls.
+                              Hidden entirely for a System account: that role
+                              cannot hold a trial, and offering a control that
+                              always refuses is worse than not offering it. */}
+                          {!isSuperAdmin && (
+                            <DropdownMenuItem
+                              disabled={isSelf || !manageable}
+                              onClick={() =>
+                                setTrialTarget({
+                                  id: user.id,
+                                  name: user.name,
+                                  trialEndsAt: user.trialEndsAt,
+                                  trialAiCredits: user.trialAiCredits,
+                                })
+                              }
+                            >
+                              <Clock />
+                              {/* Three names for one dialog, because the three
+                                  situations are not the same decision: opening
+                                  a trial, buying more time on a live one, and
+                                  granting a fresh one after it lapsed. */}
+                              {trialHasEnded(user)
+                                ? t.users.retrial
+                                : isTrialAccount(user)
+                                  ? t.users.extendTrial
+                                  : t.users.setTrial}
+                            </DropdownMenuItem>
+                          )}
+
+                          {isTrialAccount(user) && (
+                            <DropdownMenuItem
+                              disabled={isSelf || !manageable}
+                              onClick={() =>
+                                setPendingResume({ id: user.id, name: user.name })
+                              }
+                            >
+                              <CircleCheck />
+                              {t.users.resumeAsNormal}
+                            </DropdownMenuItem>
+                          )}
+
                           <DropdownMenuItem
                             variant="destructive"
                             disabled={isSelf || !manageable}
@@ -374,6 +453,40 @@ export default function UsersTable({
       </div>
 
       <TempPasswordDialog result={tempPassword} onClose={() => setTempPassword(null)} />
+
+      {trialTarget && (
+        <SetTrialDialog target={trialTarget} onClose={() => setTrialTarget(null)} />
+      )}
+
+      {/* Confirmed rather than immediate: it gives away the limits, and there
+          is no undo beyond setting a fresh trial. */}
+      <AlertDialog
+        open={pendingResume !== null}
+        onOpenChange={(open) => !open && setPendingResume(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.users.resumeAsNormalTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{t.users.resumeAsNormalDescription}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const target = pendingResume;
+                setPendingResume(null);
+                if (!target) return;
+                void run(
+                  () => setTrial.mutateAsync({ userId: target.id, action: "clear" }),
+                  t.users.trialClearedToast,
+                );
+              }}
+            >
+              {t.users.resumeAsNormal}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {renameTarget && (
         <RenameUserDialog

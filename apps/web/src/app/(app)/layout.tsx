@@ -20,6 +20,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         name: session.user.name,
         email: session.user.email,
         role: session.user.role ?? "user",
+        trialEndsAt: session.user.trialEndsAt ?? null,
       }}
       initialCollapsed={collapsed}
       initialTextScale={textScale}

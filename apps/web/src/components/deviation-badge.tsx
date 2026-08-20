@@ -23,10 +23,20 @@ export function formatDeviation(value: number) {
 export function DeviationBadge({
   value,
   className,
+  compact = false,
 }: {
   /** Null when the project has no baseline or nothing has been reported yet. */
   value: number | null;
   className?: string;
+  /**
+   * Drops the word, keeping the sign.
+   *
+   * For dense lists where the same word would repeat on every row. This does
+   * not give up the non-colour channel the note above insists on — the leading
+   * + or − states the direction in text, so greyscale and colour-deficient
+   * readers still get the answer. Only the redundant second statement goes.
+   */
+  compact?: boolean;
 }) {
   const t = useT();
 
@@ -40,7 +50,18 @@ export function DeviationBadge({
   const isOnTrack = position === "on_track";
 
   return (
-    <span className={cn("inline-flex items-baseline gap-1.5", className)}>
+    <span
+      className={cn("inline-flex items-baseline gap-1.5", className)}
+      title={
+        compact
+          ? isBehind
+            ? t.progress.behind
+            : isAhead
+              ? t.progress.ahead
+              : t.progress.onTrack
+          : undefined
+      }
+    >
       <span
         className={cn(
           "font-medium tabular-nums",
@@ -54,9 +75,11 @@ export function DeviationBadge({
       >
         {formatDeviation(value)}
       </span>
-      <span className="text-xs text-muted-foreground">
-        {isBehind ? t.progress.behind : isAhead ? t.progress.ahead : t.progress.onTrack}
-      </span>
+      {!compact && (
+        <span className="text-xs text-muted-foreground">
+          {isBehind ? t.progress.behind : isAhead ? t.progress.ahead : t.progress.onTrack}
+        </span>
+      )}
     </span>
   );
 }

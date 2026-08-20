@@ -43,6 +43,13 @@ import {
 } from "@/components/matrix-window";
 import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@DashboardV2/ui/components/tooltip";
+
+import { Hint } from "@/components/hint";
 import { useLocale, useT } from "@/i18n/provider";
 import { computePlannedCurve, distributionMap, scheduleRows } from "@/lib/boq/curves";
 import { datePickerLabels } from "@/lib/date-picker-labels";
@@ -440,10 +447,8 @@ export default function ScheduleTab({
                 <Badge variant={isDraft ? "outline" : "secondary"}>
                   {isDraft ? t.boq.draft : t.boq.active}
                 </Badge>
+                <Hint text={editable ? t.schedule.planHint : t.schedule.lockedNote} />
               </CardTitle>
-              <CardDescription>
-                {editable ? t.schedule.planHint : t.schedule.lockedNote}
-              </CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
@@ -809,15 +814,23 @@ export default function ScheduleTab({
                         >
                           {editable && (
                             <div className="flex justify-end gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                aria-label={`${t.schedule.fillRight} — ${row.leaf.code}`}
-                                title={t.schedule.fillRightHint}
-                                onClick={() => fillRight(row.leaf)}
-                              >
-                                <ChevronRight />
-                              </Button>
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      aria-label={`${t.schedule.fillRight} — ${row.leaf.code}`}
+                                      onClick={() => fillRight(row.leaf)}
+                                    />
+                                  }
+                                >
+                                  <ChevronRight />
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-xs">
+                                  {t.schedule.fillRightHint}
+                                </TooltipContent>
+                              </Tooltip>
                               <Button
                                 variant={copySource === row.leaf.id ? "secondary" : "ghost"}
                                 size="icon-sm"
@@ -1029,10 +1042,10 @@ function ScheduleSettings({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t.baseline.timingTitle}</CardTitle>
-        <CardDescription>
-          {editable ? t.baseline.timingHint : t.baseline.timingLocked}
-        </CardDescription>
+        <CardTitle className="flex items-center gap-1.5">
+          {t.baseline.timingTitle}
+          <Hint text={editable ? t.baseline.timingHint : t.baseline.timingLocked} />
+        </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {/* Same picker the new/edit dialog uses. These are the same two columns

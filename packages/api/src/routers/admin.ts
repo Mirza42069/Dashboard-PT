@@ -12,6 +12,13 @@ import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { roleOf } from "../lib/permissions";
 import { assertCompanyExists } from "../lib/scope";
+import {
+  DEFAULT_TRIAL_AI_CREDITS,
+  DEFAULT_TRIAL_DAYS,
+  MAX_TRIAL_AI_CREDITS,
+  MAX_TRIAL_DAYS,
+  trialDeadline,
+} from "../lib/trial";
 import { planProjectAccessReconciliation } from "../lib/user-project-access";
 
 /**
@@ -31,6 +38,40 @@ function generateTempPassword() {
 
 const roleSchema = z.enum(["super_admin", "admin", "user"]);
 const userIdSchema = z.object({ userId: z.string().min(1) });
+
+/**
+ * A trial, as an admin states it: a length and an allowance, both absolute.
+ *
+ * Absolute rather than "add 7 more days" because the admin is looking at the
+ * account's current state when they decide — a delta means the answer depends
+ * on how stale that screen is, and two admins acting on the same lapsed trial
+ * would produce different deadlines.
+ */
+const trialInputSchema = z.object({
+  days: z.number().int().min(1).max(MAX_TRIAL_DAYS).default(DEFAULT_TRIAL_DAYS),
+  aiCredits: z.number().int().min(0).max(MAX_TRIAL_AI_CREDITS).default(DEFAULT_TRIAL_AI_CREDITS),
+});
+
+/**
+ * Turns that into the two columns, or refuses.
+ *
+ * Super admins are excluded by role, not by hiding the control: a trial that
+ * lapses locks the account out, and the one account type that can lift the
+ * lock must never be able to lock itself out.
+ */
+function resolveTrialInput(
+  trial: z.infer<typeof trialInputSchema> | undefined,
+  role: z.infer<typeof roleSchema>,
+) {
+  if (!trial) return null;
+  if (role === "super_admin") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "A System account cannot be put on a trial",
+    });
+  }
+  return { trialEndsAt: trialDeadline(trial.days), trialAiCredits: trial.aiCredits };
+}
 
 /**
  * Keeps project scope valid when account administration changes how access is
@@ -216,6 +257,8 @@ export const adminRouter = router({
             role: user.role,
             banned: user.banned,
             mustChangePassword: user.mustChangePassword,
+            trialEndsAt: user.trialEndsAt,
+            trialAiCredits: user.trialAiCredits,
             createdAt: user.createdAt,
             companyId: user.companyId,
             // Null for super admins, who are not pinned to a company.
@@ -245,6 +288,8 @@ export const adminRouter = router({
         role: roleSchema.default("user"),
         /** Required for admin and user accounts — null (ignored) for super_admin, who is unpinned. */
         companyId: z.string().min(1).optional(),
+        /** Omit for a normal account. Present means "start a trial now". */
+        trial: trialInputSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -285,6 +330,7 @@ export const adminRouter = router({
         companyId = input.companyId;
       }
 
+      const trial = resolveTrialInput(input.trial, role);
       const temporaryPassword = generateTempPassword();
 
       const created = await auth.api.createUser({
@@ -304,9 +350,12 @@ export const adminRouter = router({
       // interactive ones), and an account that exists with no company is locked
       // out of every page. So if the second write fails, undo the first rather
       // than leaving an account only raw SQL can repair.
-      if (companyId) {
+      if (companyId || trial) {
         try {
-          await db.update(user).set({ companyId }).where(eq(user.id, created.user.id));
+          await db
+            .update(user)
+            .set({ ...(companyId ? { companyId } : {}), ...(trial ?? {}) })
+            .where(eq(user.id, created.user.id));
         } catch (error) {
           await db.delete(user).where(eq(user.id, created.user.id));
           throw new TRPCError({
@@ -322,7 +371,7 @@ export const adminRouter = router({
         entityType: "user",
         entityId: created.user.id,
         entityLabel: `${input.name} - ${email}`,
-        detail: role,
+        detail: trial ? `${role} (trial)` : role,
       });
 
       return { user: created.user, temporaryPassword };
@@ -447,6 +496,70 @@ export const adminRouter = router({
         entityId: input.userId,
         entityLabel: label,
         detail: input.role,
+      });
+
+      return { success: true };
+    }),
+
+  /**
+   * Starts, re-times, or ends a trial.
+   *
+   * Deliberately not folded into setBanned. Pausing is a judgement an admin
+   * makes about an account; a trial is a commercial arrangement with a clock,
+   * and the two can be true at once — resuming a paused account must not also
+   * hand it another week of trial, and extending a trial must not un-pause it.
+   */
+  setTrial: companyPermissionProcedure("user:manage")
+    .input(
+      z.union([
+        userIdSchema.extend({ action: z.literal("clear") }),
+        userIdSchema.extend({ action: z.literal("set") }).merge(trialInputSchema),
+      ]),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertTargetManageable(ctx, input.userId);
+      assertNotSelf(ctx.session.user.id, input.userId, "put a trial on");
+      const auditCompanyId = await auditCompanyFor(input.userId, ctx.companyId);
+
+      const [target] = await db
+        .select({ role: user.role, trialEndsAt: user.trialEndsAt })
+        .from(user)
+        .where(eq(user.id, input.userId));
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+      }
+
+      const wasOnTrial = target.trialEndsAt !== null;
+
+      if (input.action === "clear") {
+        await db
+          .update(user)
+          .set({ trialEndsAt: null, trialAiCredits: null })
+          .where(eq(user.id, input.userId));
+      } else {
+        // roleOf, not roleSchema.parse: a row carrying a legacy or unknown role
+        // must degrade to the least-privileged one, not 500 the request.
+        const fields = resolveTrialInput(
+          { days: input.days, aiCredits: input.aiCredits },
+          roleOf(target),
+        );
+        if (fields) {
+          await db.update(user).set(fields).where(eq(user.id, input.userId));
+        }
+      }
+
+      await recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
+        action:
+          input.action === "clear"
+            ? "trial_cleared"
+            : wasOnTrial
+              ? "trial_changed"
+              : "trial_started",
+        entityType: "user",
+        entityId: input.userId,
+        entityLabel: await userLabel(input.userId),
+        detail:
+          input.action === "set" ? `${input.days}d / ${input.aiCredits} AI` : undefined,
       });
 
       return { success: true };

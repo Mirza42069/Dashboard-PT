@@ -2,6 +2,7 @@ import { initTRPC, TRPCError } from "@trpc/server";
 
 import type { Context } from "./context";
 import { hasPermission, roleOf, type Permission } from "./lib/permissions";
+import { trialHasEnded } from "./lib/trial";
 
 export const t = initTRPC.context<Context>().create();
 
@@ -15,6 +16,16 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
       code: "UNAUTHORIZED",
       message: "Authentication required",
       cause: "No session",
+    });
+  }
+  // A trial that lapsed mid-session still holds a valid cookie — packages/auth
+  // only refuses to *create* a session for one. Every procedure fails closed
+  // here so the page-level redirect in apps/web is a courtesy, not the control.
+  if (trialHasEnded(ctx.session.user)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "This trial has ended",
+      cause: "Trial ended",
     });
   }
   return next({

@@ -5,6 +5,7 @@ import { contactMailto, isDemoConfigured } from "@/lib/site";
 import { requestDemo } from "@/app/actions";
 
 import { DemoForm } from "./demo-form";
+import { GradualBlur } from "./gradual-blur";
 import { ArrowDown, Check, File } from "./icons";
 import { LiveDemo } from "./live-demo";
 import { ProductShot } from "./product-shot";
@@ -83,7 +84,7 @@ export function LandingPage({ t }: { t: Content }) {
         </section>
 
         {/* AI-assisted import — the newest capability, and the one the old page never mentioned. */}
-        <section className="section feature-section tinted" id="import">
+        <section className="section feature-section" id="import">
           <div className="page-shell feature-row">
             <div className="feature-copy">
               <h2>{t.ai.title}</h2>
@@ -103,7 +104,7 @@ export function LandingPage({ t }: { t: Content }) {
               title={t.shots.import.title}
               caption={t.shots.import.caption}
               alt={t.shots.import.alt}
-              sizes="(max-width: 1000px) 100vw, 640px"
+              sizes="(max-width: 1000px) 200vw, 1200px"
             />
           </div>
         </section>
@@ -127,12 +128,12 @@ export function LandingPage({ t }: { t: Content }) {
               title={t.shots.progress.title}
               caption={t.shots.progress.caption}
               alt={t.shots.progress.alt}
-              sizes="(max-width: 1000px) 100vw, 640px"
+              sizes="(max-width: 1000px) 200vw, 1200px"
             />
           </div>
         </section>
 
-        <section className="section feature-section tinted">
+        <section className="section feature-section">
           <div className="page-shell feature-row">
             <div className="feature-copy">
               <h2>{t.baseline.title}</h2>
@@ -143,7 +144,7 @@ export function LandingPage({ t }: { t: Content }) {
               title={t.shots.boq.title}
               caption={t.shots.boq.caption}
               alt={t.shots.boq.alt}
-              sizes="(max-width: 1000px) 100vw, 640px"
+              sizes="(max-width: 1000px) 200vw, 1200px"
             />
           </div>
         </section>
@@ -172,6 +173,8 @@ export function LandingPage({ t }: { t: Content }) {
           </div>
         </section>
       </main>
+
+      <GradualBlur />
     </div>
   );
 }

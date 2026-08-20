@@ -739,6 +739,9 @@ export const ACTIVITY_ACTIONS = [
   "returned",
   "locked",
   "reopened",
+  "trial_started",
+  "trial_changed",
+  "trial_cleared",
 ] as const;
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
 

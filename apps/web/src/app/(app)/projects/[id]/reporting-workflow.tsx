@@ -33,6 +33,7 @@ import { CircleAlert, Lock, Send } from "@DashboardV2/ui/components/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { Hint } from "@/components/hint";
 import { Meter } from "@/components/meter";
 import { QueryError } from "@/components/query-error";
 import { StatusBadge } from "@/components/status-badge";
@@ -152,7 +153,7 @@ export default function ReportingWorkflow({
       to: "reviewed",
       label: t.reporting.markReviewed,
       confirmTitle: t.reporting.markReviewed,
-      confirmBody: t.reporting.description,
+      confirmBody: t.reporting.confirmReviewBody,
       noteLabel: t.reporting.reviewComment,
       toast: t.reporting.markReviewed,
     });
@@ -170,7 +171,9 @@ export default function ReportingWorkflow({
       to: "returned",
       label: t.reporting.returnReport,
       confirmTitle: t.reporting.returnReport,
-      confirmBody: t.reporting.confirmSubmitBody,
+      // Was confirmSubmitBody — "the figures are frozen while a reviewer reads
+      // them", which describes submitting, the opposite of sending it back.
+      confirmBody: t.reporting.confirmReturnBody,
       reasonLabel: t.reporting.returnReason,
       reasonPlaceholder: t.reporting.returnReasonPlaceholder,
       destructive: true,
@@ -230,9 +233,9 @@ export default function ReportingWorkflow({
           <div className="space-y-1">
             <CardTitle className="flex flex-wrap items-center gap-2">
               {t.reporting.title}
+              <Hint text={t.reporting.description} />
               <StatusBadge kind="period" value={status} />
             </CardTitle>
-            <CardDescription>{t.reporting.description}</CardDescription>
           </div>
 
           <div className="space-y-1">

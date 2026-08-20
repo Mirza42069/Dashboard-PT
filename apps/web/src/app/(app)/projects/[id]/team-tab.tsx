@@ -16,6 +16,7 @@ import { Save } from "@DashboardV2/ui/components/icons";
 import { useEffect, useState } from "react";
 import { toast } from "@/lib/toast";
 
+import { Hint } from "@/components/hint";
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
@@ -95,7 +96,6 @@ export default function TeamTab({
     <Card>
       <CardHeader>
         <CardTitle>{t.projects.teamTab}</CardTitle>
-        <CardDescription>{t.projects.addMembers}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {options.length === 0 ? (
@@ -120,14 +120,14 @@ export default function TeamTab({
                 <span className="font-medium">{user.name}</span>
                 <span className="text-muted-foreground">{user.email}</span>
                 {user.id === protectedManagerId && (
-                  <span className="ml-auto text-xs">{t.projects.currentManager}</span>
+                  <span className="ml-auto inline-flex items-center gap-1.5 text-xs">
+                    {t.projects.currentManager}
+                    <Hint text={t.projects.managerMemberHint} />
+                  </span>
                 )}
               </label>
             ))}
           </div>
-        )}
-        {protectedManagerId && (
-          <p className="text-xs text-muted-foreground">{t.projects.managerMemberHint}</p>
         )}
         <Button size="sm" disabled={setMembers.isPending} onClick={() => void save()}>
           <Save />

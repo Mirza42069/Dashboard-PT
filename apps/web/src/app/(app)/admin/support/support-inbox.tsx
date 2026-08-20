@@ -29,6 +29,14 @@ import { useEffect, useRef, useState } from "react";
 
 import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
+import {
+  Empty,
+  EmptyContent,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@DashboardV2/ui/components/empty";
+
 import { useT } from "@/i18n/provider";
 import { toast } from "@/lib/toast";
 import { useDebounced } from "@/lib/use-debounced";
@@ -169,36 +177,35 @@ export default function SupportInbox() {
       {!inbox.isPending &&
         !initialError &&
         requests.length === 0 && (
-          <Card className="flex min-h-64 flex-col items-center justify-center gap-3 border-dashed p-8 text-center">
-            {hasSearch || status !== "all" ? (
-              <SearchX className="size-6 text-muted-foreground" />
-            ) : (
-              <Inbox className="size-6 text-muted-foreground" />
-            )}
-            <div className="space-y-1">
-              <p className="font-medium">
-                {hasSearch || status !== "all"
-                  ? t.support.noMatches
-                  : t.support.emptyInbox}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                {hasSearch || status !== "all"
-                  ? t.support.noMatchesDescription
-                  : t.support.emptyInboxDescription}
-              </p>
-            </div>
-            {(hasSearch || status !== "all") && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setSearch("");
-                  setStatus("all");
-                }}
-              >
-                {t.common.clearFilters}
-              </Button>
-            )}
+          /* Was a hand-rolled Card reimplementing Empty — the only empty
+             state in the product with an icon, and the only one not using the
+             component built for this. Now both, everywhere. Its two
+             descriptions were restatements of their own titles and are gone. */
+          <Card className="min-h-64">
+            <Empty className="flex-1">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  {hasSearch || status !== "all" ? <SearchX /> : <Inbox />}
+                </EmptyMedia>
+                <EmptyTitle>
+                  {hasSearch || status !== "all" ? t.support.noMatches : t.support.emptyInbox}
+                </EmptyTitle>
+              </EmptyHeader>
+              {(hasSearch || status !== "all") && (
+                <EmptyContent>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setSearch("");
+                      setStatus("all");
+                    }}
+                  >
+                    {t.common.clearFilters}
+                  </Button>
+                </EmptyContent>
+              )}
+            </Empty>
           </Card>
         )}
 

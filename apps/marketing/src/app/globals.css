@@ -120,6 +120,46 @@ img { max-width: 100%; height: auto; }
 }
 .language-link:hover::after, .language-link:focus-visible::after { transform: scaleX(1); }
 
+/* ----------------------------------------------------------- bottom blur -- */
+
+/*
+ * A progressive blur over the bottom edge of the viewport, so content dissolves
+ * into the page edge instead of being chopped off by it.
+ *
+ * backdrop-filter is uniform inside its own box, so the ramp has to be faked:
+ * six stacked layers of increasing blur, each masked to an overlapping window
+ * that slides down the strip. Rendered by components/gradual-blur.tsx.
+ */
+.gradual-blur {
+  position: fixed; z-index: 40; inset-inline: 0; inset-block-end: 0;
+  height: 4.5rem; pointer-events: none;
+}
+.gradual-blur i { position: absolute; display: block; inset: 0; }
+.gradual-blur i:nth-child(1) {
+  -webkit-backdrop-filter: blur(.123rem); backdrop-filter: blur(.123rem);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 16.7%, #000 33.3%, transparent 50%); mask-image: linear-gradient(to bottom, transparent 0%, #000 16.7%, #000 33.3%, transparent 50%);
+}
+.gradual-blur i:nth-child(2) {
+  -webkit-backdrop-filter: blur(.205rem); backdrop-filter: blur(.205rem);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 16.7%, #000 33.3%, #000 50%, transparent 66.7%); mask-image: linear-gradient(to bottom, transparent 16.7%, #000 33.3%, #000 50%, transparent 66.7%);
+}
+.gradual-blur i:nth-child(3) {
+  -webkit-backdrop-filter: blur(.4rem); backdrop-filter: blur(.4rem);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 33.3%, #000 50%, #000 66.7%, transparent 83.3%); mask-image: linear-gradient(to bottom, transparent 33.3%, #000 50%, #000 66.7%, transparent 83.3%);
+}
+.gradual-blur i:nth-child(4) {
+  -webkit-backdrop-filter: blur(.78rem); backdrop-filter: blur(.78rem);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 50%, #000 66.7%, #000 83.3%, transparent 100%); mask-image: linear-gradient(to bottom, transparent 50%, #000 66.7%, #000 83.3%, transparent 100%);
+}
+.gradual-blur i:nth-child(5) {
+  -webkit-backdrop-filter: blur(1.303rem); backdrop-filter: blur(1.303rem);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 66.7%, #000 83.3%, #000 100%); mask-image: linear-gradient(to bottom, transparent 66.7%, #000 83.3%, #000 100%);
+}
+.gradual-blur i:nth-child(6) {
+  -webkit-backdrop-filter: blur(1.6rem); backdrop-filter: blur(1.6rem);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 83.3%, #000 100%); mask-image: linear-gradient(to bottom, transparent 83.3%, #000 100%);
+}
+
 /* --------------------------------------------------------------- buttons -- */
 
 .button {
@@ -176,6 +216,18 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 500; lett
 .window-sync i { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
 .shot-body { overflow-x: auto; background: var(--background); }
 .shot-body img { display: block; width: 100%; height: auto; }
+/*
+ * A framed shot shows only part of its capture (see lib/shots.ts). The box is
+ * given the crop's own aspect ratio and the image is blown up inside it by
+ * exactly 1/crop, so the visible window is the crop and nothing is distorted.
+ */
+.shot-body[data-cropped] { position: relative; overflow: hidden; aspect-ratio: var(--shot-aspect); }
+.shot-body[data-cropped] img {
+  position: absolute;
+  inset-block-start: var(--shot-y); inset-inline-start: var(--shot-x);
+  width: var(--shot-w); height: var(--shot-h);
+  max-width: none; /* beats the global img { max-width: 100% } */
+}
 .shot-placeholder {
   display: grid; place-items: center; gap: .5rem; min-height: 340px; padding: 2rem;
   background:
@@ -190,7 +242,7 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 500; lett
 
 /* ------------------------------------------------------------ proof strip -- */
 
-.proof-strip { padding-block: 3rem; border-block: 1px solid var(--border); margin-block-start: 5rem; }
+.proof-strip { padding-block: 3rem; margin-block-start: 5rem; }
 .proof-inner > p { margin: 0 0 1.5rem; color: var(--muted-foreground); font-size: .82rem; }
 .proof-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin: 0; padding: 0; list-style: none; }
 .proof-grid li { display: flex; align-items: flex-start; gap: .5rem; color: var(--foreground); font-size: .82rem; font-weight: 550; }
@@ -199,7 +251,6 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 500; lett
 /* --------------------------------------------------------------- sections -- */
 
 .section { padding-block: 7rem; }
-.section.tinted, .feature-section.tinted { background: var(--card); border-block: 1px solid var(--border); }
 .section h2, .demo-section h2 { font-size: clamp(2rem, 3.4vw, 3.1rem); line-height: 1.1; }
 .section-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 4rem; align-items: end; }
 .section-heading h2 { max-width: 720px; }
@@ -219,7 +270,7 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 500; lett
 /* --------------------------------------------------------- feature rows -- */
 
 .feature-section { padding-block: 7rem; }
-.feature-row { display: grid; grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr); gap: 4.5rem; align-items: center; }
+.feature-row { display: grid; grid-template-columns: minmax(0, .72fr) minmax(0, 1.28fr); gap: 4.5rem; align-items: center; }
 .feature-row[data-reverse] .feature-copy { order: 2; }
 .feature-copy h2 { font-size: clamp(1.9rem, 3vw, 2.7rem); line-height: 1.12; }
 .feature-copy .lede { margin: 1.4rem 0 0; }
@@ -289,7 +340,8 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 500; lett
 
 /* ------------------------------------------------------------------ demo -- */
 
-.demo-section { padding-block: 7rem; background: var(--primary); color: var(--primary-foreground); }
+/* The bottom padding clears .gradual-blur so the submit button is never under it. */
+.demo-section { padding-block: 7rem 11.5rem; background: var(--primary); color: var(--primary-foreground); }
 .demo-layout { display: grid; grid-template-columns: minmax(0, .85fr) minmax(500px, 1.15fr); gap: 5rem; align-items: start; }
 .demo-copy { padding-block-start: 1.5rem; }
 .demo-copy > p { max-width: 480px; margin: 1.4rem 0 0; color: color-mix(in oklab, var(--primary-foreground) 62%, transparent); font-size: .98rem; line-height: 1.7; }
@@ -351,13 +403,14 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 500; lett
   .hero-shot { margin-block-start: 3rem; }
   .proof-strip { margin-block-start: 3.5rem; }
   .proof-grid { grid-template-columns: 1fr 1fr; row-gap: 1rem; }
-  .section, .feature-section, .demo-section { padding-block: 4.5rem; }
+  .section, .feature-section { padding-block: 4.5rem; }
+  .demo-section { padding-block: 4.5rem 9rem; }
   .section-heading, .demo-layout { grid-template-columns: 1fr; gap: 2.25rem; }
   .feature-row, .runner-layout { grid-template-columns: 1fr; gap: 2.5rem; }
   .feature-row[data-reverse] .feature-copy { order: 0; }
   .principle-grid, .step-grid { grid-template-columns: 1fr; gap: 1.5rem; margin-block-start: 3rem; }
   .form-grid { grid-template-columns: 1fr; gap: 0; }
-  .shot-body img { min-width: 720px; }
+  .shot-body:not([data-cropped]) img { min-width: 720px; }
 }
 
 @media (max-width: 520px) {
@@ -384,7 +437,12 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); font-weight: 500; lett
   }
 }
 
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .gradual-blur { display: none; }
+}
+
 @media (forced-colors: active) {
   .button, .shot-frame, .demo-form, .runner { border: 1px solid ButtonText; }
+  .gradual-blur { display: none; }
   .runner-track i { background: Highlight; }
 }

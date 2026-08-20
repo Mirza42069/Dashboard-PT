@@ -2,7 +2,7 @@
 
 import type { Role } from "@DashboardV2/api/lib/permissions";
 import { Button } from "@DashboardV2/ui/components/button";
-import { FileQuestionMark } from "@DashboardV2/ui/components/icons";
+import { Headset, LifeBuoy } from "@DashboardV2/ui/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
 import type { Route } from "next";
@@ -44,7 +44,14 @@ export default function SupportNavItem({
           isActive ? "h-5 opacity-100" : "h-0 opacity-0",
         )}
       />
-      <FileQuestionMark className="size-4 shrink-0" />
+      {/* One nav slot serves two different features depending on role — the
+          global inbox for System accounts, the contact form for everyone else.
+          Same icon made them look like the same thing. */}
+      {isSystem ? (
+        <Headset className="size-4 shrink-0" />
+      ) : (
+        <LifeBuoy className="size-4 shrink-0" />
+      )}
       <span className="shrink-0 whitespace-nowrap">{label}</span>
     </>
   );

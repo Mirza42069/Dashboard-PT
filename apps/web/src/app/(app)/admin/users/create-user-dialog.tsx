@@ -1,6 +1,13 @@
 "use client";
 
 import type { Role } from "@DashboardV2/api/lib/permissions";
+import {
+  DEFAULT_TRIAL_AI_CREDITS,
+  DEFAULT_TRIAL_DAYS,
+  MAX_TRIAL_AI_CREDITS,
+  MAX_TRIAL_DAYS,
+} from "@DashboardV2/api/lib/trial";
+import { Checkbox } from "@DashboardV2/ui/components/checkbox";
 import { Button } from "@DashboardV2/ui/components/button";
 import {
   Dialog,
@@ -27,6 +34,7 @@ import { toast } from "@/lib/toast";
 import z from "zod";
 
 import { FieldError, fieldError, focusFirstInvalid } from "@/components/field-error";
+import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { trpc } from "@/utils/trpc";
 
@@ -64,12 +72,21 @@ export default function CreateUserDialog({
       label: company.name,
     })) ?? [];
 
+  /** Inputs hold strings; this is the range check the trial fields share. */
+  const wholeNumberIn = (value: string, min: number, max: number) => {
+    const parsed = Number(value.trim());
+    return value.trim() !== "" && Number.isInteger(parsed) && parsed >= min && parsed <= max;
+  };
+
   const schema = z
     .object({
       name: z.string().trim().min(1, t.users.nameRequired).max(120),
       email: z.email(t.auth.invalidEmail),
       role: z.enum(["super_admin", "admin", "user"]),
       companyId: z.string(),
+      trial: z.boolean(),
+      trialDays: z.string(),
+      trialAiCredits: z.string(),
     })
     // Super admins are unpinned and pick an active company instead; an admin
     // or a regular account with no company cannot resolve a scope and is
@@ -77,7 +94,24 @@ export default function CreateUserDialog({
     .refine((value) => value.role === "super_admin" || value.companyId !== "", {
       message: t.company.required,
       path: ["companyId"],
-    });
+    })
+    // A trial locks the account out when it lapses, and only a System account
+    // can lift that — so a System account must never be the one locked out.
+    .refine((value) => !value.trial || value.role !== "super_admin", {
+      message: t.users.trialNotForSystem,
+      path: ["trial"],
+    })
+    .refine((value) => !value.trial || wholeNumberIn(value.trialDays, 1, MAX_TRIAL_DAYS), {
+      message: interpolate(t.users.trialDaysInvalid, { max: MAX_TRIAL_DAYS }),
+      path: ["trialDays"],
+    })
+    .refine(
+      (value) => !value.trial || wholeNumberIn(value.trialAiCredits, 0, MAX_TRIAL_AI_CREDITS),
+      {
+        message: interpolate(t.users.trialAiCreditsInvalid, { max: MAX_TRIAL_AI_CREDITS }),
+        path: ["trialAiCredits"],
+      },
+    );
 
   const form = useForm({
     defaultValues: {
@@ -85,6 +119,9 @@ export default function CreateUserDialog({
       email: "",
       role: "user" as CreateRole,
       companyId: "",
+      trial: false,
+      trialDays: String(DEFAULT_TRIAL_DAYS),
+      trialAiCredits: String(DEFAULT_TRIAL_AI_CREDITS),
     },
     onSubmit: async ({ value, formApi }) => {
       try {
@@ -93,6 +130,9 @@ export default function CreateUserDialog({
           email: value.email,
           role: value.role,
           companyId: value.companyId === "" ? undefined : value.companyId,
+          trial: value.trial
+            ? { days: Number(value.trialDays), aiCredits: Number(value.trialAiCredits) }
+            : undefined,
         });
         await queryClient.invalidateQueries(trpc.admin.pathFilter());
         setOpen(false);
@@ -249,6 +289,80 @@ export default function CreateUserDialog({
               }
             </form.Subscribe>
           )}
+
+          {/* Hidden for a System account rather than merely refused, because
+              the refusal is a rule about that role, not a mistake to correct. */}
+          <form.Subscribe selector={(state) => state.values.role}>
+            {(role) =>
+              role === "super_admin" ? null : (
+                <div className="space-y-3 rounded-md border p-3">
+                  <form.Field name="trial">
+                    {(field) => (
+                      <div className="flex items-start gap-2.5">
+                        <Checkbox
+                          id={field.name}
+                          checked={field.state.value}
+                          onCheckedChange={(checked) => field.handleChange(checked === true)}
+                        />
+                        <div className="space-y-1">
+                          <Label htmlFor={field.name}>{t.users.trialLabel}</Label>
+                          <p className="text-xs text-muted-foreground">{t.users.trialHint}</p>
+                        </div>
+                      </div>
+                    )}
+                  </form.Field>
+
+                  <form.Subscribe selector={(state) => state.values.trial}>
+                    {(trial) =>
+                      trial ? (
+                        <div className="grid grid-cols-2 gap-3">
+                          <form.Field name="trialDays">
+                            {(field) => {
+                              const error = fieldError(field.name, field.state.meta.errors);
+                              return (
+                                <div className="space-y-2">
+                                  <Label htmlFor={field.name}>{t.users.trialDays}</Label>
+                                  <Input
+                                    {...error.control}
+                                    inputMode="numeric"
+                                    name={field.name}
+                                    value={field.state.value}
+                                    onBlur={field.handleBlur}
+                                    onChange={(event) => field.handleChange(event.target.value)}
+                                  />
+                                  <FieldError {...error} />
+                                </div>
+                              );
+                            }}
+                          </form.Field>
+
+                          <form.Field name="trialAiCredits">
+                            {(field) => {
+                              const error = fieldError(field.name, field.state.meta.errors);
+                              return (
+                                <div className="space-y-2">
+                                  <Label htmlFor={field.name}>{t.users.trialAiCredits}</Label>
+                                  <Input
+                                    {...error.control}
+                                    inputMode="numeric"
+                                    name={field.name}
+                                    value={field.state.value}
+                                    onBlur={field.handleBlur}
+                                    onChange={(event) => field.handleChange(event.target.value)}
+                                  />
+                                  <FieldError {...error} />
+                                </div>
+                              );
+                            }}
+                          </form.Field>
+                        </div>
+                      ) : null
+                    }
+                  </form.Subscribe>
+                </div>
+              )
+            }
+          </form.Subscribe>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

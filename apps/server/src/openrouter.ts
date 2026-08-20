@@ -86,13 +86,39 @@ const jsonSchema = {
   ],
 } as const;
 
+/**
+ * Upstream conditions worth a second attempt: the model is busy, not wrong.
+ *
+ * OpenRouter reports an upstream rate limit as **200 OK with an error body**,
+ * not as a 429 — so a status check alone never sees it, and the import silently
+ * falls back to deterministic parsing while the key and the model are both
+ * fine. Both shapes are checked here for that reason.
+ */
+const RETRYABLE_CODES = new Set([408, 409, 429, 500, 502, 503, 504]);
+
+/** How long to wait before the second attempt. Short: a request is waiting. */
+const RETRY_DELAY_MS = 700;
+
+/** The whole budget, both attempts included — the caller's ceiling is unchanged. */
+const TOTAL_TIMEOUT_MS = 30_000;
+
+type CompletionBody = {
+  choices?: { message?: { content?: string | null } }[];
+  error?: { code?: number | string; message?: string };
+};
+
 /** Interprets workbook metadata only. It has no tools and no authority to write data. */
 export async function interpretWorkbook(summary: unknown): Promise<WorkbookInterpretation | null> {
   if (!env.OPENROUTER_API_KEY || !env.OPENROUTER_MODEL) return null;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
-  try {
+  const timeout = setTimeout(() => controller.abort(), TOTAL_TIMEOUT_MS);
+  const deadline = Date.now() + TOTAL_TIMEOUT_MS;
+
+  /** One attempt. Returns the content, or why there is none. */
+  const attempt = async (): Promise<
+    { content: string } | { retryable: boolean }
+  > => {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       signal: controller.signal,
@@ -131,16 +157,31 @@ export async function interpretWorkbook(summary: unknown): Promise<WorkbookInter
         ],
       }),
     });
-    if (!response.ok) return null;
+    if (!response.ok) return { retryable: RETRYABLE_CODES.has(response.status) };
 
-    const body = (await response.json()) as {
-      choices?: { message?: { content?: string | null } }[];
-    };
+    const body = (await response.json()) as CompletionBody;
+    if (body.error) {
+      return { retryable: RETRYABLE_CODES.has(Number(body.error.code)) };
+    }
     const content = body.choices?.[0]?.message?.content;
-    if (!content) return null;
-    const parsed = interpretationSchema.safeParse(JSON.parse(content));
+    // No content and no error is not a busy provider — retrying would only
+    // spend the budget to be told the same thing.
+    return content ? { content } : { retryable: false };
+  };
+
+  try {
+    let result = await attempt();
+
+    if ("retryable" in result && result.retryable && Date.now() + RETRY_DELAY_MS < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      result = await attempt();
+    }
+
+    if (!("content" in result)) return null;
+    const parsed = interpretationSchema.safeParse(JSON.parse(result.content));
     return parsed.success ? parsed.data : null;
   } catch {
+    // Includes the abort: a timed-out interpretation is an unavailable one.
     return null;
   } finally {
     clearTimeout(timeout);

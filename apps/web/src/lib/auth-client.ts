@@ -16,6 +16,8 @@ export const authClient = createAuthClient({
     inferAdditionalFields({
       user: {
         mustChangePassword: { type: "boolean" },
+        trialEndsAt: { type: "date", required: false },
+        trialAiCredits: { type: "number", required: false },
       },
     }),
   ],

@@ -27,6 +27,7 @@ import { toast } from "@/lib/toast";
 
 import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
+import { Hint } from "@/components/hint";
 import { useT } from "@/i18n/provider";
 import {
   buildSections,
@@ -42,18 +43,30 @@ import BoqImportDialog from "./boq-import-dialog";
 import BoqTab from "./boq-tab";
 import ScheduleTab from "./schedule-tab";
 
-type BaselineStep = "boq" | "schedule" | "review";
+export type BaselineStep = "boq" | "schedule" | "review";
 const ROW_TOLERANCE = 0.5;
 
+/**
+ * BoQ, schedule and review, in that order.
+ *
+ * The step lives in the URL rather than in this component, so the two heaviest
+ * screens in the product are linkable and the back button works between them.
+ * It stays a stepper rather than becoming three unrelated tabs because the
+ * order is real — there is nothing to schedule until the priced lines exist,
+ * which is what schedule.needsBoq refuses.
+ */
 export default function BaselineTab({
   projectId,
   canEdit,
+  step,
+  onStepChange,
 }: {
   projectId: string;
   canEdit: boolean;
+  step: BaselineStep;
+  onStepChange: (step: BaselineStep) => void;
 }) {
   const t = useT();
-  const [step, setStep] = useState<BaselineStep>("boq");
   const [importing, setImporting] = useState(false);
   const versionsQuery = useQuery(trpc.boq.listVersions.queryOptions({ projectId }));
 
@@ -72,6 +85,13 @@ export default function BaselineTab({
       (version) => version.status === "active" && version.scheduleStatus === "draft",
     );
   const setupMode = Boolean(target);
+  /*
+   * There is nothing to review until a draft exists, and a project with no
+   * baseline is linked to as ?tab=baseline from the dashboard. Falling back to
+   * the first step is what that link should have meant all along — the
+   * alternative is a header with an empty page under it.
+   */
+  const shown = step === "review" && !target ? "boq" : step;
 
   return (
     <div className="space-y-3">
@@ -88,14 +108,10 @@ export default function BaselineTab({
                       : interpolate(t.boq.revision, { number: active?.versionNo ?? 1 })}
                     {` - ${setupMode ? t.boq.draft : t.boq.active}`}
                   </Badge>
+                  {target && active && (
+                    <Hint text={interpolate(t.baseline.activeUnaffected, { number: active.versionNo })} />
+                  )}
                 </CardTitle>
-                <CardDescription>
-                  {target && active
-                    ? interpolate(t.baseline.activeUnaffected, { number: active.versionNo })
-                    : setupMode
-                      ? t.baseline.setupHint
-                      : t.baseline.activeHint}
-                </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 {/*
@@ -115,20 +131,20 @@ export default function BaselineTab({
                   number={1}
                   label={t.baseline.stepBoq}
                   active={step === "boq"}
-                  onClick={() => setStep("boq")}
+                  onClick={() => onStepChange("boq")}
                 />
                 <StepButton
                   number={2}
                   label={t.baseline.stepSchedule}
                   active={step === "schedule"}
-                  onClick={() => setStep("schedule")}
+                  onClick={() => onStepChange("schedule")}
                 />
                 {setupMode && (
                   <StepButton
                     number={3}
                     label={t.baseline.stepReview}
                     active={step === "review"}
-                    onClick={() => setStep("review")}
+                    onClick={() => onStepChange("review")}
                   />
                 )}
                 </div>
@@ -140,33 +156,33 @@ export default function BaselineTab({
 
       <BoqImportDialog open={importing} onOpenChange={setImporting} projectId={projectId} />
 
-      {step === "boq" && (
+      {shown === "boq" && (
         <BoqTab
           projectId={projectId}
           canEdit={canEdit}
           targetVersionId={target?.id}
           setupMode={setupMode}
-          onContinue={() => setStep("schedule")}
+          onContinue={() => onStepChange("schedule")}
         />
       )}
-      {step === "schedule" && (
+      {shown === "schedule" && (
         <ScheduleTab
           projectId={projectId}
           canEdit={canEdit}
           targetVersionId={target?.id}
           setupMode={setupMode}
-          onReview={() => setStep("review")}
+          onReview={() => onStepChange("review")}
         />
       )}
-      {step === "review" && target && (
+      {shown === "review" && target && (
         <BaselineReview
           projectId={projectId}
           versionId={target.id}
           activeVersionNo={active?.versionNo ?? null}
           canEdit={canEdit}
-          onEditBoq={() => setStep("boq")}
-          onEditSchedule={() => setStep("schedule")}
-          onActivated={() => setStep("boq")}
+          onEditBoq={() => onStepChange("boq")}
+          onEditSchedule={() => onStepChange("schedule")}
+          onActivated={() => onStepChange("boq")}
         />
       )}
     </div>

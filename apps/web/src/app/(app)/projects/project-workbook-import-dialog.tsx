@@ -11,13 +11,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@DashboardV2/ui/components/dialog";
+import { TRIAL_AI_EXHAUSTED } from "@DashboardV2/api/lib/trial";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
-import { Loader2, TriangleAlert, Upload, X } from "@DashboardV2/ui/components/icons";
+import { Clock, Loader2, Lock, TriangleAlert, Upload, X } from "@DashboardV2/ui/components/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
-import { interpolate } from "@/i18n";
+import { StepRunner } from "@/components/step-runner";
+import { interpolate, plural } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
 import { getServerUrl } from "@/lib/server-url";
 import { useDebounced } from "@/lib/use-debounced";
@@ -227,14 +229,86 @@ async function readJson<T>(response: Response): Promise<T | null> {
   }
 }
 
+/** Mirrors NDJSON_CONTENT_TYPE in apps/server/src/index.ts. */
+const NDJSON_CONTENT_TYPE = "application/x-ndjson";
+
+/** The stages the server reports, in the order it reports them. */
+const SERVER_STAGES = ["reading", "recognising", "interpreting", "building"] as const;
+type ServerStage = (typeof SERVER_STAGES)[number];
+
+/** The two the browser can time itself: compressing the file, then sending it. */
+const CLIENT_STAGES = ["preparing", "uploading"] as const;
+const CLIENT_STAGE_COUNT = CLIENT_STAGES.length;
+const ALL_STAGES = [...CLIENT_STAGES, ...SERVER_STAGES] as const;
+
+type AnalysisBody = Analysis & {
+  error?: string;
+  code?: string;
+  status?: number;
+  trialAiCreditsLeft?: number;
+};
+
+/**
+ * Reads the analysis, streamed or not.
+ *
+ * The route answers with NDJSON when asked and a single JSON body otherwise,
+ * and a proxy that buffers the stream turns the first into the second without
+ * telling anyone. So the shape is decided by what actually arrived rather than
+ * by what was requested: anything that is not NDJSON is read as one body, and
+ * the run simply shows no intermediate steps.
+ */
+async function readAnalysis(
+  response: Response,
+  { onStage }: { onStage: (stage: ServerStage) => void },
+): Promise<AnalysisBody | null> {
+  const streamed = response.headers.get("content-type")?.includes(NDJSON_CONTENT_TYPE);
+  if (!streamed || !response.body) return readJson<AnalysisBody>(response);
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffered = "";
+  let last: AnalysisBody | null = null;
+
+  const consume = (line: string) => {
+    if (!line.trim()) return;
+    let payload: { stage?: string; done?: boolean; result?: AnalysisBody } & AnalysisBody;
+    try {
+      payload = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (payload.stage) {
+      onStage(payload.stage as ServerStage);
+      return;
+    }
+    // The last line is the outcome: either the analysis or the error that
+    // replaced it. A status cannot be sent once the body has started.
+    last = payload.done ? (payload.result ?? null) : payload;
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffered += value;
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines) consume(line);
+  }
+  consume(buffered);
+
+  return last;
+}
+
 export default function ProjectWorkbookImportDialog({
   open,
   onOpenChange,
   onCreated,
+  trialAiCredits,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (projectId: string) => void;
+  /** AI imports this trial has left; null on an account with no trial. */
+  trialAiCredits: number | null;
 }) {
   const t = useT();
   const { locale } = useLocale();
@@ -247,6 +321,21 @@ export default function ProjectWorkbookImportDialog({
   const [reviewStale, setReviewStale] = useState(false);
   const [endDateInferred, setEndDateInferred] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** Set when the server refuses because a trial has spent its AI allowance. */
+  const [aiExhausted, setAiExhausted] = useState(false);
+  /**
+   * What the last analyze reported. Null until one does, at which point it
+   * supersedes the figure this page was rendered with — the session prop was
+   * read once, and an import spends a credit after that.
+   */
+  const [creditsLeft, setCreditsLeft] = useState<number | null>(null);
+  const remainingCredits = creditsLeft ?? trialAiCredits;
+  /** Steps completed, indexing into ALL_STAGES. */
+  const [stagesDone, setStagesDone] = useState(0);
+  /** Stages the run legitimately never entered — counted in the total, never drawn. */
+  const [skippedStages, setSkippedStages] = useState<readonly ServerStage[]>([]);
+  /** Which server stages actually arrived, so a skip can be told from a gap. */
+  const seenStages = useRef(new Set<ServerStage>());
   const [error, setError] = useState<string | null>(null);
   const [codeConflict, setCodeConflict] = useState<string | null>(null);
   const [serverScheduleIssue, setServerScheduleIssue] = useState<ScheduleIssue | null>(null);
@@ -288,6 +377,14 @@ export default function ProjectWorkbookImportDialog({
     setEndDateInferred(false);
     setBusy(false);
     setError(null);
+    setAiExhausted(false);
+    // Deliberately not cleared: the count belongs to the account, not to this
+    // run. Resetting it fell back to the prop the page was rendered with, so
+    // closing and reopening the dialog after an import showed the pre-spend
+    // figure and promised a credit that was already gone.
+    setStagesDone(0);
+    setSkippedStages([]);
+    seenStages.current.clear();
     setCodeConflict(null);
     setServerScheduleIssue(null);
     setRowErrors([]);
@@ -296,18 +393,50 @@ export default function ProjectWorkbookImportDialog({
   async function analyze(chosen: File) {
     setBusy(true);
     setError(null);
+    setAiExhausted(false);
+    setStagesDone(0);
+    setSkippedStages([]);
+    seenStages.current.clear();
     try {
       const data = await createWorkbookTransport(chosen);
+      // Compression is done; the upload is the next thing the user waits on.
+      setStagesDone(1);
       const response = await fetch(
         `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/analyze`,
         {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": WORKBOOK_TRANSPORT_CONTENT_TYPE },
+          headers: {
+            "Content-Type": WORKBOOK_TRANSPORT_CONTENT_TYPE,
+            // Asks for stage-by-stage progress. The route still answers with a
+            // single JSON body without this, which is what readAnalysis falls
+            // back to when a proxy buffers the stream away.
+            Accept: NDJSON_CONTENT_TYPE,
+          },
           body: data,
         },
       );
-      const body = await readJson<Analysis & { error?: string }>(response);
+      // Headers are in, so the bytes are up.
+      setStagesDone(2);
+      const body = await readAnalysis(response, {
+        onStage: (stage) => {
+          const index = SERVER_STAGES.indexOf(stage);
+          if (index === -1) return;
+          setStagesDone(CLIENT_STAGE_COUNT + index);
+          // Reaching `building` without `interpreting` means the workbook was
+          // recognised outright and the model was never called for it.
+          if (stage === "building" && !seenStages.current.has("interpreting")) {
+            setSkippedStages(["interpreting"]);
+          }
+          seenStages.current.add(stage);
+        },
+      });
+      // A used-up trial allowance is not a failure of the workbook — the file
+      // was never read. Say so, and leave the manual import as the way through.
+      if (body?.code === TRIAL_AI_EXHAUSTED) {
+        setAiExhausted(true);
+        return;
+      }
       if (!response.ok || !body?.plan) throw new Error(body?.error ?? t.projectImport.analyzeFailed);
       setFile(chosen);
       setAnalysis(body);
@@ -326,6 +455,8 @@ export default function ProjectWorkbookImportDialog({
       });
       setQuestionIndex(0);
       setEndDateInferred(false);
+      setCreditsLeft(body.trialAiCreditsLeft ?? null);
+      setStagesDone(ALL_STAGES.length);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t.projectImport.analyzeFailed);
     } finally {
@@ -809,6 +940,26 @@ export default function ProjectWorkbookImportDialog({
           {busy ? t.projectImport.analyzing : ""}
         </p>
 
+        {!analysis && !aiExhausted && remainingCredits !== null && (
+          <p className="flex items-center justify-center gap-1.5 text-muted-foreground">
+            <Clock className="size-3.5" />
+            {plural(t.trial.aiCreditsLeft, remainingCredits)}
+          </p>
+        )}
+
+        {!analysis && aiExhausted && (
+          <div
+            className="flex items-start gap-2.5 rounded-lg border border-dashed p-4 text-sm"
+            role="status"
+          >
+            <Lock className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <div>
+              <p className="font-medium">{t.trial.aiExhausted}</p>
+              <p className="text-muted-foreground">{t.trial.aiExhaustedHint}</p>
+            </div>
+          </div>
+        )}
+
         {!analysis && (
           <div className="rounded-lg border border-dashed p-6 text-center">
             <Upload className="mx-auto size-6 text-muted-foreground" />
@@ -828,7 +979,19 @@ export default function ProjectWorkbookImportDialog({
                 if (chosen) void analyze(chosen);
               }}
             />
-            {busy && <Loader2 className="mx-auto mt-4 animate-spin" />}
+            {busy && (
+              <div className="mx-auto mt-5 max-w-sm text-left">
+                <StepRunner
+                  steps={ALL_STAGES.map((stage) => ({
+                    id: stage,
+                    label: t.projectImport.steps[stage],
+                    skipped: skippedStages.includes(stage as ServerStage),
+                  }))}
+                  done={stagesDone}
+                  label={t.projectImport.stepsLabel}
+                />
+              </div>
+            )}
           </div>
         )}
 

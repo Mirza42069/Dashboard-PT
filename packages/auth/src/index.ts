@@ -6,6 +6,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, defaultStatements, userAc } from "better-auth/plugins/admin/access";
 import { admin } from "better-auth/plugins";
+import { APIError } from "better-auth/api";
 
 /**
  * Without a `roles` map, better-auth's admin plugin types createUser/setRole
@@ -21,6 +22,18 @@ const adminRoleMap = {
   admin: adminAc,
   user: userAc,
 };
+
+/**
+ * The error code a sign-in attempt carries when the trial is over, so the form
+ * can tell it apart from BANNED_USER — "renew your subscription" is the wrong
+ * instruction for a trial that simply lapsed.
+ *
+ * Mirrors TRIAL_ENDED_CODE in packages/api/src/lib/trial.ts, which is where the
+ * client reads it from: that module is import-free and safe in the browser
+ * bundle, and this package is not. Importing it here would make api and auth
+ * mutually dependent.
+ */
+const TRIAL_ENDED_CODE = "TRIAL_ENDED";
 
 export type CreateAuthOptions = {
   /**
@@ -66,6 +79,51 @@ export function createAuth(opts: CreateAuthOptions = {}) {
           type: "string",
           required: false,
           input: false,
+        },
+        // Trial limits. Null trialEndsAt means "not a trial account"; see the
+        // column comments in packages/db/src/schema/auth.ts. `input: false`
+        // for the obvious reason — an account must not be able to extend its
+        // own trial or top up its own credits by putting them in a body.
+        trialEndsAt: {
+          type: "date",
+          required: false,
+          input: false,
+        },
+        trialAiCredits: {
+          type: "number",
+          required: false,
+          input: false,
+        },
+      },
+    },
+    /**
+     * Refuses a new session to an account whose trial has run out.
+     *
+     * This mirrors how the admin plugin enforces `banned` — it registers the
+     * same session.create.before hook, and better-auth runs both rather than
+     * letting one replace the other. Checking here rather than on every
+     * request is what keeps a trial free: `getSession` reads the user row it
+     * already loaded, and this runs only at sign-in.
+     *
+     * A session created before the deadline outlives it, which is why
+     * requireSession in apps/web also checks — see lib/session.ts. The same
+     * belt covers the case where better-auth calls this without an endpoint
+     * context and the user row cannot be read: the page and procedure gates
+     * still refuse, so a lapsed trial cannot reach anything either way.
+     */
+    databaseHooks: {
+      session: {
+        create: {
+          async before(session, ctx) {
+            const account = await ctx?.context.internalAdapter.findUserById(session.userId);
+            const endsAt = (account as { trialEndsAt?: Date | string | null } | null)?.trialEndsAt;
+            if (endsAt && new Date(endsAt).getTime() <= Date.now()) {
+              throw APIError.from("FORBIDDEN", {
+                message: "This trial has ended. Ask an administrator to renew it.",
+                code: TRIAL_ENDED_CODE,
+              });
+            }
+          },
         },
       },
     },

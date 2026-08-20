@@ -19,6 +19,14 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { interpolate } from "@/i18n";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@DashboardV2/ui/components/empty";
+
+import { Hint } from "@/components/hint";
 import { useT } from "@/i18n/provider";
 import { compressImage } from "@/lib/compress-image";
 import { getServerUrl } from "@/lib/server-url";
@@ -210,7 +218,7 @@ export default function NotesTab({
               <ImagePlus />
               {t.notes.addPhotos}
             </Button>
-            <span className="text-xs text-muted-foreground">{t.notes.hint}</span>
+            <Hint text={t.notes.hint} />
             <Button size="sm" className="ml-auto" disabled={busy} onClick={() => void submit()}>
               <Send />
               {busy ? t.notes.posting : t.notes.post}
@@ -223,8 +231,15 @@ export default function NotesTab({
 
       {!notesQuery.isPending && notes.length === 0 && (
         <Card>
-          <CardContent className="py-10 text-center text-muted-foreground">
-            {t.notes.empty}
+          <CardContent>
+            <Empty className="border-0 py-6">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <ImagePlus />
+                </EmptyMedia>
+                <EmptyTitle>{t.notes.empty}</EmptyTitle>
+              </EmptyHeader>
+            </Empty>
           </CardContent>
         </Card>
       )}

@@ -63,6 +63,10 @@ export default async function ProjectsPage({
           canDelete={hasPermission(role, "project:delete")}
           canManageMembers={hasPermission(role, "member:manage")}
           currentUserId={session.user.id}
+          // Off the already-verified session rather than a browser useSession()
+          // — same reason as (app)/layout.tsx. Null for a normal account, which
+          // is what "no limit" looks like here.
+          trialAiCredits={session.user.trialAiCredits ?? null}
         />
       </div>
     </HydrateClient>

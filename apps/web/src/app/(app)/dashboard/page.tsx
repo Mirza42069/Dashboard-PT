@@ -6,7 +6,7 @@ import { getDictionary, getLocale } from "@/i18n";
 import { requireSession } from "@/lib/session";
 import { getQueryClient, getTRPC, HydrateClient } from "@/utils/trpc-server";
 
-import DashboardOverview from "./dashboard-overview";
+import DashboardOverview, { EXCEPTIONS_PAGE_SIZE } from "./dashboard-overview";
 
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
@@ -19,7 +19,9 @@ export default async function DashboardPage() {
   const dict = getDictionary(await getLocale());
   const queryClient = getQueryClient();
   const trpc = getTRPC();
-  const exceptionsInput = { filter: "all" as const, limit: 25, offset: 0 };
+  // EXCEPTIONS_PAGE_SIZE in ./dashboard-overview.tsx — the client must open on
+  // this exact input or it gets a cache miss and refetches everything on load.
+  const exceptionsInput = { filter: "all" as const, limit: EXCEPTIONS_PAGE_SIZE, offset: 0 };
   const initialExceptions = trpc.project.exceptions.queryOptions(exceptionsInput);
 
   await Promise.all([

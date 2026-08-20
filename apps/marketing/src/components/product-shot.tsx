@@ -1,6 +1,7 @@
 import Image from "next/image";
+import type { CSSProperties } from "react";
 
-import { getShot, type ShotName } from "@/lib/shots";
+import { getShot, type Shot, type ShotFraming, type ShotName } from "@/lib/shots";
 
 import { Lock } from "./icons";
 
@@ -13,6 +14,9 @@ import { Lock } from "./icons";
  *
  * `priority` is for the hero shot only; it is the LCP element there and should
  * not wait for the lazy-loading observer.
+ *
+ * A shot that carries a framing rectangle is shown zoomed to that rectangle —
+ * see cropStyle below and `.shot-body[data-cropped]` in globals.css.
  */
 export function ProductShot({
   name,
@@ -47,7 +51,11 @@ export function ProductShot({
             {caption}
           </span>
         </div>
-        <div className="shot-body">
+        <div
+          className="shot-body"
+          data-cropped={shot?.framing ? "" : undefined}
+          style={shot ? cropStyle(shot) : undefined}
+        >
           {shot ? (
             <Image
               src={shot.src}
@@ -66,6 +74,39 @@ export function ProductShot({
       <figcaption className="shot-caption">{caption}</figcaption>
     </figure>
   );
+}
+
+/**
+ * Turns a framing rectangle into the four numbers the stylesheet needs.
+ *
+ * The box takes the *crop's* aspect ratio and the image is scaled by exactly
+ * 1/crop on each axis, so the two ratios cancel and the picture is never
+ * stretched — only windowed. Offsets are percentages of the box, which is why
+ * they are divided by the crop rather than used raw.
+ */
+function cropStyle(shot: Shot): CSSProperties | undefined {
+  const framing = shot.framing;
+  if (!framing) return undefined;
+
+  const { left, top, right, bottom }: ShotFraming = framing;
+  const width = 1 - left - right;
+  const height = 1 - top - bottom;
+  if (width <= 0 || height <= 0) return undefined;
+
+  const percent = (value: number) => `${round(value * 100)}%`;
+
+  return {
+    "--shot-aspect": `${round(shot.width * width)} / ${round(shot.height * height)}`,
+    "--shot-w": percent(1 / width),
+    "--shot-h": percent(1 / height),
+    "--shot-x": percent(-left / width),
+    "--shot-y": percent(-top / height),
+  } as CSSProperties;
+}
+
+/** Keeps the generated CSS free of float noise like 178.57142857142858%. */
+function round(value: number) {
+  return Math.round(value * 1000) / 1000;
 }
 
 /**

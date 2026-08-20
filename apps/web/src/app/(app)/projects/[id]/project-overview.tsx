@@ -76,7 +76,6 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
       <Card className="xl:row-span-2">
         <CardHeader>
           <CardTitle>{t.projects.workStages}</CardTitle>
-          <CardDescription>{t.projects.workStagesHint}</CardDescription>
         </CardHeader>
         <CardContent>
           {workStagesQuery.isPending && (

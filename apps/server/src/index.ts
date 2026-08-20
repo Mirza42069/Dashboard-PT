@@ -4,12 +4,14 @@ import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
 import { auth } from "@DashboardV2/auth";
 import { projectAccessFilter, resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
+import { TRIAL_AI_EXHAUSTED, trialHasEnded } from "@DashboardV2/api/lib/trial";
 import { db } from "@DashboardV2/db";
 import {
   notePhoto,
   project,
   projectMember,
   projectNote,
+  user,
   workbookRequestLimit,
 } from "@DashboardV2/db/schema";
 import { trustedOrigins } from "@DashboardV2/env/server";
@@ -18,6 +20,7 @@ import { and, eq, exists, sql } from "drizzle-orm";
 import { Hono, type Context as HonoRequestContext } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+import { stream } from "hono/streaming";
 
 import {
   decodeWorkbookTransport,
@@ -31,6 +34,9 @@ import {
  * exceljs back in the boot graph. See the note on the lazy imports below.
  */
 const MAX_IMPORT_BYTES = 4 * 1024 * 1024;
+
+/** Mirrors NDJSON_CONTENT_TYPE in apps/web/src/app/(app)/projects/project-workbook-import-dialog.tsx. */
+const NDJSON_CONTENT_TYPE = "application/x-ndjson";
 
 const app = new Hono();
 
@@ -84,6 +90,24 @@ const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
 const PHOTO_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 /**
+ * The session, or null — plus the one check better-auth cannot make for us.
+ *
+ * A trial that lapsed mid-session still holds a valid cookie: packages/auth
+ * refuses to *create* a session for an ended trial, not to honour one already
+ * open. These routes share no middleware, so every one of them asks here.
+ *
+ * An ended trial reads as "not signed in" rather than as its own status, which
+ * keeps each call site's existing 401 branch correct and adds no new failure
+ * mode to handle. The person is told what actually happened when they next try
+ * to sign in, which is where the message belongs.
+ */
+async function activeSession(c: HonoRequestContext) {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session?.user) return null;
+  return trialHasEnded(session.user) ? null : session;
+}
+
+/**
  * Resolves the caller's company for these plain Hono routes.
  *
  * resolveCompanyIdForSession is shared with tRPC and signals failure by
@@ -109,8 +133,8 @@ async function resolveCompany(sessionUser: Parameters<typeof resolveCompanyIdFor
  * both the route and the client's per-file error handling trivial.
  */
 app.post("/notes/:noteId/photos", async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session?.user) {
+  const session = await activeSession(c);
+  if (!session) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -192,8 +216,8 @@ app.post("/notes/:noteId/photos", async (c) => {
  * which matters now that the response is per-viewer authorised.
  */
 app.get("/photos/:id", async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session?.user) {
+  const session = await activeSession(c);
+  if (!session) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -251,8 +275,8 @@ app.get("/photos/:id", async (c) => {
  * so a role=user only ever gets the projects they are a member of.
  */
 app.get("/projects/export", async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session?.user) {
+  const session = await activeSession(c);
+  if (!session) {
     return c.json({ error: "Unauthorized" }, 401);
   }
   if (!hasPermission(roleOf(session.user), "project:read")) {
@@ -312,8 +336,8 @@ app.get("/projects/export", async (c) => {
  * bare 500.
  */
 async function requireProjectWrite(c: HonoRequestContext, projectId: string) {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session?.user) return { error: "Unauthorized", status: 401 as const };
+  const session = await activeSession(c);
+  if (!session) return { error: "Unauthorized", status: 401 as const };
   if (!hasPermission(roleOf(session.user), "project:write")) {
     return { error: "Not found", status: 404 as const };
   }
@@ -397,8 +421,8 @@ type ProjectCreateAccess =
   | { session: AuthSession; companyId: string };
 
 async function requireProjectCreate(c: HonoRequestContext): Promise<ProjectCreateAccess> {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (!session?.user) return { error: "Unauthorized", status: 401 as const };
+  const session = await activeSession(c);
+  if (!session) return { error: "Unauthorized", status: 401 as const };
   if (!hasPermission(roleOf(session.user), "project:create")) {
     return { error: "Not found", status: 404 as const };
   }
@@ -426,6 +450,40 @@ async function consumeWorkbookRequestLimit(userId: string, scope: string, limit:
   return Boolean(consumed);
 }
 
+/**
+ * Spends one AI import credit, or reports that there are none left.
+ *
+ * Conditional in the UPDATE rather than read-then-write, for the same reason
+ * consumeWorkbookRequestLimit is: two uploads racing on the last credit must
+ * not both find it there. A non-trial account has a null balance and is never
+ * charged — the WHERE excludes it, and `charged: false` says so.
+ */
+async function spendTrialAiCredit(userId: string) {
+  const [row] = await db
+    .update(user)
+    .set({ trialAiCredits: sql`${user.trialAiCredits} - 1` })
+    .where(and(eq(user.id, userId), sql`${user.trialAiCredits} > 0`))
+    .returning({ remaining: user.trialAiCredits });
+
+  if (row) return { charged: true as const, remaining: row.remaining ?? 0 };
+
+  // Either not a trial account (null balance) or genuinely out. Only the
+  // second is a refusal, so ask which.
+  const [account] = await db
+    .select({ credits: user.trialAiCredits })
+    .from(user)
+    .where(eq(user.id, userId));
+  return { charged: false as const, exhausted: account?.credits !== null && account?.credits !== undefined };
+}
+
+/** Hands a credit back when the model was never reached. */
+async function refundTrialAiCredit(userId: string) {
+  await db
+    .update(user)
+    .set({ trialAiCredits: sql`${user.trialAiCredits} + 1` })
+    .where(and(eq(user.id, userId), sql`${user.trialAiCredits} is not null`));
+}
+
 app.post("/project-import/analyze", async (c) => {
   const access = await requireProjectCreate(c);
   if (!("session" in access)) return c.json({ error: access.error }, access.status);
@@ -436,22 +494,107 @@ app.post("/project-import/analyze", async (c) => {
   const upload = await readWorkbookRequest(c);
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
 
-  try {
+  // Charged up front and handed back below if the model turned out not to be
+  // needed. The other order — analyse, then charge — cannot refuse anything,
+  // because by the time it knows the balance the tokens are already spent.
+  const credit = await spendTrialAiCredit(access.session.user.id);
+  if (!credit.charged && credit.exhausted) {
+    return c.json(
+      { error: "This trial's AI import allowance is used up.", code: TRIAL_AI_EXHAUSTED },
+      403,
+    );
+  }
+
+  /*
+   * The charge is settled exactly once, whichever way this request ends.
+   * Both endings used to refund on their own, and a run that handed the credit
+   * back and *then* died writing its result refunded twice — the trial came out
+   * of a failed import with more credits than it went in with. `settled` also
+   * marks a credit that was legitimately spent, so a failure after the model
+   * answered cannot hand back tokens that were really burned.
+   */
+  let settled = false;
+  const handBackCredit = async () => {
+    if (!credit.charged || settled) return;
+    settled = true;
+    await refundTrialAiCredit(access.session.user.id);
+  };
+
+  /** Shared by both response shapes, so they cannot disagree about the outcome. */
+  const run = async (onStage: (stage: string) => void) => {
     const { analyzeProjectWorkbook } = await import("./project-workbook");
-    return c.json(await analyzeProjectWorkbook(upload.bytes));
-  } catch (error) {
+    const analysis = await analyzeProjectWorkbook(upload.bytes, onStage);
+    // The reference Indonesian S-curve template is recognised without the
+    // model. Charging for it would sell an allowance the import did not use.
+    if (credit.charged && analysis.plan.profile !== "generic-ai") {
+      await handBackCredit();
+      return analysis;
+    }
+    // The model answered. Whatever happens downstream, this one is spent.
+    settled = true;
+    return credit.charged ? { ...analysis, trialAiCreditsLeft: credit.remaining } : analysis;
+  };
+
+  const failure = async (error: unknown) => {
+    // A workbook that could not be read never reached the model either.
+    await handBackCredit();
     const invalidRequest = isInvalidImportRequest(error);
     if (!isPublicImportError(error) && !invalidRequest) logUnexpectedImportError(error);
-    return c.json(
-      {
+    return {
+      body: {
         error:
           isPublicImportError(error) && error instanceof Error
             ? error.message
             : "The workbook could not be analyzed.",
       },
-      isPublicImportError(error) ? 400 : 500,
-    );
+      status: (isPublicImportError(error) ? 400 : 500) as 400 | 500,
+    };
+  };
+
+  /*
+   * Streamed only when asked for. The client sends the NDJSON Accept header and
+   * falls back to reading this as one JSON body if the stream never arrives —
+   * Vercel routes /api/* to this service through a rewrite, and a proxy hop is
+   * where streaming quietly turns back into buffering. Keeping both shapes on
+   * one route means the fallback is a header away rather than a second endpoint.
+   */
+  if (!c.req.header("accept")?.includes(NDJSON_CONTENT_TYPE)) {
+    try {
+      return c.json(await run(() => {}));
+    } catch (error) {
+      const { body, status } = await failure(error);
+      return c.json(body, status);
+    }
   }
+
+  // hono's stream() sets no content type, and the client decides how to read
+  // the body by looking at one — without this it falls back to JSON.parse and
+  // chokes on the second line.
+  c.header("Content-Type", NDJSON_CONTENT_TYPE);
+  // Proxies that buffer to "help" would defeat the point of streaming at all.
+  c.header("Cache-Control", "no-cache, no-transform");
+  c.header("X-Accel-Buffering", "no");
+
+  return stream(c, async (writer) => {
+    // Every line is one JSON object. A status code is already committed by the
+    // time the first stage is written, so failures ride the body as a final
+    // line rather than a status — the client reads the last line either way.
+    const write = (payload: unknown) =>
+      writer.write(JSON.stringify(payload) + "\n");
+    try {
+      const analysis = await run((stage) => {
+        void write({ stage });
+      });
+      await write({ done: true, result: analysis });
+    } catch (error) {
+      const { body, status } = await failure(error);
+      // The 200 went out with the first stage line, so nothing downstream can
+      // tell this apart from a clean import. Say so in the log, or an outage
+      // here reads as a perfect success rate.
+      console.error(`Streamed workbook analyze failed with status ${status}`);
+      await write({ ...body, status });
+    }
+  });
 });
 
 app.post("/project-import/review", async (c) => {

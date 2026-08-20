@@ -19,7 +19,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@DashboardV2/ui/components/card";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import {
   Select,
@@ -37,12 +37,13 @@ import {
   TableRow,
 } from "@DashboardV2/ui/components/table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronUp, Lock, Pencil, Plus, Scale, Trash2 } from "@DashboardV2/ui/components/icons";
+import { ChevronDown, ChevronUp, ListChecks, Lock, Pencil, Plus, Scale, Trash2 } from "@DashboardV2/ui/components/icons";
 import { Fragment, useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
+import { Hint } from "@/components/hint";
 import { useT } from "@/i18n/provider";
 import { buildSections, sectionAmount, sectionWeight, totalLeafWeight } from "@/lib/boq/curves";
 import { useFormat } from "@/lib/use-format";
@@ -141,7 +142,6 @@ export default function BoqTab({
           <Empty>
             <EmptyHeader>
               <EmptyTitle>{t.boq.title}</EmptyTitle>
-              <EmptyDescription>{t.boq.createDraftHint}</EmptyDescription>
             </EmptyHeader>
             {canEdit && (
               <Button
@@ -196,15 +196,11 @@ export default function BoqTab({
                       ? t.boq.active
                       : t.boq.superseded}
                 </Badge>
-                {!isDraft && <Lock className="size-3.5 text-muted-foreground" />}
+                {!isDraft && (
+                  <Hint text={t.boq.lockedNote} className="text-muted-foreground" />
+                )}
+                {isDraft && !weightsReady && <Hint text={t.boq.weightsIncompleteHint} />}
               </CardTitle>
-              <CardDescription>
-                {isDraft
-                  ? weightsReady
-                    ? t.boq.weightsReadyHint
-                    : t.boq.weightsIncompleteHint
-                  : t.boq.lockedNote}
-              </CardDescription>
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -287,11 +283,15 @@ export default function BoqTab({
             <TableBody>
               {sections.length === 0 && (
                 <TableRow>
-                  <TableCell
-                    colSpan={editable ? 8 : 7}
-                    className="py-10 text-center text-muted-foreground"
-                  >
-                    {t.boq.empty}
+                  <TableCell colSpan={editable ? 8 : 7}>
+                    <Empty className="border-0 py-6">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <ListChecks />
+                        </EmptyMedia>
+                        <EmptyTitle>{t.boq.empty}</EmptyTitle>
+                      </EmptyHeader>
+                    </Empty>
                   </TableCell>
                 </TableRow>
               )}

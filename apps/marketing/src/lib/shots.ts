@@ -16,7 +16,31 @@ import { join } from "node:path";
 
 export type ShotName = "dashboard" | "progress" | "import" | "boq";
 
-export type Shot = { src: string; width: number; height: number };
+/**
+ * Which part of a capture is actually shown, as the fraction cut from each edge.
+ *
+ * The captures are whole-app grabs — sidebar, top bar, and a lot of empty
+ * canvas — rendered in a column roughly a third of their width, so the subject
+ * of each one lands well under half its original scale and its text stops being
+ * legible. Framing zooms to the subject in CSS rather than re-cutting the PNGs,
+ * which keeps the capture reusable and the numbers below tunable in one place.
+ */
+export type ShotFraming = { left: number; top: number; right: number; bottom: number };
+
+export type Shot = { src: string; width: number; height: number; framing?: ShotFraming };
+
+/**
+ * `dashboard` is deliberately absent: the hero runs at full shell width and is
+ * shown whole.
+ */
+const FRAMING: Partial<Record<ShotName, ShotFraming>> = {
+  // The AI import dialog, with some of the project list bleeding around it.
+  import: { left: 0.21, top: 0.285, right: 0.21, bottom: 0.29 },
+  // "Rencana vs realisasi" — the S-curve card, stopping short of the stat column.
+  progress: { left: 0.185, top: 0.615, right: 0.282, bottom: 0 },
+  // The BoQ line items, out to the Jumlah column.
+  boq: { left: 0.18, top: 0.572, right: 0.07, bottom: 0 },
+};
 
 const PNG_SIGNATURE = "89504e470d0a1a0a";
 
@@ -48,5 +72,5 @@ export function getShot(name: ShotName): Shot | null {
   if (!existsSync(path)) return null;
   const size = readPngSize(path);
   if (!size) return null;
-  return { src: `/product/${name}.png`, ...size };
+  return { src: `/product/${name}.png`, ...size, framing: FRAMING[name] };
 }

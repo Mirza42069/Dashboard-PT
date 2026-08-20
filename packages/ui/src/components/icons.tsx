@@ -43,7 +43,9 @@ import {
   CheckListIcon as HiCheckList,
   CheckmarkCircle02Icon as HiCheckmarkCircle02,
   CircleSlashTwoIcon as HiCircleSlashTwo,
+  Clock01Icon as HiClock01,
   Copy01Icon as HiCopy01,
+  CustomerSupportIcon as HiCustomerSupport,
   DashboardSquare01Icon as HiDashboardSquare01,
   DashedLineCircleIcon as HiDashedLineCircle,
   Delete02Icon as HiDelete02,
@@ -60,6 +62,7 @@ import {
   JusticeScale01Icon as HiJusticeScale01,
   KanbanIcon as HiKanban,
   Key01Icon as HiKey01,
+  LifebuoyIcon as HiLifebuoy,
   ListViewIcon as HiListView,
   Loading03Icon as HiLoading03,
   LockIcon as HiLock,
@@ -153,6 +156,7 @@ export const CircleCheckIcon = icon(HiCheckmarkCircle02, "CircleCheckIcon");
 export const CircleDashed = icon(HiDashedLineCircle, "CircleDashed");
 export const CircleDot = icon(HiRecord, "CircleDot");
 export const CircleSlash = icon(HiCircleSlashTwo, "CircleSlash");
+export const Clock = icon(HiClock01, "Clock");
 export const Copy = icon(HiCopy01, "Copy");
 export const Download = icon(HiDownload01, "Download");
 export const Eye = icon(HiView, "Eye");
@@ -160,6 +164,7 @@ export const EyeOff = icon(HiViewOff, "EyeOff");
 export const FileQuestionMark = icon(HiFileQuestionMark, "FileQuestionMark");
 export const Hammer = icon(HiHammer, "Hammer");
 export const HardHat = icon(HiHardHat, "HardHat");
+export const Headset = icon(HiCustomerSupport, "Headset");
 export const House = icon(HiHome01, "House");
 export const ImagePlus = icon(HiImageAdd01, "ImagePlus");
 export const Inbox = icon(HiInbox, "Inbox");
@@ -168,6 +173,7 @@ export const Kanban = icon(HiKanban, "Kanban");
 export const KeyRound = icon(HiKey01, "KeyRound");
 export const Languages = icon(HiTranslate, "Languages");
 export const LayoutDashboard = icon(HiDashboardSquare01, "LayoutDashboard");
+export const LifeBuoy = icon(HiLifebuoy, "LifeBuoy");
 export const ListChecks = icon(HiCheckList, "ListChecks");
 export const ListView = icon(HiListView, "ListView");
 export const Loader2 = icon(HiLoading03, "Loader2");

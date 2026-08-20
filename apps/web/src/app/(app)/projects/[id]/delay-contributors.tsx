@@ -4,14 +4,12 @@ import type { ActualCurveSource, DelayContributor } from "@DashboardV2/api/lib/c
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@DashboardV2/ui/components/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
-import { InfoIcon } from "@DashboardV2/ui/components/icons";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 
+import { Hint } from "@/components/hint";
 import { Meter } from "@/components/meter";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -66,22 +64,8 @@ export default function DelayContributors<T extends { id: string; code: string; 
           <div className="space-y-1">
             <CardTitle className="flex items-center gap-1.5">
               {t.delay.title}
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      className="rounded-full text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                      aria-label={t.delay.help}
-                    />
-                  }
-                >
-                  <InfoIcon className="size-3.5" />
-                </TooltipTrigger>
-                <TooltipContent className="max-w-xs">{t.delay.help}</TooltipContent>
-              </Tooltip>
+              <Hint text={t.delay.help} />
             </CardTitle>
-            <CardDescription>{t.delay.description}</CardDescription>
           </div>
           {/* The data date is stated, not implied — every figure below is as at
               this date and means nothing without it. */}

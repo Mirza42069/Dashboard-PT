@@ -12,7 +12,13 @@ import Header from "./header";
 import SkipLink from "./skip-link";
 import SupportNoticeDialog from "./support-notice-dialog";
 
-export type ShellUser = { name: string; email: string; role: string };
+export type ShellUser = {
+  name: string;
+  email: string;
+  role: string;
+  /** Null on a normal account. Drives the trial badge in the top bar. */
+  trialEndsAt: Date | string | null;
+};
 
 /**
  * Owns the sidebar collapse state so the trigger can live in the topbar while

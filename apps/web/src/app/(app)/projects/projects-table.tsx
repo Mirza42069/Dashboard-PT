@@ -79,12 +79,15 @@ export default function ProjectsTable({
   canDelete,
   canManageMembers,
   currentUserId,
+  trialAiCredits,
 }: {
   canCreate: boolean;
   canUpdate: boolean;
   canDelete: boolean;
   canManageMembers: boolean;
   currentUserId: string;
+  /** AI imports this trial has left; null on an account with no trial. */
+  trialAiCredits: number | null;
 }) {
   const t = useT();
   const { locale } = useLocale();
@@ -455,7 +458,7 @@ export default function ProjectsTable({
           canManageMembers={canManageMembers}
           currentUserId={currentUserId}
           onCreated={(projectId) =>
-            router.push(`/projects/${projectId}?tab=baseline` as Route)
+            router.push(`/projects/${projectId}?tab=boq` as Route)
           }
         />
       )}
@@ -479,9 +482,10 @@ export default function ProjectsTable({
         <ProjectWorkbookImportDialog
           open={workbookOpen}
           onOpenChange={setWorkbookOpen}
+          trialAiCredits={trialAiCredits}
           onCreated={(projectId) => {
             void queryClient.invalidateQueries(trpc.project.pathFilter());
-            router.push(`/projects/${projectId}?tab=baseline` as Route);
+            router.push(`/projects/${projectId}?tab=boq` as Route);
           }}
         />
       )}

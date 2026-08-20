@@ -150,8 +150,7 @@ export default function DailyReportsTab({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle>{t.daily.title}</CardTitle>
-            <CardDescription>{t.daily.description}</CardDescription>
-          </div>
+            </div>
           {canEdit && (
             <div className="flex flex-wrap items-end gap-2">
               <div className="space-y-1">

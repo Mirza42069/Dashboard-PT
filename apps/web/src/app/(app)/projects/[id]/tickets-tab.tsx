@@ -38,7 +38,7 @@ import {
   TableRow,
 } from "@DashboardV2/ui/components/table";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, Pencil, Plus, Trash2 } from "@DashboardV2/ui/components/icons";
+import { CircleCheck, ListChecks, Pencil, Plus, SearchX, Trash2 } from "@DashboardV2/ui/components/icons";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -48,6 +48,13 @@ import { QueryError } from "@/components/query-error";
 import { InfiniteLoadMore } from "@/components/infinite-load-more";
 import { useStatusLabel } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@DashboardV2/ui/components/empty";
+
 import { useT } from "@/i18n/provider";
 import { useDebounced } from "@/lib/use-debounced";
 import { useFormat } from "@/lib/use-format";
@@ -239,8 +246,17 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
               )}
               {!query.isPending && !initialError && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
-                    {filtering ? t.tickets.noMatch : t.tickets.empty}
+                  <TableCell colSpan={6}>
+                    <Empty className="border-0 py-6">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          {filtering ? <SearchX /> : <ListChecks />}
+                        </EmptyMedia>
+                        <EmptyTitle>
+                          {filtering ? t.tickets.noMatch : t.tickets.empty}
+                        </EmptyTitle>
+                      </EmptyHeader>
+                    </Empty>
                   </TableCell>
                 </TableRow>
               )}

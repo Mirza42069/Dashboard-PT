@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { pgTable, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, index, integer } from "drizzle-orm/pg-core";
 
 import { company } from "./company";
 
@@ -21,6 +21,23 @@ export const user = pgTable("user", {
   banExpires: timestamp("ban_expires"),
   // Forces the /change-password flow after an admin issues a temporary password
   mustChangePassword: boolean("must_change_password").default(true).notNull(),
+  /**
+   * Trial accounts: two limits that expire independently.
+   *
+   * `trialEndsAt` is the clock. Null means this is not a trial account and
+   * neither field applies. Once it passes, the account cannot start a new
+   * session — enforced in packages/auth's session.create hook, the same place
+   * better-auth's admin plugin enforces `banned`. There is no background job
+   * to flip a flag at the deadline, and deliberately so: the check is a
+   * comparison against now(), which is correct at every instant without one.
+   *
+   * `trialAiCredits` is the AI workbook import allowance, spent one per
+   * analysis that actually reached the model. Running out costs the account
+   * nothing else — the rest of the product, including the deterministic BoQ
+   * import, keeps working until the clock runs out.
+   */
+  trialEndsAt: timestamp("trial_ends_at"),
+  trialAiCredits: integer("trial_ai_credits"),
   /**
    * The tenant this account is pinned to. Null means "not pinned" — the case
    * for admins, who instead pick an active company from the header switcher.

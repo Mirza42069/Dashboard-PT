@@ -19,7 +19,6 @@ export default async function SupportPage() {
     <div className="space-y-5 p-4 md:p-6">
       <div className="space-y-1">
         <h1 className="text-xl font-semibold tracking-tight">{dict.support.inboxTitle}</h1>
-        <p className="max-w-2xl text-sm text-muted-foreground">{dict.support.inboxDescription}</p>
       </div>
       <SupportInbox />
     </div>

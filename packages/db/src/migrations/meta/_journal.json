@@ -183,6 +183,13 @@
       "when": 1786969691865,
       "tag": "0025_bent_ted_forrester",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1787148739198,
+      "tag": "0026_classy_shaman",
+      "breakpoints": true
     }
   ]
 }

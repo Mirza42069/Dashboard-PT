@@ -32,7 +32,26 @@ import { trpc } from "@/utils/trpc";
 import ProjectOverview from "./project-overview";
 import { projectToFormValues, type ProjectFormValues } from "../project-form-values";
 
-const PROJECT_TABS = ["overview", "tickets", "baseline", "progress", "daily", "notes", "team"] as const;
+/**
+ * `boq` and `schedule` are the two steps of the baseline flow, surfaced as
+ * their own tab values so each has a URL. They render the same component as
+ * `baseline` — the stepper inside it reads the tab instead of local state —
+ * which keeps their order and their gating while making them linkable.
+ */
+const PROJECT_TABS = [
+  "overview",
+  "tickets",
+  "baseline",
+  "boq",
+  "schedule",
+  "progress",
+  "daily",
+  "notes",
+  "team",
+] as const;
+
+/** Which step of the baseline flow a tab value means. */
+const BASELINE_STEP_TABS = { boq: "boq", schedule: "schedule", baseline: "review" } as const;
 
 const tabLoading = () => <Skeleton className="h-64 w-full" />;
 const BaselineTab = dynamic(() => import("./baseline-tab"), { loading: tabLoading });
@@ -169,6 +188,8 @@ export default function ProjectDetail({
           <TabsList variant="line" className="min-w-max">
             <TabsTrigger value="overview">{t.nav.overview}</TabsTrigger>
             <TabsTrigger value="tickets">{t.projects.tabTickets}</TabsTrigger>
+            <TabsTrigger value="boq">{t.projects.tabBoq}</TabsTrigger>
+            <TabsTrigger value="schedule">{t.projects.tabSchedule}</TabsTrigger>
             <TabsTrigger value="baseline">{t.projects.tabBaseline}</TabsTrigger>
             <TabsTrigger value="progress">{t.projects.tabProgress}</TabsTrigger>
             <TabsTrigger value="daily">{t.daily.tab}</TabsTrigger>
@@ -181,9 +202,20 @@ export default function ProjectDetail({
           {activeTab === "overview" && <ProjectOverview project={project} />}
         </TabsContent>
 
-        <TabsContent value="baseline">
-          {activeTab === "baseline" && <BaselineTab projectId={projectId} canEdit={canWrite} />}
-        </TabsContent>
+        {(["boq", "schedule", "baseline"] as const).map((value) => (
+          <TabsContent key={value} value={value}>
+            {activeTab === value && (
+              <BaselineTab
+                projectId={projectId}
+                canEdit={canWrite}
+                step={BASELINE_STEP_TABS[value]}
+                onStepChange={(next) =>
+                  selectTab(next === "review" ? "baseline" : next)
+                }
+              />
+            )}
+          </TabsContent>
+        ))}
 
         <TabsContent value="progress">
           {activeTab === "progress" && (
