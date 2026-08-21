@@ -9,27 +9,45 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@DashboardV2/ui/components/empty";
-import { ChevronRight, Inbox, SearchX } from "@DashboardV2/ui/components/icons";
+import {
+  ChevronRight,
+  Inbox,
+  SearchX,
+} from "@DashboardV2/ui/components/icons";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@DashboardV2/ui/components/popover";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@DashboardV2/ui/components/tooltip";
+import { isBehindDeviation } from "@DashboardV2/api/lib/deviation";
 import { cn } from "@DashboardV2/ui/lib/utils";
 import type { Route } from "next";
 import Link from "next/link";
 
-import { DeviationBadge } from "@/components/deviation-badge";
+import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
+import { Hint } from "@/components/hint";
 import { InfiniteLoadMore } from "@/components/infinite-load-more";
 import { QueryError } from "@/components/query-error";
+import { TickBar } from "@/components/tick-bar";
 import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { useCoarsePointer } from "@/lib/use-coarse-pointer";
 import { useFormat } from "@/lib/use-format";
 
-import { TickBar } from "./tick-bar";
-
-import { levelFor, signalsFor, type SeverityInput, type SeverityLevel, type SignalId } from "./severity";
+import {
+  levelFor,
+  signalsFor,
+  type SeverityInput,
+  type SeverityLevel,
+  type Signal,
+  type SignalId,
+} from "./severity";
 
 export type AttentionFilter = "all" | "behind" | "reporting" | "review" | "actions";
 
@@ -39,6 +57,10 @@ export type AttentionRow = SeverityInput & {
   code: string;
   name: string;
   progress: number;
+  /** Planned percent at the data date. Already on the payload; the marks quote
+   *  it beside `progress`, because "behind" only means something next to the
+   *  number it is behind. */
+  planned: number;
   hasBaseline: boolean;
   dataDate: string | null;
   reportAgeDays: number | null;
@@ -55,8 +77,37 @@ const SIGNAL_TONE: Record<SeverityLevel, string> = {
   late: "text-destructive",
   waiting: "text-brand",
   // A colour, not the grey of the text it sits next to.
-  settled: "text-[var(--chart-3)]",
+  settled: "text-[var(--chart-1)]",
 };
+
+/**
+ * Every column's width *and* the breakpoint it survives to, defined once.
+ *
+ * This list used to print a caption above each figure on each row — four
+ * repeated words per project, twenty-five projects deep — and the reason given
+ * for having no header instead was that the columns drop out at `sm` and `xl`,
+ * so a header would keep promising columns that are not there.
+ *
+ * That is only true of a header that states its own widths. Sharing this record
+ * between the header strip and the cells means the header loses exactly the
+ * columns the rows lose, at exactly the same width, and cannot be edited out of
+ * alignment later without editing both at once.
+ *
+ * The signals are deliberately not here: they have no fixed width (a row
+ * carries one to seven of them) and need none — the project name takes all the
+ * slack, so the marks are already flush against the first fixed column. There
+ * is nothing to align a label to, and glyphs that each carry their own
+ * explanation do not want one.
+ */
+const COL = {
+  // 20 ticks at 6px with 2px gaps is 158px, plus the percent beside it.
+  progress: "hidden w-52 shrink-0 xl:block",
+  deviation: "w-24 shrink-0 text-right sm:w-32",
+  dataDate: "hidden w-24 shrink-0 text-right xl:block",
+};
+
+/** The padding and gaps a row and the header strip must share to line up. */
+const GUTTER = "gap-2 pl-4 pr-3 sm:gap-3 sm:pl-5 sm:pr-4";
 
 export function AttentionList({
   rows,
@@ -91,18 +142,75 @@ export function AttentionList({
   onLoadMore: () => void;
 }) {
   const t = useT();
-  const { formatDate, moneyCompact, percent, quantity } = useFormat();
+  const { formatDate, moneyCompact, percent } = useFormat();
+  const coarse = useCoarsePointer();
 
-  /** The name behind each signal icon. Shown on hover, never on the row. */
+  /**
+   * The name behind each signal icon. The tooltip's first line, the popup's
+   * heading, and the mark's accessible name.
+   */
   const SIGNAL_LABEL: Record<SignalId, string> = {
     behind: t.exceptions.behind,
-    reportsDue: t.exceptions.reportsDueHint,
-    stale: t.exceptions.staleHint,
+    reportsDue: t.exceptions.reportsDue,
+    stale: t.exceptions.stale,
     unreported: t.exceptions.unreported,
-    awaitingReview: t.exceptions.awaitingReviewHint,
+    awaitingReview: t.exceptions.awaitingReview,
     baselineMissing: t.exceptions.baselineMissing,
     openActions: t.exceptions.openIssues,
   };
+
+  /**
+   * What is wrong, in this project's own figures.
+   *
+   * Everything here is already on the row — the marks add no query. A signal
+   * whose numbers are missing falls back to the generic hint rather than
+   * printing "null%": a project can be flagged behind and still have a null
+   * deviation if its baseline went away between the count and the read.
+   */
+  function signalDetail(id: SignalId, row: AttentionRow): string {
+    switch (id) {
+      case "behind":
+        return row.deviation === null
+          ? t.exceptions.behind
+          : interpolate(t.exceptions.behindDetail, {
+              actual: percent(row.progress),
+              planned: percent(row.planned),
+              deviation: formatDeviation(row.deviation),
+            });
+      case "reportsDue":
+        return plural(t.exceptions.reportsDueDetail, row.reportsDue);
+      case "stale":
+        return row.dataDate === null || row.reportAgeDays === null
+          ? t.exceptions.staleHint
+          : interpolate(t.exceptions.staleDetail, {
+              age: plural(t.exceptions.daysAgo, row.reportAgeDays),
+              date: formatDate(row.dataDate),
+            });
+      case "unreported":
+        return t.exceptions.unreportedDetail;
+      case "awaitingReview":
+        return plural(t.exceptions.awaitingReviewDetail, row.reportsAwaitingReview);
+      case "baselineMissing":
+        return t.exceptions.baselineMissingDetail;
+      case "openActions":
+        return plural(t.exceptions.openActionsDetail, row.openTickets);
+    }
+  }
+
+  /**
+   * Where a signal's mark sends you.
+   *
+   * Not the same as `href` below, which answers "where does this *row* go" and
+   * has to pick one tab for a project carrying several problems. A mark is
+   * already about one signal, so it can send you straight to the tab that fixes
+   * that one.
+   */
+  function signalHref(id: SignalId, row: AttentionRow): Route {
+    const base = `/projects/${row.projectId}`;
+    if (id === "openActions") return `${base}?tab=tickets` as Route;
+    if (id === "baselineMissing") return `${base}?tab=boq` as Route;
+    return `${base}?tab=progress` as Route;
+  }
 
   /**
    * Where the project name goes.
@@ -127,9 +235,87 @@ export function AttentionList({
     return `${base}?tab=tickets` as Route;
   }
 
-  function change(row: AttentionRow) {
-    if (row.deviation === null || row.previousDeviation === null) return null;
-    return row.deviation - row.previousDeviation;
+  /**
+   * One signal, as a mark you can read and press.
+   *
+   * Two shapes of the same control, because one shape cannot serve both
+   * pointers. With a mouse the mark is a link: hovering says what is wrong,
+   * clicking goes to the tab that fixes it — one gesture each, where this used
+   * to cost two clicks through a popup whose whole content was that sentence
+   * and that same link. Under a finger there is no hover to spend on the
+   * explanation, and Base UI disables tooltips on touch outright, so there the
+   * tap still opens the popup and the popup still carries the link.
+   *
+   * A function returning markup rather than a component: it closes over `t` and
+   * the formatters, and a component declared in a render body remounts its
+   * subtree every time the parent renders.
+   */
+  function signalMark(row: AttentionRow, { id, Icon, level: tone, count }: Signal) {
+    const name = SIGNAL_LABEL[id];
+    const detail = signalDetail(id, row);
+    const glyph = (
+      <>
+        <Icon className="size-3.5" />
+        {count !== undefined && <span className="text-xs tabular-nums">{count}</span>}
+      </>
+    );
+    const markClass = cn(
+      "inline-flex items-center gap-0.5 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+      coarse && "min-h-11 min-w-11 justify-center",
+      SIGNAL_TONE[tone],
+    );
+
+    if (coarse) {
+      return (
+        <Popover key={id}>
+          <PopoverTrigger
+            render={
+              <button
+                type="button"
+                className={markClass}
+                aria-label={count === undefined ? name : `${name}: ${count}`}
+              />
+            }
+          >
+            {glyph}
+          </PopoverTrigger>
+          <PopoverContent className="w-72 max-w-[min(18rem,calc(100vw-2rem))] space-y-1.5 px-3 py-2.5">
+            <p className={cn("text-xs font-medium", SIGNAL_TONE[tone])}>{name}</p>
+            <p className="text-xs text-muted-foreground">{detail}</p>
+            <Link
+              href={signalHref(id, row)}
+              className="inline-flex items-center gap-0.5 text-xs font-medium text-foreground underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              {interpolate(t.exceptions.viewProject, { name: row.name })}
+              <ChevronRight className="size-3.5 text-foreground" />
+            </Link>
+          </PopoverContent>
+        </Popover>
+      );
+    }
+
+    return (
+      <Tooltip key={id}>
+        <TooltipTrigger
+          render={
+            <Link
+              href={signalHref(id, row)}
+              className={markClass}
+              // A tooltip is not reachable by a screen reader, so what it says
+              // is the link's own name rather than a description of it — the
+              // same rule Hint follows.
+              aria-label={`${name}. ${detail}`}
+            />
+          }
+        >
+          {glyph}
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs flex-col items-start gap-0.5 text-left">
+          <span className="font-medium">{name}</span>
+          <span className="text-background/75">{detail}</span>
+        </TooltipContent>
+      </Tooltip>
+    );
   }
 
   return (
@@ -166,7 +352,7 @@ export function AttentionList({
 
           <Link href="/projects" className={buttonVariants({ variant: "outline", size: "sm" })}>
             {t.projects.allProjects}
-            <ChevronRight className="text-[var(--chart-3)]" />
+            <ChevronRight className="text-foreground" />
           </Link>
         </div>
       </CardHeader>
@@ -182,7 +368,7 @@ export function AttentionList({
             {total === 0 && (
               <Empty className="border-0">
                 <EmptyHeader>
-                  <EmptyMedia variant="icon" className="text-[var(--chart-3)]">
+                  <EmptyMedia variant="icon">
                     {filter === "all" ? <Inbox /> : <SearchX />}
                   </EmptyMedia>
                   <EmptyTitle>
@@ -200,123 +386,120 @@ export function AttentionList({
             )}
 
             {rows.length > 0 && (
-              <ul className="divide-y">
-                {rows.map((row) => {
-                  const level = levelFor(row);
-                  const signals = signalsFor(row);
-                  const delta = change(row);
+              <>
+                {/* The headline: every figure named once, at the top, rather
+                    than once per project.
 
-                  return (
-                    <li key={row.projectId} className="relative">
-                      {/* The whole at-a-glance read: one edge, one colour. */}
-                      <span
-                        className={cn("absolute inset-y-0 left-0 w-0.5", EDGE[level])}
-                        aria-hidden
-                      />
-                      <div className="flex items-center gap-2 py-2.5 pl-4 pr-3 sm:gap-3 sm:pl-5 sm:pr-4">
-                        <Link
-                          href={href(row)}
-                          className="min-w-0 flex-1 rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                          aria-label={interpolate(t.exceptions.viewProject, { name: row.name })}
-                        >
-                          <span className="block truncate text-sm font-medium">{row.name}</span>
-                          <span className="block font-mono text-xs text-muted-foreground">
-                            {row.code}
+                    Not aria-hidden. It holds the deviation rule's Hint, which
+                    is a focusable control and must not be buried, so it stays
+                    an ordinary header line — and the cells below carry their
+                    own sr-only names anyway, for a reader who arrives at a row
+                    without having heard this one. */}
+                <div className={cn("flex items-center border-b bg-muted/30 py-1.5", GUTTER)}>
+                  <ColumnLabel className="min-w-0 flex-1">{t.projects.project}</ColumnLabel>
+                  <ColumnLabel className={COL.progress}>{t.projects.progressMeter}</ColumnLabel>
+                  <span className={cn(COL.deviation, "inline-flex items-center justify-end gap-1")}>
+                    <ColumnLabel>{t.exceptions.deviationColumn}</ColumnLabel>
+                    <Hint text={t.exceptions.deviationColumnHint} />
+                  </span>
+                  <ColumnLabel className={COL.dataDate}>{t.exceptions.dataDate}</ColumnLabel>
+                </div>
+
+                <ul className="divide-y">
+                  {rows.map((row) => {
+                    const level = levelFor(row);
+                    const signals = signalsFor(row);
+
+                    return (
+                      <li key={row.projectId} className="relative">
+                        {/* The whole at-a-glance read: one edge, one colour. */}
+                        <span
+                          className={cn("absolute inset-y-0 left-0 w-0.5", EDGE[level])}
+                          aria-hidden
+                        />
+                        <div className={cn("flex items-center py-1.5", GUTTER)}>
+                          {/* One line, not two. The code is a short tag rather
+                              than a second title, and giving it its own line
+                              cost every project in the list half its height to
+                              say otherwise. */}
+                          <Link
+                            href={href(row)}
+                            className="flex min-w-0 flex-1 items-baseline gap-2 rounded-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                            aria-label={interpolate(t.exceptions.viewProject, { name: row.name })}
+                          >
+                            <span className="truncate text-sm font-medium">{row.name}</span>
+                            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                              {row.code}
+                            </span>
+                          </Link>
+
+                          {/* Seven words became seven icons; the words are in
+                              the marks. */}
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            {signals.map((signal) => signalMark(row, signal))}
                           </span>
-                        </Link>
 
-                        {/* Seven words became seven icons; the words are in the tooltips. */}
-                        <span className="flex shrink-0 items-center gap-1.5">
-                          {signals.map(({ id, Icon, level: tone, count }) => {
-                            const label =
-                              count === undefined
-                                ? SIGNAL_LABEL[id]
-                                : `${SIGNAL_LABEL[id]}: ${count}`;
-                            return (
-                              <Tooltip key={id}>
-                                <TooltipTrigger
-                                  render={
-                                    <button
-                                      type="button"
-                                      className={cn(
-                                        "inline-flex items-center gap-0.5 rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-                                        SIGNAL_TONE[tone],
-                                      )}
-                                      aria-label={label}
-                                    />
-                                  }
+                          {/* The same bar as the cards and the header. A
+                              six-segment meter here and a fine tick bar
+                              everywhere else read as two kinds of measurement,
+                              and they are the same kind. */}
+                          <span className={COL.progress}>
+                            {row.hasBaseline && row.dataDate !== null ? (
+                              <span
+                                className="flex items-center gap-2"
+                                aria-label={interpolate(t.dashboard.projectProgressMeter, {
+                                  project: row.name,
+                                })}
+                                role="meter"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={row.progress}
+                                aria-valuetext={percent(row.progress)}
+                              >
+                                {/* Behind schedule overrides the progress
+                                    band. How far along a project is and
+                                    whether it is where it promised to be are
+                                    different questions, and the second one
+                                    wins: a project at 80% that should be at
+                                    95% is not a green bar. */}
+                                <TickBar
+                                  value={row.progress}
+                                  max={100}
+                                  tone={isBehindDeviation(row.deviation) ? "late" : "progress"}
+                                />
+                                <span
+                                  className="text-xs text-muted-foreground tabular-nums"
+                                  aria-hidden
                                 >
-                                  <Icon className="size-3.5" />
-                                  {count !== undefined && (
-                                    <span className="text-xs tabular-nums">{count}</span>
-                                  )}
-                                </TooltipTrigger>
-                                <TooltipContent className="max-w-xs">{label}</TooltipContent>
-                              </Tooltip>
-                            );
-                          })}
-                        </span>
-
-                        {/* Under xl the row is name, signals and position — nothing
-                            else. The detail is one tap away, and a phone is the
-                            wrong place to reprint five column headers per project. */}
-                        {/* The same bar as the cards and the header. A
-                            six-segment meter here and a fine tick bar
-                            everywhere else read as two kinds of measurement,
-                            and they are the same kind. */}
-                        <span className="hidden w-40 shrink-0 xl:block">
-                          {row.hasBaseline && row.dataDate !== null ? (
-                            <span
-                              className="flex flex-col gap-1"
-                              aria-label={`${interpolate(t.dashboard.projectProgressMeter, {
-                                project: row.name,
-                              })}: ${percent(row.progress)}`}
-                              role="img"
-                            >
-                              <TickBar value={row.progress} max={100} />
-                              <span className="text-xs text-muted-foreground tabular-nums" aria-hidden>
-                                {percent(row.progress)}
+                                  {percent(row.progress)}
+                                </span>
                               </span>
-                            </span>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">
-                              {row.hasBaseline ? t.exceptions.noReadings : ""}
-                            </span>
-                          )}
-                        </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                {row.hasBaseline ? t.exceptions.noReadings : ""}
+                              </span>
+                            )}
+                          </span>
 
-                        <span className="w-16 shrink-0 text-right sm:w-24">
-                          <DeviationBadge value={row.deviation} compact />
-                        </span>
+                          <span className={cn(COL.deviation, "text-sm whitespace-nowrap")}>
+                            <span className="sr-only">{t.periodSummary.deviationCumulative}: </span>
+                            <DeviationBadge value={row.deviation} compact behindOnly />
+                          </span>
 
-                        <span className="hidden w-16 shrink-0 text-right text-xs tabular-nums xl:block">
-                          {delta === null ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            <span
-                              className={cn(
-                                delta < 0 && "text-destructive",
-                                delta > 0 && "text-success",
-                              )}
-                            >
-                              {delta > 0 ? "+" : delta < 0 ? "−" : ""}
-                              {quantity(Math.abs(delta))}
-                            </span>
-                          )}
-                        </span>
-
-                        <span className="hidden w-24 shrink-0 text-right text-xs text-muted-foreground xl:block">
-                          {row.dataDate === null
-                            ? "—"
-                            : row.reportAgeDays === null
-                              ? formatDate(row.dataDate)
-                              : plural(t.exceptions.daysAgo, row.reportAgeDays)}
-                        </span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+                          <span className={cn(COL.dataDate, "text-xs text-muted-foreground")}>
+                            <span className="sr-only">{t.exceptions.dataDate}: </span>
+                            {row.dataDate === null
+                              ? "—"
+                              : row.reportAgeDays === null
+                                ? formatDate(row.dataDate)
+                                : plural(t.exceptions.daysAgo, row.reportAgeDays)}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
             )}
 
             <div className="px-5">
@@ -333,5 +516,32 @@ export function AttentionList({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * A column's name, in the headline.
+ *
+ * Small, muted and uppercase so it reads as a caption rather than as another
+ * value competing with the figures under it. It takes the column's own class
+ * out of `COL`, which is what makes it disappear at exactly the breakpoint
+ * those figures do.
+ */
+function ColumnLabel({
+  className,
+  children,
+}: {
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        "text-[10px] leading-tight font-medium uppercase tracking-wide text-muted-foreground",
+        className,
+      )}
+    >
+      {children}
+    </span>
   );
 }

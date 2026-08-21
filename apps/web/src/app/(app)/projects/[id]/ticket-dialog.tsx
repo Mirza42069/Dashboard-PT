@@ -10,10 +10,9 @@ import {
 } from "@DashboardV2/ui/components/dialog";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
-import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Textarea } from "@DashboardV2/ui/components/textarea";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
 import z from "zod";
 
@@ -29,7 +28,6 @@ import {
 import { ACTION_PRIORITIES, ACTION_TYPES } from "@DashboardV2/db/schema";
 import type { ActionPriority, ActionType } from "@DashboardV2/db/schema";
 
-import { QueryError } from "@/components/query-error";
 import { useLocale, useT } from "@/i18n/provider";
 import { datePickerLabels } from "@/lib/date-picker-labels";
 import { useFormat } from "@/lib/use-format";
@@ -48,8 +46,6 @@ export type TicketFormValues = {
   type: ActionType;
   priority: ActionPriority;
   dueDate: string;
-  /** "" means nobody with a login owns this — see the note on assigneeId. */
-  assigneeId: string;
 };
 
 export const EMPTY_TICKET: TicketFormValues = {
@@ -60,10 +56,7 @@ export const EMPTY_TICKET: TicketFormValues = {
   type: "issue",
   priority: "medium",
   dueDate: "",
-  assigneeId: "",
 };
-
-const UNASSIGNED = "__unassigned__";
 
 export default function TicketDialog({
   open,
@@ -82,9 +75,6 @@ export default function TicketDialog({
   const { intlLocale } = useLocale();
   const { formatDate } = useFormat();
   const queryClient = useQueryClient();
-  // Only this company's own staff can be assigned — the same list the project
-  // manager picker uses, which already excludes super admins.
-  const assignees = useQuery(trpc.project.managerOptions.queryOptions());
   const createTicket = useMutation(trpc.ticket.create.mutationOptions());
   const updateTicket = useMutation(trpc.ticket.update.mutationOptions());
   const schema = z.object({
@@ -100,7 +90,6 @@ export default function TicketDialog({
     type: z.enum(ACTION_TYPES),
     priority: z.enum(ACTION_PRIORITIES),
     dueDate: z.string(),
-    assigneeId: z.string(),
   });
 
   const typeOptions = [
@@ -129,9 +118,8 @@ export default function TicketDialog({
           type: value.type as ActionType,
           priority: value.priority as ActionPriority,
           // "" is the form's way of saying unset; the column is nullable and
-          // null is what "no due date" and "nobody assigned" actually mean.
+          // null is what "no due date" actually means.
           dueDate: value.dueDate || null,
-          assigneeId: value.assigneeId || null,
         };
         if (editingId) {
           await updateTicket.mutateAsync({ id: editingId, ...payload });
@@ -195,6 +183,13 @@ export default function TicketDialog({
             </form.Field>
           </div>
 
+          {/* Due date on its own row. The "Assigned to" picker that used to sit
+              beside it is gone: an action already names its owner in
+              responsibleName below, and asking for the same person twice — once
+              as a login account, once as free text — left every action with two
+              owners that could disagree. The column is still on the table and
+              still honoured by the notification audience; it is simply no longer
+              set from here. */}
           <div className="grid gap-4 sm:grid-cols-2">
             <form.Field name="dueDate">
               {(field) => (
@@ -210,34 +205,6 @@ export default function TicketDialog({
                   />
                 </div>
               )}
-            </form.Field>
-            <form.Field name="assigneeId">
-              {(field) =>
-                assignees.isPending ? (
-                  <Skeleton className="mt-7 h-9 w-full" />
-                ) : assignees.isError ? (
-                  <QueryError
-                    error={assignees.error}
-                    onRetry={() => void assignees.refetch()}
-                    className="px-3 py-4"
-                  />
-                ) : (
-                  <ChoiceField
-                    label={t.actions.assignee}
-                    value={field.state.value || UNASSIGNED}
-                    options={[
-                      { value: UNASSIGNED, label: t.actions.unassigned },
-                      ...assignees.data.map((person) => ({
-                        value: person.id,
-                        label: person.name,
-                      })),
-                    ]}
-                    onChange={(value) =>
-                      field.handleChange(value === UNASSIGNED ? "" : value)
-                    }
-                  />
-                )
-              }
             </form.Field>
           </div>
 

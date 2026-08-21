@@ -16,6 +16,7 @@ import z from "zod";
 import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
+import { databaseErrorIncludes } from "../lib/database-error";
 import { getVersion, leafPredicate } from "../lib/boq";
 import { assertProjectAccess, type ProjectScopeCtx } from "../lib/scope";
 import { PeriodRangeError, generatePeriods } from "../lib/periods";
@@ -44,6 +45,49 @@ async function requireScheduleDraft(ctx: ProjectScopeCtx, versionId: string) {
     throw new TRPCError({ code: "CONFLICT", message: "This schedule is active and locked." });
   }
   return version;
+}
+
+async function runScheduleDraftMutation(
+  projectId: string,
+  versionId: string,
+  statements: Parameters<typeof runBatch>[0],
+) {
+  try {
+    await runBatch([
+      db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${projectId}, 0))`),
+      db.execute(sql`
+        select 1 / case when exists (
+          select 1 from boq_version
+          where id = ${versionId}
+            and project_id = ${projectId}
+            and schedule_status = 'draft'
+            and status in ('draft', 'active')
+        ) then 1 else 0 end
+      `),
+      ...statements,
+    ]);
+  } catch (error) {
+    if (databaseErrorIncludes(error, "division by zero")) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "This schedule was activated while it was being edited. Refresh and try again.",
+      });
+    }
+    throw error;
+  }
+}
+
+function liveScheduleItemsGuard(versionId: string, itemIds: string[]) {
+  const ids = sql.join(itemIds.map((id) => sql`${id}`), sql`, `);
+  return db.execute(sql`
+    select 1 / case when (
+      select count(distinct id) from boq_item
+      where boq_version_id = ${versionId}
+        and deleted_at is null
+        and id in (${ids})
+        and ${leafPredicate("boq_item")}
+    ) = ${itemIds.length} then 1 else 0 end
+  `);
 }
 
 async function listPeriodsFor(projectId: string) {
@@ -161,15 +205,14 @@ export const scheduleRouter = router({
         });
       }
 
-      await db
-        .update(project)
-        .set({
+      await runScheduleDraftMutation(input.projectId, input.versionId, [
+        db.update(project).set({
           startDate: input.startDate,
           endDate: input.endDate,
           scheduleStart: input.scheduleStart ?? null,
           periodType: input.periodType,
-        })
-        .where(eq(project.id, input.projectId));
+        }).where(eq(project.id, input.projectId)),
+      ]);
       return { success: true };
     }),
 
@@ -310,7 +353,7 @@ export const scheduleRouter = router({
           `),
         ]);
       } catch (error) {
-        if (error instanceof Error && error.message.toLowerCase().includes("division by zero")) {
+        if (databaseErrorIncludes(error, "division by zero")) {
           throw new TRPCError({
             code: "CONFLICT",
             message: "The reporting periods became in use and can no longer be rebuilt.",
@@ -389,7 +432,9 @@ export const scheduleRouter = router({
       const cleared = input.cells.filter((cell) => cell.plannedPct <= 0);
       const written = input.cells.filter((cell) => cell.plannedPct > 0);
 
-      const statements = [];
+      const statements: Parameters<typeof runBatch>[0] = [
+        liveScheduleItemsGuard(input.versionId, itemIds),
+      ];
 
       if (cleared.length > 0) {
         const pairs = sql.join(
@@ -428,7 +473,7 @@ export const scheduleRouter = router({
         db.update(boqItem).set({ distribution: "manual" }).where(inArray(boqItem.id, itemIds)),
       );
 
-      await runBatch(statements);
+      await runScheduleDraftMutation(version.projectId, input.versionId, statements);
 
       return { success: true };
     }),
@@ -517,7 +562,9 @@ export const scheduleRouter = router({
         return { boqItemId: item.boqItemId, window };
       });
 
-      const statements: Parameters<typeof runBatch>[0] = [];
+      const statements: Parameters<typeof runBatch>[0] = [
+        liveScheduleItemsGuard(input.versionId, itemIds),
+      ];
 
       if (input.mode === "even") {
         // The whole row is rewritten, so the old cells go in one statement
@@ -572,7 +619,7 @@ export const scheduleRouter = router({
         `),
       );
 
-      await runBatch(statements);
+      await runScheduleDraftMutation(version.projectId, input.versionId, statements);
 
       return { success: true };
     }),
@@ -592,7 +639,7 @@ export const scheduleRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await requireScheduleDraft(ctx, input.versionId);
+      const version = await requireScheduleDraft(ctx, input.versionId);
 
       const targetIds = [...new Set(input.targetItemIds)].filter((id) => id !== input.sourceItemId);
       if (targetIds.length === 0) {
@@ -634,6 +681,7 @@ export const scheduleRouter = router({
       }
 
       const statements: Parameters<typeof runBatch>[0] = [
+        liveScheduleItemsGuard(input.versionId, [input.sourceItemId, ...targetIds]),
         db.delete(boqItemDistribution).where(inArray(boqItemDistribution.boqItemId, targetIds)),
       ];
 
@@ -662,7 +710,7 @@ export const scheduleRouter = router({
           .where(inArray(boqItem.id, targetIds)),
       );
 
-      await runBatch(statements);
+      await runScheduleDraftMutation(version.projectId, input.versionId, statements);
 
       return { copied: targetIds.length };
     }),
@@ -676,11 +724,12 @@ export const scheduleRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await requireScheduleDraft(ctx, input.versionId);
+      const version = await requireScheduleDraft(ctx, input.versionId);
       const itemIds = [...new Set(input.boqItemIds)];
       await assertLeavesOfVersion(input.versionId, itemIds);
 
-      await runBatch([
+      await runScheduleDraftMutation(version.projectId, input.versionId, [
+        liveScheduleItemsGuard(input.versionId, itemIds),
         db.delete(boqItemDistribution).where(inArray(boqItemDistribution.boqItemId, itemIds)),
         db
           .update(boqItem)

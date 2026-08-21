@@ -24,6 +24,7 @@ export function DeviationBadge({
   value,
   className,
   compact = false,
+  behindOnly = false,
 }: {
   /** Null when the project has no baseline or nothing has been reported yet. */
   value: number | null;
@@ -37,6 +38,16 @@ export function DeviationBadge({
    * readers still get the answer. Only the redundant second statement goes.
    */
   compact?: boolean;
+  /**
+   * Prints a figure only when the project is behind.
+   *
+   * For the dashboard's exception list, whose whole job is to point at
+   * problems: a column of green "+0.4%" is a column you have to read in order
+   * to discard. Ahead and on-plan collapse to an em dash — but the word is
+   * still spoken, so the cell is not silent to a screen reader, and "ahead" is
+   * still distinguishable from "no baseline yet".
+   */
+  behindOnly?: boolean;
 }) {
   const t = useT();
 
@@ -48,6 +59,15 @@ export function DeviationBadge({
   const isBehind = position === "behind";
   const isAhead = position === "ahead";
   const isOnTrack = position === "on_track";
+
+  if (behindOnly && !isBehind) {
+    return (
+      <span className={cn("text-muted-foreground", className)}>
+        <span aria-hidden>{t.common.none}</span>
+        <span className="sr-only">{isAhead ? t.progress.ahead : t.progress.onTrack}</span>
+      </span>
+    );
+  }
 
   return (
     <span

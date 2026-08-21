@@ -18,6 +18,7 @@ import {
   loadWorkbook,
   parseRows,
 } from "./boq-import-parse";
+import { importedLineages, type RevisionSourceItem } from "./boq-lineage";
 
 /**
  * Turning a validated spreadsheet into a draft BoQ revision.
@@ -99,10 +100,20 @@ export function prepareBoqRevision(input: {
   mapping: ImportMapping;
   mappingAudit?: unknown;
   actor: { id: string; name: string };
+  sourceVersionId?: string;
+  sourceItems?: RevisionSourceItem[];
 }) {
   const versionId = crypto.randomUUID();
   const periodIdByIndex = new Map(input.periods.map((period) => [period.periodIndex, period.id]));
   const periodIndexes = input.periods.map((period) => period.periodIndex);
+  const lineageByRow = importedLineages(
+    input.rows,
+    input.sourceItems ?? [],
+    input.mapping.fields.code !== undefined,
+  );
+  const progressModeByLineage = new Map(
+    (input.sourceItems ?? []).map((item) => [item.lineageId, item.progressMode]),
+  );
 
   const idByCode = new Map<string, string>();
   for (const row of input.rows) {
@@ -111,6 +122,7 @@ export function prepareBoqRevision(input: {
 
   const itemValues = input.rows.map((row, index) => {
     const id = row.parentCode === null ? idByCode.get(row.code)! : crypto.randomUUID();
+    const lineageId = lineageByRow.get(row.row);
     const parentId = row.parentCode === null ? null : idByCode.get(row.parentCode);
     if (row.parentCode !== null && !parentId) {
       throw new Error(`Import invariant failed: parent ${row.parentCode} was not prepared.`);
@@ -118,6 +130,7 @@ export function prepareBoqRevision(input: {
     return {
       id,
       boqVersionId: versionId,
+      ...(lineageId ? { lineageId } : {}),
       parentId,
       code: row.code,
       description: row.description,
@@ -127,6 +140,7 @@ export function prepareBoqRevision(input: {
       weight: row.weight === null ? "0" : row.weight.toFixed(6),
       weightSource: (row.weight === null ? "derived" : "manual") as "derived" | "manual",
       distribution: (row.cells ? "manual" : "linear") as "manual" | "linear",
+      progressMode: lineageId ? progressModeByLineage.get(lineageId) : undefined,
       plannedStartPeriodIndex: row.start,
       plannedFinishPeriodIndex: row.finish,
       sortOrder: index,
@@ -184,6 +198,7 @@ export function prepareBoqRevision(input: {
       id: versionId,
       projectId: input.projectId,
       versionNo: input.versionNo,
+      sourceVersionId: input.sourceVersionId,
       title: `Rev ${input.versionNo}`,
       status: "draft",
       scheduleStatus: "draft",

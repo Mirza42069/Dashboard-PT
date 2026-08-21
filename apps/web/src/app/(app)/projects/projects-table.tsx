@@ -149,7 +149,10 @@ export default function ProjectsTable({
   const total = projectsQuery.data?.pages[0]?.total ?? 0;
   const initialError = projectsQuery.isError && projectsQuery.data === undefined;
 
-  const selection = useRowSelection(projects, `${debouncedSearch}\u0000${status}`);
+  const selection = useRowSelection(projects, {
+    getId: (row) => row.id,
+    resetKey: `${debouncedSearch}\u0000${status}`,
+  });
 
   function replaceProjectParams(nextView: ProjectsView, nextStatus: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -482,6 +485,7 @@ export default function ProjectsTable({
         <ProjectWorkbookImportDialog
           open={workbookOpen}
           onOpenChange={setWorkbookOpen}
+          currentUserId={currentUserId}
           trialAiCredits={trialAiCredits}
           onCreated={(projectId) => {
             void queryClient.invalidateQueries(trpc.project.pathFilter());

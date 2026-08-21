@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 
 import {
+  columnLetter,
   describeSheet,
   loadWorkbook,
   MAX_IMPORT_ROWS,
@@ -212,6 +213,13 @@ export type WorkbookAnalysis = {
     description: string;
     kind: "item" | "section" | "excluded";
     parentRow: number | null;
+    code: string | null;
+    unit: string | null;
+    quantity: number | null;
+    unitRate: number | null;
+    weight: number | null;
+    startPeriodIndex: number | null;
+    finishPeriodIndex: number | null;
   }[];
   summary: {
     sectionCount: number;
@@ -232,6 +240,18 @@ export type ParsedActualSnapshot = {
   sourceRow: number;
   sourceColumn: number;
   sourceValue: string;
+};
+
+export type WorkbookSheetCandidate = {
+  sheetName: string;
+  state: "visible" | "hidden" | "veryHidden";
+  rowCount: number;
+  columnCount: number;
+  knownSCurve: boolean;
+  warnings: { row: number; column: string | null; message: string }[];
+  actualSnapshotCount: number;
+  latestActualPeriodIndex: number | null;
+  latestActualPercent: number | null;
 };
 
 export const projectWorkbookCommitSchema = z.object({
@@ -348,21 +368,41 @@ function referenceBounds(
   sheet: Awaited<ReturnType<typeof loadWorkbook>>["worksheets"][number],
 ) {
   if (!/s[ -]?curve/i.test(sheet.name)) return null;
-  const description = cellValue(sheet.getRow(7).getCell(3).value).toUpperCase();
-  const amount = cellValue(sheet.getRow(7).getCell(4).value).toUpperCase();
-  const weight = cellValue(sheet.getRow(7).getCell(5).value).toUpperCase();
-  const start = cellValue(sheet.getRow(7).getCell(6).value).toUpperCase();
-  if (
-    !description.includes("URAIAN") ||
-    !amount.includes("JUMLAH") ||
-    !weight.includes("BOBOT") ||
-    !start.includes("MINGGU")
-  ) {
-    return null;
+  let headerRow = 0;
+  let periodColumns: { periodIndex: number; column: number }[] = [];
+  for (let row = 1; row <= Math.min(sheet.rowCount, 25); row++) {
+    const description = cellValue(sheet.getRow(row).getCell(3).value).toUpperCase();
+    const amount = cellValue(sheet.getRow(row).getCell(4).value).toUpperCase();
+    const weight = cellValue(sheet.getRow(row).getCell(5).value).toUpperCase();
+    const start = cellValue(sheet.getRow(row).getCell(6).value).toUpperCase();
+    if (
+      !description.includes("URAIAN") ||
+      !amount.includes("JUMLAH") ||
+      !weight.includes("BOBOT") ||
+      !start.includes("MINGGU")
+    ) {
+      continue;
+    }
+    const periods: { periodIndex: number; column: number }[] = [];
+    for (let column = 8; column <= sheet.columnCount; column++) {
+      const periodIndex = parseNumber(readCell(sheet.getRow(row).getCell(column).value));
+      const expected = periods.length + 1;
+      if (periodIndex === expected) {
+        periods.push({ periodIndex, column });
+      } else if (periods.length > 0) {
+        break;
+      }
+    }
+    if (periods.length > 0) {
+      headerRow = row;
+      periodColumns = periods;
+      break;
+    }
   }
+  if (headerRow === 0) return null;
 
   let totalRow = 0;
-  for (let row = 8; row <= sheet.rowCount; row++) {
+  for (let row = headerRow + 1; row <= sheet.rowCount; row++) {
     if (cellValue(sheet.getRow(row).getCell(3).value).trim().toUpperCase() === "TOTAL") {
       totalRow = row;
       break;
@@ -370,30 +410,29 @@ function referenceBounds(
   }
   if (totalRow === 0) return null;
   let titleRow = 0;
-  for (let row = 8; row < totalRow; row++) {
+  for (let row = headerRow + 1; row < totalRow; row++) {
     const text = cellValue(sheet.getRow(row).getCell(3).value).trim();
-    const rowAmount = parseNumber(readCell(sheet.getRow(row).getCell(4).value));
     const rowStart = parseNumber(readCell(sheet.getRow(row).getCell(6).value));
     const nextDescription = cellValue(sheet.getRow(row + 1).getCell(3).value).trim();
-    if (text && typeof rowAmount === "number" && rowStart === null && nextDescription) {
+    const nextAmount = parseNumber(readCell(sheet.getRow(row + 1).getCell(4).value));
+    const nextStart = parseNumber(readCell(sheet.getRow(row + 1).getCell(6).value));
+    if (
+      text &&
+      rowStart === null &&
+      nextDescription &&
+      (typeof nextAmount === "number" || typeof nextStart === "number")
+    ) {
       titleRow = row;
       break;
     }
   }
   if (titleRow === 0) return null;
-  const periodColumns: { periodIndex: number; column: number }[] = [];
-  for (let column = 1; column <= sheet.columnCount; column++) {
-    const periodIndex = parseNumber(readCell(sheet.getRow(7).getCell(column).value));
-    if (typeof periodIndex === "number" && Number.isInteger(periodIndex) && periodIndex > 0) {
-      periodColumns.push({ periodIndex, column });
-    }
-  }
   const firstPeriod = periodColumns[0];
   const lastPeriod = periodColumns.at(-1);
-  const contractStartDate = firstPeriod ? isoDateAt(sheet, 8, firstPeriod.column) : null;
-  const firstPeriodEnd = firstPeriod ? isoDateAt(sheet, 9, firstPeriod.column) : null;
+  const contractStartDate = firstPeriod ? isoDateAt(sheet, headerRow + 1, firstPeriod.column) : null;
+  const firstPeriodEnd = firstPeriod ? isoDateAt(sheet, headerRow + 2, firstPeriod.column) : null;
   const scheduleStartDate = firstPeriodEnd ? addDays(firstPeriodEnd, -6) : null;
-  const endDate = lastPeriod ? isoDateAt(sheet, 9, lastPeriod.column) : null;
+  const endDate = lastPeriod ? isoDateAt(sheet, headerRow + 2, lastPeriod.column) : null;
   let actualRow: number | null = null;
   for (let row = totalRow + 1; row <= sheet.rowCount; row++) {
     if (
@@ -405,6 +444,7 @@ function referenceBounds(
     }
   }
   return {
+    headerRow,
     titleRow,
     dataStartRow: titleRow + 1,
     dataEndRow: totalRow - 1,
@@ -445,13 +485,17 @@ function defaultParentAssignments(
 function referencePlan(
   workbook: Awaited<ReturnType<typeof loadWorkbook>>,
   fileHash: string,
+  selectedSheetName?: string,
 ): WorkbookPlan | null {
-  for (const sheet of workbook.worksheets) {
+  const sheets = selectedSheetName
+    ? workbook.worksheets.filter((sheet) => sheet.name === selectedSheetName)
+    : workbook.worksheets;
+  for (const sheet of sheets) {
     const bounds = referenceBounds(sheet);
     if (!bounds) continue;
     const { titleRow, dataStartRow, dataEndRow } = bounds;
     const sectionRows: number[] = [];
-    let periodCount = 0;
+    let periodCount = bounds.periodColumns.at(-1)?.periodIndex ?? 0;
     for (let row = dataStartRow; row <= dataEndRow; row++) {
       const text = cellValue(sheet.getRow(row).getCell(3).value).trim();
       const rowAmount = parseNumber(readCell(sheet.getRow(row).getCell(4).value));
@@ -471,7 +515,7 @@ function referencePlan(
       fileHash,
       profile: "reference-s-curve" as const,
       sheetName: sheet.name,
-      headerRow: 7,
+      headerRow: bounds.headerRow,
     };
 
     return {
@@ -514,11 +558,18 @@ function referencePlan(
   return null;
 }
 
-function workbookSummary(workbook: Awaited<ReturnType<typeof loadWorkbook>>) {
+function workbookSummary(
+  workbook: Awaited<ReturnType<typeof loadWorkbook>>,
+  selectedSheetName?: string,
+) {
   let remainingCharacters = 30_000;
+  const sheets = selectedSheetName
+    ? workbook.worksheets.filter((sheet) => sheet.name === selectedSheetName)
+    : workbook.worksheets;
   return {
     task: "Identify the project and importable BoQ/S-curve table. Column numbers are 1-based.",
-    sheets: workbook.worksheets.slice(0, 5).map((sheet) => {
+    selectedSheet: selectedSheetName ?? null,
+    sheets: sheets.map((sheet) => {
       const nonemptyRows: { row: number; cells: { column: number; value: string }[] }[] = [];
       for (
         let row = 1;
@@ -602,41 +653,87 @@ function parseActualSnapshots(
   sheet: Awaited<ReturnType<typeof loadWorkbook>>["worksheets"][number],
   plan: WorkbookPlan,
 ) {
+  if (!plan.actualCurve) return { snapshots: [], errors: [] };
+  return parseActualSnapshotCells(
+    sheet,
+    plan.actualCurve.sourceRow,
+    plan.actualCurve.periodColumns,
+    plan.periodCount,
+  );
+}
+
+function parseActualSnapshotCells(
+  sheet: Awaited<ReturnType<typeof loadWorkbook>>["worksheets"][number],
+  sourceRow: number,
+  periodColumns: { periodIndex: number; column: number }[],
+  periodCount: number,
+) {
   const snapshots: ParsedActualSnapshot[] = [];
   const errors: { row: number; column: string | null; message: string }[] = [];
-  if (!plan.actualCurve) return { snapshots, errors };
   let previous = -1;
-  for (const mapping of plan.actualCurve.periodColumns) {
-    if (mapping.periodIndex > plan.periodCount) continue;
-    const cell = readCell(sheet.getRow(plan.actualCurve.sourceRow).getCell(mapping.column).value);
+  for (const mapping of periodColumns) {
+    if (mapping.periodIndex > periodCount) continue;
+    const cell = readCell(sheet.getRow(sourceRow).getCell(mapping.column).value);
     const parsed = parseNumber(cell);
     if (parsed === null) continue;
     if (parsed === "invalid" || parsed < 0 || parsed > 100) {
       errors.push({
-        row: plan.actualCurve.sourceRow,
-        column: String(mapping.column),
-        message: `Actual cumulative progress for period ${mapping.periodIndex} must be between 0% and 100%.`,
+        row: sourceRow,
+        column: columnLetter(mapping.column),
+        message:
+          cell.kind === "error"
+            ? `Actual cumulative progress for period ${mapping.periodIndex} contains ${cell.value}.`
+            : `Actual cumulative progress for period ${mapping.periodIndex} must be between 0% and 100%.`,
       });
-      continue;
+      break;
     }
     if (parsed < previous) {
       errors.push({
-        row: plan.actualCurve.sourceRow,
-        column: String(mapping.column),
+        row: sourceRow,
+        column: columnLetter(mapping.column),
         message: `Actual cumulative progress decreases at period ${mapping.periodIndex}.`,
       });
-      continue;
+      break;
     }
     previous = parsed;
     snapshots.push({
       periodIndex: mapping.periodIndex,
       cumulativePercent: parsed,
-      sourceRow: plan.actualCurve.sourceRow,
+      sourceRow,
       sourceColumn: mapping.column,
       sourceValue: cell.kind === "empty" ? "" : String(cell.value),
     });
   }
   return { snapshots, errors };
+}
+
+export function discoverProjectWorkbookSheets(
+  workbook: Awaited<ReturnType<typeof loadWorkbook>>,
+): WorkbookSheetCandidate[] {
+  return workbook.worksheets.map((sheet) => {
+    const bounds = referenceBounds(sheet);
+    const actual =
+      bounds?.actualRow
+        ? parseActualSnapshotCells(
+            sheet,
+            bounds.actualRow,
+            bounds.periodColumns,
+            bounds.periodColumns.at(-1)?.periodIndex ?? 0,
+          )
+        : { snapshots: [], errors: [] };
+    const latest = actual.snapshots.at(-1);
+    return {
+      sheetName: sheet.name,
+      state: sheet.state,
+      rowCount: sheet.rowCount,
+      columnCount: sheet.columnCount,
+      knownSCurve: bounds !== null,
+      warnings: actual.errors,
+      actualSnapshotCount: actual.snapshots.length,
+      latestActualPeriodIndex: latest?.periodIndex ?? null,
+      latestActualPercent: latest?.cumulativePercent ?? null,
+    };
+  });
 }
 
 /**
@@ -655,21 +752,34 @@ export type AnalysisStage = (typeof ANALYSIS_STAGES)[number];
 export async function analyzeProjectWorkbook(
   bytes: Uint8Array,
   onStage: (stage: AnalysisStage) => void = () => {},
+  selectedSheetName?: string,
+  onModelAnswer: () => void | Promise<void> = () => {},
 ): Promise<WorkbookAnalysis> {
   onStage("reading");
   const workbook = await loadWorkbook(bytes);
+  const explicitlySelected = selectedSheetName
+    ? workbook.worksheets.find((sheet) => sheet.name === selectedSheetName)
+    : undefined;
+  if (selectedSheetName && !explicitlySelected) {
+    throw new ProjectWorkbookError(`Worksheet "${selectedSheetName}" was not found.`, "invalid");
+  }
   const fileHash = hash(bytes);
   onStage("recognising");
-  let plan = referencePlan(workbook, fileHash);
+  let plan = referencePlan(workbook, fileHash, selectedSheetName);
 
   if (!plan) {
     onStage("interpreting");
     const { interpretWorkbook } = await import("./openrouter");
-    const interpreted = await interpretWorkbook(workbookSummary(workbook));
+    const interpreted = await interpretWorkbook(
+      workbookSummary(workbook, selectedSheetName),
+      onModelAnswer,
+    );
     onStage("building");
-    const selected = interpreted
-      ? workbook.worksheets.find((sheet) => sheet.name === interpreted.sheetName)
-      : workbook.worksheets[0];
+    const selected =
+      explicitlySelected ??
+      (interpreted
+        ? workbook.worksheets.find((sheet) => sheet.name === interpreted.sheetName)
+        : workbook.worksheets[0]);
     if (!selected) throw new ProjectWorkbookError("The workbook has no worksheets.", "invalid");
 
     const preview = describeSheet(selected, interpreted?.headerRow);
@@ -783,7 +893,7 @@ function assertSafeRowScope(
         : null;
     if (
       !bounds ||
-      plan.headerRow !== 7 ||
+      plan.headerRow !== bounds.headerRow ||
       plan.dataStartRow !== bounds.dataStartRow ||
       plan.dataEndRow !== bounds.dataEndRow ||
       JSON.stringify(plan.actualCurve) !== JSON.stringify(expectedActualCurve)
@@ -892,7 +1002,10 @@ export async function reviewProjectWorkbook(
     };
   }
   assertSafeRowScope(sheet, scopedPlan);
-  let periodCount = 0;
+  let periodCount =
+    scopedPlan.profile === "reference-s-curve"
+      ? (referenceBounds(sheet)?.periodColumns.at(-1)?.periodIndex ?? 0)
+      : 0;
   const finishColumn = scopedPlan.mapping.fields.finish;
   if (finishColumn) {
     for (let row = scopedPlan.dataStartRow; row <= scopedPlan.dataEndRow; row++) {
@@ -943,17 +1056,26 @@ export async function reviewProjectWorkbook(
   );
   const sections = parsed.rows.filter((row) => sectionRows.has(row.row));
   const lines = parsed.rows.filter((row) => !sections.includes(row));
+  const parsedByRow = new Map(parsed.rows.map((row) => [row.row, row]));
   const rowPreview: WorkbookAnalysis["rowPreview"] = [];
   for (let row = plan.dataStartRow; row <= plan.dataEndRow; row++) {
     const description = cellValue(sheet.getRow(row).getCell(plan.mapping.fields.description).value)
       .trim()
       .slice(0, 500);
     if (!description) continue;
+    const parsedRow = parsedByRow.get(row);
     rowPreview.push({
       row,
       description,
       kind: excludedRows.has(row) ? "excluded" : sectionRows.has(row) ? "section" : "item",
       parentRow: parentByRow.get(row) ?? null,
+      code: parsedRow?.code ?? null,
+      unit: parsedRow?.unit ?? null,
+      quantity: parsedRow?.quantity ?? null,
+      unitRate: parsedRow?.unitRate ?? null,
+      weight: parsedRow?.weight ?? null,
+      startPeriodIndex: parsedRow?.start ?? null,
+      finishPeriodIndex: parsedRow?.finish ?? null,
     });
   }
   const actual = parseActualSnapshots(sheet, plan);
@@ -989,22 +1111,11 @@ export function workbookHash(bytes: Uint8Array) {
   return hash(bytes);
 }
 
-export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: ProjectWorkbookCommit) {
-  const reviewed = await reviewProjectWorkbook(bytes, input.plan);
-  const plan = reviewed.plan;
-  if (reviewed.summary.validationErrors.length > 0) {
-    throw new ProjectWorkbookError(
-      "Some workbook rows need attention.",
-      "invalid",
-      reviewed.summary.validationErrors,
-    );
-  }
-  if (!plan.mapping.fields.start || !plan.mapping.fields.finish) {
-    throw new ProjectWorkbookError(
-      "Map both a start-period and finish-period column before creating the schedule.",
-      "invalid",
-    );
-  }
+export async function validateWorkbookCalendar(
+  bytes: Uint8Array,
+  plan: WorkbookPlan,
+  project: ProjectWorkbookCommit["project"],
+) {
   if (plan.periodCount < 1) {
     throw new ProjectWorkbookError(
       "No reporting periods were found. Review the Finish period column mapping.",
@@ -1017,9 +1128,9 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
   let generated;
   try {
     generated = generatePeriods(
-      input.project.scheduleStart ?? input.project.startDate,
-      input.project.endDate,
-      input.project.periodType,
+      project.scheduleStart ?? project.startDate,
+      project.endDate,
+      project.periodType,
     );
   } catch (error) {
     if (error instanceof PeriodRangeError) {
@@ -1031,9 +1142,9 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
         {
           workbookPeriodCount: plan.periodCount,
           suggestedEndDate: endDateForPeriodCount(
-            input.project.scheduleStart ?? input.project.startDate,
+            project.scheduleStart ?? project.startDate,
             plan.periodCount,
-            input.project.periodType,
+            project.periodType,
           ),
         },
       );
@@ -1042,12 +1153,12 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
   }
   if (generated.length !== plan.periodCount) {
     const suggestedEndDate = endDateForPeriodCount(
-      input.project.scheduleStart ?? input.project.startDate,
+      project.scheduleStart ?? project.startDate,
       plan.periodCount,
-      input.project.periodType,
+      project.periodType,
     );
     throw new ProjectWorkbookError(
-      `Your dates create ${generated.length} ${input.project.periodType} periods, but workbook items are scheduled through period ${plan.periodCount}.`,
+      `Your dates create ${generated.length} ${project.periodType} periods, but workbook items are scheduled through period ${plan.periodCount}.`,
       "invalid",
       [],
       "period_count_mismatch",
@@ -1076,10 +1187,10 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
       );
     }
     if (
-      input.project.startDate !== bounds.contractStartDate ||
-      input.project.scheduleStart !== bounds.scheduleStartDate ||
-      input.project.endDate !== bounds.endDate ||
-      input.project.periodType !== "weekly"
+      project.startDate !== bounds.contractStartDate ||
+      project.scheduleStart !== bounds.scheduleStartDate ||
+      project.endDate !== bounds.endDate ||
+      project.periodType !== "weekly"
     ) {
       throw new ProjectWorkbookError(
         "The selected dates do not match the calendar found in the workbook.",
@@ -1095,7 +1206,7 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
     }
     const periodEndDatesMatch = bounds.periodColumns.every((mapping) => {
       const period = generated.find((candidate) => candidate.periodIndex === mapping.periodIndex);
-      return period?.endDate === isoDateAt(sheet, 9, mapping.column);
+      return period?.endDate === isoDateAt(sheet, bounds.headerRow + 2, mapping.column);
     });
     if (!periodEndDatesMatch) {
       throw new ProjectWorkbookError(
@@ -1104,6 +1215,28 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
       );
     }
   }
+
+  return { generated, sheet };
+}
+
+export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: ProjectWorkbookCommit) {
+  const reviewed = await reviewProjectWorkbook(bytes, input.plan);
+  const plan = reviewed.plan;
+  if (reviewed.summary.validationErrors.length > 0) {
+    throw new ProjectWorkbookError(
+      "Some workbook rows need attention.",
+      "invalid",
+      reviewed.summary.validationErrors,
+    );
+  }
+  if (!plan.mapping.fields.start || !plan.mapping.fields.finish) {
+    throw new ProjectWorkbookError(
+      "Map both a start-period and finish-period column before creating the schedule.",
+      "invalid",
+    );
+  }
+
+  const { generated, sheet } = await validateWorkbookCalendar(bytes, plan, input.project);
 
   const rows = parseRows(sheet, plan.headerRow, plan.mapping, generated, {
     ...plan,

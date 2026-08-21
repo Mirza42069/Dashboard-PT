@@ -2,6 +2,8 @@
 
 import { cn } from "@DashboardV2/ui/lib/utils";
 
+import { progressFill } from "@/lib/progress-tone";
+
 /**
  * How many pills the track is drawn from.
  *
@@ -11,24 +13,45 @@ import { cn } from "@DashboardV2/ui/lib/utils";
  */
 const TICKS = 20;
 
-export type TickTone = "late" | "waiting" | "settled" | "neutral";
+/**
+ * Two kinds of tone, and the distinction matters.
+ *
+ * "progress" is the default and reads its colour off the value — see
+ * lib/progress-tone.ts. Everything else is a *category*: the dashboard's filter
+ * cards use these bars to draw counts of projects in a state, and the colour
+ * there says which state, not how many. A category tone must never start
+ * tracking the number, which is why they are not steps of one scale.
+ */
+export type TickTone = "progress" | "late" | "waiting" | "settled" | "neutral";
 
-const FILL: Record<TickTone, string> = {
+/**
+ * The category half of the union, for callers that paint alongside a bar and
+ * must stay in step with it — the filter cards tint an icon chip to match.
+ * Naming it keeps those tables from having to invent an entry for "progress",
+ * which is not a colour anyone else can look up.
+ */
+export type TickCategoryTone = Exclude<TickTone, "progress">;
+
+const FILL: Record<TickCategoryTone, string> = {
   late: "bg-destructive",
   // The mark's purple. Not a hazard colour by convention, but these are the
   // states that need a person rather than the ones that are going wrong, and
   // reserving red for the latter is what keeps red meaning something.
   waiting: "bg-brand",
   settled: "bg-success",
-  neutral: "bg-[var(--chart-3)]",
+  // Teal, the prominent end of the chart ramp. This was --chart-3 back when
+  // that step was blue and blue was what every bar in the product looked like.
+  neutral: "bg-[var(--chart-1)]",
 };
 
 /**
  * A proportion, drawn as a run of pills.
  *
- * One bar idiom for the whole screen: a solid track in one place and a
- * segmented meter in another read as two different kinds of measurement, and
- * they are the same kind.
+ * One bar idiom for the whole app: a solid track in one place and a segmented
+ * meter in another read as two different kinds of measurement, and they are the
+ * same kind. It lives here rather than beside the dashboard because the project
+ * overview's "Work progress" draws the same measurement and must draw it the
+ * same way.
  *
  * The unfilled pills are always drawn. A card whose value is zero showing no
  * bar at all reads as broken rather than as zero, and a row of cards can only
@@ -37,7 +60,7 @@ const FILL: Record<TickTone, string> = {
 export function TickBar({
   value,
   max,
-  tone = "neutral",
+  tone = "progress",
   className,
 }: {
   value: number;
@@ -51,6 +74,7 @@ export function TickBar({
   // and rounding it away is the one error this bar must not make.
   const share = max > 0 && value > 0 ? value / max : 0;
   const filled = share <= 0 ? 0 : Math.min(TICKS, Math.max(1, Math.round(share * TICKS)));
+  const fill = tone === "progress" ? progressFill(value, max) : FILL[tone];
 
   return (
     // One height *and* one width everywhere: the pills are a fixed size and the
@@ -66,7 +90,7 @@ export function TickBar({
           key={index}
           className={cn(
             "w-1.5 rounded-full",
-            index < filled ? FILL[tone] : "bg-muted-foreground/20",
+            index < filled ? fill : "bg-muted-foreground/20",
           )}
         />
       ))}

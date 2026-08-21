@@ -10,6 +10,15 @@ import {
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 
 import { Hint } from "@/components/hint";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@DashboardV2/ui/components/table";
+
 import { Meter } from "@/components/meter";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -96,43 +105,36 @@ export default function DelayContributors<T extends { id: string; code: string; 
           </Empty>
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <Table>
                 <caption className="sr-only">
                   {t.delay.description}{" "}
                   {totalDeviation !== null &&
                     `${t.exceptions.variance}: ${totalDeviation.toFixed(2)}.`}
                 </caption>
-                <thead>
-                  <tr className="border-b text-xs text-muted-foreground">
-                    <th scope="col" className="px-4 py-2 text-left font-medium">
-                      {t.delay.line}
-                    </th>
-                    <th scope="col" className="px-2 py-2 text-right font-medium">
-                      {t.delay.weight}
-                    </th>
-                    <th scope="col" className="px-2 py-2 text-right font-medium">
-                      {t.delay.plannedContribution}
-                    </th>
-                    <th scope="col" className="px-2 py-2 text-right font-medium">
-                      {t.delay.actualContribution}
-                    </th>
-                    <th scope="col" className="px-2 py-2 text-right font-medium">
-                      {t.delay.variance}
-                    </th>
-                    <th scope="col" className="min-w-40 px-4 py-2 text-left font-medium">
-                      {t.delay.shareOfDelay}
-                    </th>
-                    <th scope="col" className="px-4 py-2 text-right font-medium">
-                      {t.delay.freshness}
-                    </th>
-                  </tr>
-                </thead>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="pl-4">{t.delay.line}</TableHead>
+                    <TableHead className="text-right">{t.delay.weight}</TableHead>
+                    <TableHead className="text-right">{t.delay.plannedContribution}</TableHead>
+                    <TableHead className="text-right">{t.delay.actualContribution}</TableHead>
+                    <TableHead className="text-right">{t.delay.variance}</TableHead>
+                    <TableHead className="min-w-40">{t.delay.shareOfDelay}</TableHead>
+                    <TableHead className="pr-4 text-right">{t.delay.freshness}</TableHead>
+                  </TableRow>
+                </TableHeader>
 
-                <tbody>
+                <TableBody>
                   {shown.map((row) => (
-                    <tr key={row.leaf.id} className="border-b last:border-0">
-                      <th scope="row" className="max-w-72 px-4 py-2 text-left font-normal">
+                    <TableRow key={row.leaf.id}>
+                      {/* A <th scope="row">, not a TableCell: the line
+                          description is what names the row, and a <td> here
+                          would leave every figure beside it unlabelled to a
+                          screen reader. It carries TableCell's own classes so
+                          it still lines up with the columns around it. */}
+                      <th
+                        scope="row"
+                        className="max-w-72 p-2 pl-4 text-left align-middle font-normal"
+                      >
                         <span className="block truncate" title={`${row.leaf.code} ${row.leaf.description}`}>
                           <span className="font-mono text-xs text-muted-foreground">
                             {row.leaf.code}
@@ -144,13 +146,13 @@ export default function DelayContributors<T extends { id: string; code: string; 
                         </span>
                       </th>
 
-                      <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
                         {row.weight.toFixed(2)}
-                      </td>
-                      <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
                         {row.plannedContribution.toFixed(2)}
-                      </td>
-                      <td className="px-2 py-2 text-right tabular-nums">
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
                         {row.actualContribution === null ? (
                           <>
                             <span aria-hidden>—</span>
@@ -159,9 +161,9 @@ export default function DelayContributors<T extends { id: string; code: string; 
                         ) : (
                           row.actualContribution.toFixed(2)
                         )}
-                      </td>
-                      <td
-                        className={`px-2 py-2 text-right font-medium tabular-nums ${
+                      </TableCell>
+                      <TableCell
+                        className={`text-right font-medium tabular-nums ${
                           row.variance !== null && row.variance < -NOISE ? "text-destructive" : ""
                         }`}
                       >
@@ -171,33 +173,36 @@ export default function DelayContributors<T extends { id: string; code: string; 
                           // Sign always written, so "behind" survives greyscale.
                           `${row.variance < 0 ? "−" : "+"}${Math.abs(row.variance).toFixed(2)}`
                         )}
-                      </td>
+                      </TableCell>
 
-                      <td className="px-4 py-2">
+                      <TableCell>
                         {row.shareOfDelay === null ? (
                           <span className="text-xs text-muted-foreground">
                             {t.delay.neverReported}
                           </span>
                         ) : (
+                          // Not the progress ramp: a big share of the delay is the
+                          // worst row on this table, and the progress bands would
+                          // paint it green. One hue, magnitude only.
                           <Meter
                             value={row.shareOfDelay}
                             max={100}
                             segments={6}
+                            tone="magnitude"
                             label={`${row.shareOfDelay.toFixed(1)}%`}
                           />
                         )}
-                      </td>
+                      </TableCell>
 
-                      <td className="px-4 py-2 text-right text-xs text-muted-foreground tabular-nums">
+                      <TableCell className="pr-4 text-right text-xs text-muted-foreground tabular-nums">
                         {row.lastReadingIndex === null
                           ? t.delay.neverReported
                           : interpolate(t.delay.periodShort, { index: row.lastReadingIndex })}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </TableBody>
+            </Table>
 
             <p className="px-4 pt-3 text-xs text-muted-foreground">{t.delay.correlationNote}</p>
           </>

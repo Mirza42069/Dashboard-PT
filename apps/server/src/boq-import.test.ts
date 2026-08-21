@@ -10,6 +10,7 @@ import {
   parseRows,
   readCell,
 } from "./boq-import-parse";
+import { importedLineages } from "./boq-lineage";
 
 /**
  * The importer, against the workbook it was written for.
@@ -42,6 +43,14 @@ test("a non-xlsx payload is rejected before ExcelJS expands it", async () => {
   await expect(loadWorkbook(new Uint8Array([1, 2, 3, 4]))).rejects.toThrow(
     "not a valid .xlsx archive",
   );
+});
+
+test("a workbook above the 100-sheet safety limit is rejected", async () => {
+  const workbook = new ExcelJS.Workbook();
+  for (let index = 1; index <= 101; index++) workbook.addWorksheet(`Sheet ${index}`);
+  const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+
+  await expect(loadWorkbook(bytes)).rejects.toThrow("at most 100 sheets");
 });
 
 async function referenceSheet() {
@@ -211,6 +220,198 @@ async function sheetFrom(rows: (string | number | null)[][]) {
 const FULL = {
   fields: { code: 1, description: 2, parent: 3, quantity: 4, unitRate: 5, start: 6, finish: 7 },
 };
+
+test("imported revisions preserve lineage only for unambiguous WBS paths", () => {
+  const rows = [
+    {
+      row: 2,
+      code: "1",
+      description: "Groundworks",
+      parentCode: null,
+      unit: null,
+      quantity: null,
+      unitRate: null,
+      weight: null,
+      start: null,
+      finish: null,
+      cells: null,
+    },
+    {
+      row: 3,
+      code: "1.1",
+      description: "Excavation",
+      parentCode: "1",
+      unit: "m3",
+      quantity: 10,
+      unitRate: 5,
+      weight: null,
+      start: 1,
+      finish: 2,
+      cells: null,
+    },
+    {
+      row: 4,
+      code: "2.1",
+      description: "New work",
+      parentCode: "2",
+      unit: "m2",
+      quantity: 1,
+      unitRate: 1,
+      weight: null,
+      start: 1,
+      finish: 1,
+      cells: null,
+    },
+  ];
+  const lineages = importedLineages(rows, [
+    {
+      id: "section-1",
+      parentId: null,
+      code: "1",
+      description: "Groundworks",
+      lineageId: "lineage-section-1",
+      progressMode: "by_quantity",
+    },
+    {
+      id: "line-1",
+      parentId: "section-1",
+      code: "1.1",
+      description: "Excavation",
+      lineageId: "lineage-line-1",
+      progressMode: "by_percent",
+    },
+    {
+      id: "duplicate-section",
+      parentId: null,
+      code: "1",
+      description: "Groundworks",
+      lineageId: "ambiguous",
+      progressMode: "by_quantity",
+    },
+  ]);
+
+  expect(lineages.get(3)).toBe("lineage-line-1");
+  expect(lineages.has(2)).toBe(false);
+  expect(lineages.has(4)).toBe(false);
+});
+
+test("generated code shifts cannot transfer lineage to different work", () => {
+  const rows = [
+    {
+      row: 2,
+      code: "1",
+      description: "New first line",
+      parentCode: null,
+      unit: null,
+      quantity: 1,
+      unitRate: 1,
+      weight: null,
+      start: 1,
+      finish: 1,
+      cells: null,
+    },
+  ];
+
+  expect(
+    importedLineages(rows, [
+      {
+        id: "old-first",
+        parentId: null,
+        code: "1",
+        description: "Former first line",
+        lineageId: "old-lineage",
+        progressMode: "by_quantity",
+      },
+    ]).has(2),
+  ).toBe(false);
+});
+
+test("replacing a generated-code section cannot transfer child lineage", () => {
+  const rows = [
+    {
+      row: 2,
+      code: "S1",
+      description: "Mechanical",
+      parentCode: null,
+      unit: null,
+      quantity: null,
+      unitRate: null,
+      weight: null,
+      start: null,
+      finish: null,
+      cells: null,
+    },
+    {
+      row: 3,
+      code: "1",
+      description: "Installation",
+      parentCode: "S1",
+      unit: "LS",
+      quantity: 1,
+      unitRate: 1,
+      weight: null,
+      start: 1,
+      finish: 1,
+      cells: null,
+    },
+  ];
+
+  expect(
+    importedLineages(rows, [
+      {
+        id: "old-section",
+        parentId: null,
+        code: "S1",
+        description: "Electrical",
+        lineageId: "old-section-lineage",
+        progressMode: "by_quantity",
+      },
+      {
+        id: "old-child",
+        parentId: "old-section",
+        code: "1",
+        description: "Installation",
+        lineageId: "old-child-lineage",
+        progressMode: "by_percent",
+      },
+    ]).has(3),
+  ).toBe(false);
+});
+
+test("an explicit stable WBS code preserves lineage when its description changes", () => {
+  const rows = [
+    {
+      row: 2,
+      code: "1.1",
+      description: "Bulk excavation",
+      parentCode: null,
+      unit: "m3",
+      quantity: 1,
+      unitRate: 1,
+      weight: null,
+      start: 1,
+      finish: 1,
+      cells: null,
+    },
+  ];
+
+  expect(
+    importedLineages(
+      rows,
+      [
+        {
+          id: "line",
+          parentId: null,
+          code: "1.1",
+          description: "Excavation",
+          lineageId: "stable-lineage",
+          progressMode: "by_percent",
+        },
+      ],
+      true,
+    ).get(2),
+  ).toBe("stable-lineage");
+});
 
 test("a duplicate code under the same section is reported with the row it clashes with", async () => {
   const sheet = await sheetFrom([

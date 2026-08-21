@@ -32,10 +32,21 @@ export async function downloadFromServer(path: string, fallbackName: string, err
   const disposition = response.headers.get("Content-Disposition") ?? "";
   const named = /filename="([^"]+)"/.exec(disposition)?.[1];
 
+  downloadBlob(blob, named ?? fallbackName);
+}
+
+/**
+ * Hands a blob to the browser as a download.
+ *
+ * Split out of the fetch above so a file built on the client — a CSV of what
+ * is already on screen, say — goes through the same two browser quirks rather
+ * than around them.
+ */
+export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = named ?? fallbackName;
+  link.download = filename;
   // In the document and revoked a tick late, both on purpose: Firefox does
   // not start a download from a programmatic click on a detached anchor,
   // and revoking in the next statement races the download's own read of the

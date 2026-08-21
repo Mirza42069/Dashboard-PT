@@ -1,6 +1,8 @@
 import { env } from "@DashboardV2/env/server";
 import { z } from "zod";
 
+import { parseModelAnswer } from "./model-answer";
+
 const optionalColumn = z.number().int().positive().nullable();
 
 const interpretationSchema = z.object({
@@ -108,7 +110,10 @@ type CompletionBody = {
 };
 
 /** Interprets workbook metadata only. It has no tools and no authority to write data. */
-export async function interpretWorkbook(summary: unknown): Promise<WorkbookInterpretation | null> {
+export async function interpretWorkbook(
+  summary: unknown,
+  onModelAnswer: () => void | Promise<void> = () => {},
+): Promise<WorkbookInterpretation | null> {
   if (!env.OPENROUTER_API_KEY || !env.OPENROUTER_MODEL) return null;
 
   const controller = new AbortController();
@@ -169,6 +174,7 @@ export async function interpretWorkbook(summary: unknown): Promise<WorkbookInter
     return content ? { content } : { retryable: false };
   };
 
+  let content: string;
   try {
     let result = await attempt();
 
@@ -178,12 +184,16 @@ export async function interpretWorkbook(summary: unknown): Promise<WorkbookInter
     }
 
     if (!("content" in result)) return null;
-    const parsed = interpretationSchema.safeParse(JSON.parse(result.content));
-    return parsed.success ? parsed.data : null;
+    content = result.content;
   } catch {
     // Includes the abort: a timed-out interpretation is an unavailable one.
     return null;
   } finally {
     clearTimeout(timeout);
   }
+
+  return parseModelAnswer(content, onModelAnswer, (value) => {
+    const parsed = interpretationSchema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+  });
 }

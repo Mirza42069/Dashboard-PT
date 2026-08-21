@@ -44,10 +44,11 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 
+import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { QueryError } from "@/components/query-error";
 import { InfiniteLoadMore } from "@/components/infinite-load-more";
 import { useStatusLabel } from "@/components/status-badge";
-import { interpolate } from "@/i18n";
+import { plural } from "@/i18n";
 import {
   Empty,
   EmptyHeader,
@@ -56,18 +57,21 @@ import {
 } from "@DashboardV2/ui/components/empty";
 
 import { useT } from "@/i18n/provider";
+import { SelectAllHead, SelectRowCell, ToolbarAction } from "@/components/table-selection";
+import { summarizeSelection } from "@/lib/summarize-selection";
 import { useDebounced } from "@/lib/use-debounced";
+import { useRowSelection } from "@/lib/use-row-selection";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import TicketDialog, { EMPTY_TICKET, type TicketFormValues } from "./ticket-dialog";
 
 const STATUSES = ["open", "in_progress", "resolved", "closed"] as const;
+type BulkStatus = Exclude<(typeof STATUSES)[number], "closed">;
 const ALL = "all";
 const PAGE_SIZE = 25;
 
 type DialogState = { id: string | null; values: TicketFormValues };
-type DeleteTarget = { id: string; title: string };
 type CloseTarget = { id: string; title: string };
 
 export default function TicketsTab({ projectId }: { projectId: string }) {
@@ -83,9 +87,9 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
   const [status, setStatus] = useState<string>(ALL);
   const debouncedStatus = useDebounced(status);
   const [dialog, setDialog] = useState<DialogState | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
   const [pendingClose, setPendingClose] = useState<CloseTarget | null>(null);
   const [resolution, setResolution] = useState("");
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const statusOptions = STATUSES.map((value) => ({
     value,
     label: statusLabel("ticket", value),
@@ -108,8 +112,9 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
     ),
   );
   const setTicketStatus = useMutation(trpc.ticket.setStatus.mutationOptions());
+  const setTicketStatuses = useMutation(trpc.ticket.setStatusMany.mutationOptions());
   const closeTicket = useMutation(trpc.ticket.close.mutationOptions());
-  const deleteTicket = useMutation(trpc.ticket.delete.mutationOptions());
+  const deleteTickets = useMutation(trpc.ticket.deleteMany.mutationOptions());
 
   async function refresh() {
     await Promise.all([
@@ -125,19 +130,6 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
       await refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.tickets.statusFailed);
-    }
-  }
-
-  async function confirmDelete() {
-    const target = pendingDelete;
-    if (!target) return;
-    setPendingDelete(null);
-    try {
-      await deleteTicket.mutateAsync({ id: target.id });
-      await refresh();
-      toast.success(t.tickets.deleted);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t.tickets.deleteFailed);
     }
   }
 
@@ -157,6 +149,38 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
   }
 
   const rows = query.data?.pages.flatMap((page) => page.tickets) ?? [];
+  // Reset on a server filter change, not on a refetch: narrowing the list is a
+  // new question, a background refresh of the same one is not.
+  const selection = useRowSelection(rows, {
+    getId: (row) => row.id,
+    resetKey: `${debouncedSearch}\u0000${debouncedStatus}`,
+    maxSelected: 100,
+  });
+
+  async function confirmBulkDelete() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    try {
+      const result = await deleteTickets.mutateAsync({ ids });
+      await refresh();
+      toast.success(plural(t.tickets.bulkDeletedToast, result.count));
+      selection.clear();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.common.bulkDeleteFailed);
+    }
+  }
+
+  async function changeStatusSelected(next: BulkStatus) {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    try {
+      await setTicketStatuses.mutateAsync({ ids, status: next });
+      await refresh();
+      selection.clear();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.tickets.statusFailed);
+    }
+  }
   const total = query.data?.pages[0]?.total ?? 0;
   const counts = query.data?.pages[0]?.counts;
   const initialError = query.isError && query.data === undefined;
@@ -217,10 +241,63 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
               </Link>
             </div>
           )}
-          <Table>
+          <div className="px-4 pb-2">
+            <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
+              <Select
+                items={statusOptions}
+                value=""
+                onValueChange={(value) =>
+                  void changeStatusSelected(value as BulkStatus)
+                }
+              >
+                <SelectTrigger size="sm" className="w-44" aria-label={t.tickets.setStatusSelected}>
+                  <SelectValue placeholder={t.tickets.setStatusSelected} />
+                </SelectTrigger>
+                <SelectContent>
+                  {statusOptions.filter((option) => option.value !== "closed").map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* Edit is a single-row action: there is no sensible way to set
+                  one title on twelve tickets, so it is offered only when the
+                  selection is exactly one. */}
+              <ToolbarAction
+                icon={<Pencil />}
+                label={t.tickets.editSelected}
+                disabled={selection.selectedCount !== 1}
+                onClick={() => {
+                  const target = rows.find((row) => row.id === selection.selectedIds[0]);
+                  if (!target) return;
+                  setDialog({
+                    id: target.id,
+                    values: {
+                      title: target.title,
+                      description: target.description,
+                      responsibleName: target.responsibleName,
+                      responsibleContactNumber: target.responsibleContactNumber,
+                      type: target.type,
+                      priority: target.priority,
+                      dueDate: target.dueDate ?? "",
+                    },
+                  });
+                }}
+              />
+              <ToolbarAction
+                icon={<Trash2 />}
+                variant="destructive"
+                label={plural(t.tickets.deleteSelectedLabel, selection.selectedCount)}
+                onClick={() => setBulkDeleteOpen(true)}
+              />
+            </BulkActionsBar>
+          </div>
+          <Table className="min-w-[48rem] table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-4">{t.tickets.titleLabel}</TableHead>
+                <SelectAllHead selection={selection} />
+                <TableHead className="w-[26%]">{t.tickets.titleLabel}</TableHead>
                 <TableHead>{t.tickets.issuer}</TableHead>
                 <TableHead>{t.tickets.responsibleName}</TableHead>
                 <TableHead>{t.tickets.created}</TableHead>
@@ -232,21 +309,21 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
               {query.isPending &&
                 Array.from({ length: 4 }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={6} className="px-4">
+                    <TableCell colSpan={7} className="px-4">
                       <Skeleton className="h-8 w-full" />
                     </TableCell>
                   </TableRow>
                 ))}
               {initialError && (
                 <TableRow>
-                  <TableCell colSpan={6} className="p-4">
+                  <TableCell colSpan={7} className="p-4">
                     <QueryError error={query.error} onRetry={() => void query.refetch()} />
                   </TableCell>
                 </TableRow>
               )}
               {!query.isPending && !initialError && rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6}>
+                  <TableCell colSpan={7}>
                     <Empty className="border-0 py-6">
                       <EmptyHeader>
                         <EmptyMedia variant="icon">
@@ -266,9 +343,17 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                   ref={row.id === requestedAction ? linkedRowRef : undefined}
                   tabIndex={row.id === requestedAction ? -1 : undefined}
                   aria-current={row.id === requestedAction ? "true" : undefined}
-                  data-state={row.id === requestedAction ? "selected" : undefined}
+                  // The deep-linked row is highlighted the same way a selected
+                  // one is, so selection wins where both apply rather than the
+                  // two fighting over the attribute.
+                  data-state={
+                    selection.isSelected(row.id) || row.id === requestedAction
+                      ? "selected"
+                      : undefined
+                  }
                 >
-                  <TableCell className="pl-4">
+                  <SelectRowCell selection={selection} id={row.id} name={row.title} />
+                  <TableCell>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-medium">{row.title}</p>
                       {row.id === requestedAction && (
@@ -289,7 +374,7 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                       {row.responsibleContactNumber}
                     </a>
                   </TableCell>
-                  <TableCell className="whitespace-nowrap text-muted-foreground">
+                  <TableCell className="truncate text-muted-foreground">
                     {formatDateTime(row.createdAt)}
                   </TableCell>
                   <TableCell>
@@ -334,36 +419,6 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                           <CircleCheck />
                         </Button>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t.tickets.editTicket}
-                        onClick={() =>
-                          setDialog({
-                            id: row.id,
-                            values: {
-                              title: row.title,
-                              description: row.description,
-                              responsibleName: row.responsibleName,
-                              responsibleContactNumber: row.responsibleContactNumber,
-                              type: row.type,
-                              priority: row.priority,
-                              dueDate: row.dueDate ?? "",
-                              assigneeId: row.assigneeId ?? "",
-                            },
-                          })
-                        }
-                      >
-                        <Pencil />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t.common.delete}
-                        onClick={() => setPendingDelete({ id: row.id, title: row.title })}
-                      >
-                        <Trash2 />
-                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -437,22 +492,34 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog
-        open={pendingDelete !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingDelete(null);
-        }}
-      >
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{t.tickets.deleteTitle}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {interpolate(t.tickets.deleteDescription, { title: pendingDelete?.title ?? "" })}
+            <AlertDialogTitle>
+              {plural(t.common.bulkDeleteTitle, selection.selectedCount)}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">{t.tickets.bulkDeleteDescription}</span>
+              {/* Names them, rather than only counting them. "Delete 12
+                  items?" is thin grounds for confirming something
+                  irreversible; a few titles let a mistake be recognised. */}
+              <span className="block font-medium text-foreground">
+                {summarizeSelection(
+                  selection.selectedRows.map((row) => row.title),
+                  t,
+                )}
+              </span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => void confirmDelete()}>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setBulkDeleteOpen(false);
+                void confirmBulkDelete();
+              }}
+            >
               {t.common.delete}
             </AlertDialogAction>
           </AlertDialogFooter>

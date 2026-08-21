@@ -4,16 +4,99 @@ import { resolve } from "node:path";
 
 import {
   analyzeProjectWorkbook,
+  discoverProjectWorkbookSheets,
   prepareConfirmedWorkbook,
   reviewProjectWorkbook,
   workbookHash,
   workbookPlanIdentitySignature,
   workbookPlanSchema,
 } from "./project-workbook";
+import { loadWorkbook } from "./boq-import-parse";
 
 setDefaultTimeout(15_000);
 
 const REFERENCE = resolve(import.meta.dir, "../../../reference/S-CURVE PLAN VS ACTUAL RSCH.xlsx");
+const DAILY_PROGRESS = resolve(import.meta.dir, "../../../reference/DAILY PROGRESS WEEK 16.xlsx");
+
+test("discovery accepts the daily workbook and reports the valid actual prefix", async () => {
+  const bytes = new Uint8Array(await Bun.file(DAILY_PROGRESS).arrayBuffer());
+  const workbook = await loadWorkbook(bytes);
+  const candidates = discoverProjectWorkbookSheets(workbook);
+
+  expect(workbook.worksheets).toHaveLength(23);
+  const candidate = candidates.find((sheet) => sheet.sheetName === "S CURVE NOV");
+  expect(candidate).toMatchObject({
+    sheetName: "S CURVE NOV",
+    state: "hidden",
+    rowCount: 75,
+    columnCount: 47,
+    knownSCurve: true,
+    actualSnapshotCount: 12,
+    latestActualPeriodIndex: 12,
+  });
+  expect(candidate?.latestActualPercent).toBeCloseTo(15.3167704327, 8);
+  expect(
+    candidate?.warnings.some(
+      (warning) => warning.row === 50 && warning.column === "V" && warning.message.includes("#REF!"),
+    ),
+  ).toBe(true);
+});
+
+test("analysis honors an explicitly selected reference worksheet", async () => {
+  const bytes = new Uint8Array(await Bun.file(DAILY_PROGRESS).arrayBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "S CURVE NOV");
+
+  expect(analysis.plan).toMatchObject({
+    profile: "reference-s-curve",
+    sheetName: "S CURVE NOV",
+    headerRow: 7,
+  });
+  expect(analysis.summary.actualSnapshotCount).toBe(12);
+  expect(analysis.summary.latestActualPercent).toBeCloseTo(15.3167704327, 8);
+  expect(
+    analysis.summary.validationErrors.some(
+      (error) => error.row === 50 && error.column === "V" && error.message.includes("#REF!"),
+    ),
+  ).toBe(true);
+});
+
+test("an explicit generic selection is not displaced by a recognized first sheet", async () => {
+  // This is the only test that deliberately enters the AI fallback. The model
+  // stays disabled, but the env module it lives behind still validates the
+  // application environment when imported from the repo-root test command.
+  process.env.SKIP_ENV_VALIDATION = "true";
+  const workbook = new ExcelJS.Workbook();
+  const reference = workbook.addWorksheet("S CURVE");
+  reference.getRow(7).values = [
+    null,
+    null,
+    "URAIAN PEKERJAAN",
+    "JUMLAH",
+    "BOBOT",
+    "MINGGU",
+    "MINGGU",
+    null,
+    null,
+    1,
+  ];
+  reference.getRow(8).getCell(10).value = new Date("2026-01-01T00:00:00Z");
+  reference.getRow(9).getCell(10).value = new Date("2026-01-07T00:00:00Z");
+  reference.getRow(12).getCell(3).value = "Reference project";
+  reference.getRow(13).values = [null, null, "Reference item", 100, 100, 1, 1];
+  reference.getRow(14).getCell(3).value = "TOTAL";
+
+  const selected = workbook.addWorksheet("Selected BoQ");
+  selected.addRow(["Description", "Amount", "Start", "Finish"]);
+  selected.addRow(["Selected item", 100, 1, 1]);
+  const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, selected.name);
+
+  expect(analysis.plan).toMatchObject({
+    sheetName: "Selected BoQ",
+    headerRow: 1,
+  });
+  expect(["generic-ai", "generic-deterministic"]).toContain(analysis.plan.profile);
+});
 
 test("the reference workbook produces a high-confidence guided import proposal", async () => {
   const analysis = await analyzeProjectWorkbook(new Uint8Array(await Bun.file(REFERENCE).arrayBuffer()));

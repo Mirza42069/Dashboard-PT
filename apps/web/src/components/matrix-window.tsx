@@ -3,6 +3,7 @@
 import type { UIEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { MonthBandCell } from "@/components/month-band-row";
 import type { PeriodHeaderModel, PeriodLike } from "@/lib/period-header";
 import {
   getFullMatrixWindow,
@@ -24,6 +25,17 @@ type UseMatrixWindowOptions = {
   leadingWidth: number;
   stickyLeadingWidth: number;
   windowed: boolean;
+  /**
+   * Whether columns are virtualised as well as rows. On by default.
+   *
+   * A grid that fits itself to its container must turn this off, and turning it
+   * off is not optional there: column windowing reads `scrollLeft`, which on a
+   * grid that cannot scroll sideways is permanently 0, so the window would pin
+   * itself to the first `MATRIX_COLUMN_LIMIT` columns and silently drop every
+   * column past them. Rows keep virtualising either way — a BoQ runs to
+   * hundreds of lines and the container still scrolls vertically.
+   */
+  windowColumns?: boolean;
 };
 
 const DEFAULT_VIEWPORT_HEIGHT = 576;
@@ -53,6 +65,35 @@ function calculateWindow(
     return getFullMatrixWindow(options.rowCount, options.columnCount);
   }
 
+  if (options.windowColumns === false) {
+    const full = getFullMatrixWindow(options.rowCount, options.columnCount);
+    return {
+      rows: calculateRowWindow(options, rowSizes, measuredHeaderHeight, element, scrollTopAdjustment),
+      columns: full.columns,
+    };
+  }
+
+  return calculateFullWindow(options, rowSizes, measuredHeaderHeight, element, scrollTopAdjustment);
+}
+
+function calculateRowWindow(
+  options: UseMatrixWindowOptions,
+  rowSizes: ReadonlyMap<number, number>,
+  measuredHeaderHeight: number,
+  element?: HTMLDivElement | null,
+  scrollTopAdjustment = 0,
+) {
+  return calculateFullWindow(options, rowSizes, measuredHeaderHeight, element, scrollTopAdjustment)
+    .rows;
+}
+
+function calculateFullWindow(
+  options: UseMatrixWindowOptions,
+  rowSizes: ReadonlyMap<number, number>,
+  measuredHeaderHeight: number,
+  element?: HTMLDivElement | null,
+  scrollTopAdjustment = 0,
+) {
   return getMatrixWindow({
     ...options,
     rowHeight: options.estimatedRowHeight,
@@ -75,6 +116,19 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
   const headerHeightRef = useRef(options.estimatedHeaderHeight);
   const pendingScrollAdjustmentRef = useRef(0);
 
+  /**
+   * The container's inner width, for callers that size themselves to it.
+   *
+   * Measured here rather than from a second ResizeObserver of the caller's
+   * own: this hook already observes exactly the element they would have to
+   * watch, and two observers on one node is two chances to disagree.
+   *
+   * Zero until the first measurement. Callers must treat that as "not measured
+   * yet" and not as "no room" — a fitter that believed it would fold every
+   * month for one frame and then unfold them.
+   */
+  const [containerWidth, setContainerWidth] = useState(0);
+
   const [state, setState] = useState<{
     window: MatrixWindow;
     rowCount: number;
@@ -88,6 +142,14 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
   }));
 
   function update(element: HTMLDivElement | null, force = false) {
+    if (element) {
+      // A 1px deadband. Sub-pixel layout noise here would feed straight back
+      // into the caller's column widths, which change the table's width, which
+      // the observer sees — the loop this whole measurement has to avoid.
+      const width = Math.floor(element.clientWidth);
+      setContainerWidth((current) => (Math.abs(current - width) > 1 ? width : current));
+    }
+
     const next = calculateWindow(
       options,
       rowSizesRef.current,
@@ -222,6 +284,7 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
     scrollRef,
     rowWindow: window.rows,
     columnWindow: window.columns,
+    containerWidth,
     onScroll: (event: UIEvent<HTMLDivElement>) => update(event.currentTarget),
   };
 }
@@ -260,6 +323,8 @@ export function WindowedMonthBandRow<P extends PeriodLike>({
   trailingColSpan = 0,
   beforeSize,
   afterSize,
+  onToggleMonth,
+  gridId,
 }: {
   header: PeriodHeaderModel<P>;
   leadingLabel: string;
@@ -267,6 +332,8 @@ export function WindowedMonthBandRow<P extends PeriodLike>({
   trailingColSpan?: number;
   beforeSize: number;
   afterSize: number;
+  onToggleMonth?: (monthKey: string) => void;
+  gridId?: string;
 }) {
   if (header.months.length === 0) return null;
 
@@ -280,15 +347,15 @@ export function WindowedMonthBandRow<P extends PeriodLike>({
         <span className="sr-only">{leadingLabel}</span>
       </th>
       <MatrixColumnSpacer size={beforeSize} header />
+      {/* The same cell the unwindowed band draws — see MonthBandCell. Only the
+          spacers either side of it are this component's business. */}
       {header.months.map((month) => (
-        <th
+        <MonthBandCell
           key={month.monthKey}
-          scope="colgroup"
-          colSpan={month.span}
-          className="border-l px-2 py-1 text-center text-xs font-medium uppercase tracking-wide text-muted-foreground first:border-l-0"
-        >
-          {month.label}
-        </th>
+          month={month}
+          onToggleMonth={onToggleMonth}
+          gridId={gridId}
+        />
       ))}
       <MatrixColumnSpacer size={afterSize} header />
       {trailingColSpan > 0 && <th aria-hidden="true" colSpan={trailingColSpan} />}

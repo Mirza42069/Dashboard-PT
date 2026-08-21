@@ -3,14 +3,22 @@
 import { cn } from "@DashboardV2/ui/lib/utils";
 
 import { useT } from "@/i18n/provider";
+import { progressFill } from "@/lib/progress-tone";
 
 /**
  * A horizontal magnitude meter for one value against one maximum.
  *
- * Colour follows the dataviz rules: magnitude gets a single hue drawn from the
- * theme's sequential ramp (--chart-3), not a categorical palette. The overflow
- * state switches to --destructive *and* adds a written label, so the warning is
- * never carried by colour alone.
+ * Colour comes from the value by default — the progress bands in
+ * lib/progress-tone.ts, shared with TickBar so the app's two bar idioms agree.
+ * It used to be one fixed step of the chart ramp, which meant every meter in
+ * the product was the same blue whatever it said.
+ *
+ * The "magnitude" tone opts back out of that, for meters whose value is not
+ * progress towards something good. Share-of-delay is the case that forced it:
+ * the progress ramp would paint the worst contributor green.
+ *
+ * The overflow state switches to --destructive *and* adds a written label, so
+ * the warning is never carried by colour alone.
  *
  * Drawn as discrete rectangular segments rather than one continuous pill. The
  * blocks are a reading aid — ten of them means a glance lands on "about six
@@ -35,8 +43,13 @@ export function Meter({
   ariaLabel?: string;
   /** Lower this where the meter sits in a narrow column. */
   segments?: number;
-  /** Semantic status when this meter represents more than neutral magnitude. */
-  tone?: "default" | "success" | "destructive";
+  /**
+   * Overrides the value-derived colour.
+   *
+   * "success"/"destructive" state a verdict; "magnitude" keeps a single hue for
+   * a quantity the progress ramp would misdescribe.
+   */
+  tone?: "default" | "magnitude" | "success" | "destructive";
   className?: string;
 }) {
   const t = useT();
@@ -45,6 +58,14 @@ export function Meter({
   // Clamped so an over-limit bar fills the track rather than overflowing it —
   // the overflow is communicated by the colour change and the label instead.
   const filled = Math.min(Math.max(ratio, 0), 1) * segments;
+  const fill =
+    isOver || tone === "destructive"
+      ? "bg-destructive"
+      : tone === "success"
+        ? "bg-success"
+        : tone === "magnitude"
+          ? "bg-[var(--chart-2)]"
+          : progressFill(value, max);
 
   return (
     <div className={cn("space-y-1.5", className)}>
@@ -71,14 +92,7 @@ export function Meter({
              * readout of the number beneath it while still reading as blocks.
              */}
             <div
-              className={cn(
-                "h-full transition-[width] duration-300",
-                isOver || tone === "destructive"
-                  ? "bg-destructive"
-                  : tone === "success"
-                    ? "bg-success"
-                    : "bg-[var(--chart-3)]",
-              )}
+              className={cn("h-full transition-[width] duration-300", fill)}
               style={{ width: `${Math.min(Math.max(filled - index, 0), 1) * 100}%` }}
             />
           </div>

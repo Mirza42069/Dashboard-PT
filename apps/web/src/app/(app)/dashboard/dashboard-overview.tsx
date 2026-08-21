@@ -70,8 +70,9 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
 
       {/*
         The counts come from the unfiltered page-one payload, which the server
-        returns identically on every page and for every filter — so the four
-        cards keep stating the whole picture while one of them is pressed.
+        returns identically on every page and for every filter — so the cards
+        keep stating the whole picture while one of them is pressed, and a card
+        does not vanish just because the filter narrowed the list past it.
       */}
       <FilterCards
         counts={firstPage?.counts}

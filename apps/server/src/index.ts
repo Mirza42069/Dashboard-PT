@@ -4,19 +4,24 @@ import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
 import { auth } from "@DashboardV2/auth";
 import { projectAccessFilter, resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
+import { MAX_AI_WORKBOOK_BYTES } from "@DashboardV2/api/lib/workbook-limits";
 import { TRIAL_AI_EXHAUSTED, trialHasEnded } from "@DashboardV2/api/lib/trial";
 import { db } from "@DashboardV2/db";
 import {
   notePhoto,
   project,
+  projectActualCurve,
   projectMember,
   projectNote,
+  reportingPeriod,
   user,
   workbookRequestLimit,
 } from "@DashboardV2/db/schema";
-import { trustedOrigins } from "@DashboardV2/env/server";
+import { env, trustedOrigins } from "@DashboardV2/env/server";
 import { trpcServer } from "@hono/trpc-server";
-import { and, eq, exists, sql } from "drizzle-orm";
+import { del } from "@vercel/blob";
+import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
+import { and, asc, eq, exists, sql } from "drizzle-orm";
 import { Hono, type Context as HonoRequestContext } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
@@ -27,6 +32,14 @@ import {
   WORKBOOK_TRANSPORT_CONTENT_TYPE,
   WorkbookTransportError,
 } from "./workbook-transport";
+import {
+  assertTemporaryWorkbookPath,
+  consumeTemporaryWorkbook,
+  discardTemporaryWorkbook,
+  purgeExpiredTemporaryWorkbooks,
+  TemporaryWorkbookError,
+  XLSX_CONTENT_TYPE,
+} from "./temporary-workbook";
 
 /**
  * Mirrors MAX_IMPORT_BYTES in ./boq-import, which cannot be imported here — that
@@ -116,7 +129,14 @@ async function activeSession(c: HonoRequestContext) {
  * that has no company assigned would see every photo <img> break with a generic
  * error instead of the sentence explaining what is wrong. Map it instead.
  */
-async function resolveCompany(sessionUser: Parameters<typeof resolveCompanyIdForSession>[0], headers: Headers) {
+type CompanyResolution =
+  | { companyId: string }
+  | { error: string; status: 403 | 409 };
+
+async function resolveCompany(
+  sessionUser: Parameters<typeof resolveCompanyIdForSession>[0],
+  headers: Headers,
+): Promise<CompanyResolution> {
   try {
     return { companyId: await resolveCompanyIdForSession(sessionUser, headers) };
   } catch (error) {
@@ -335,7 +355,24 @@ app.get("/projects/export", async (c) => {
  * signals by throwing TRPCError, which outside the tRPC pipeline escapes as a
  * bare 500.
  */
-async function requireProjectWrite(c: HonoRequestContext, projectId: string) {
+type ProjectWriteAccess =
+  | { error: string; status: 401 | 403 | 404 | 409 }
+  | {
+      session: AuthSession;
+      companyId: string;
+      project: {
+        code: string;
+        name: string;
+        client: string | null;
+        location: string | null;
+        updatedAt: Date;
+      };
+    };
+
+async function requireProjectWrite(
+  c: HonoRequestContext,
+  projectId: string,
+): Promise<ProjectWriteAccess> {
   const session = await activeSession(c);
   if (!session) return { error: "Unauthorized", status: 401 as const };
   if (!hasPermission(roleOf(session.user), "project:write")) {
@@ -346,7 +383,13 @@ async function requireProjectWrite(c: HonoRequestContext, projectId: string) {
   if ("error" in scope) return { error: scope.error, status: scope.status };
 
   const [visible] = await db
-    .select({ code: project.code, name: project.name })
+    .select({
+      code: project.code,
+      name: project.name,
+      client: project.client,
+      location: project.location,
+      updatedAt: project.updatedAt,
+    })
     .from(project)
     .where(
       and(
@@ -371,6 +414,24 @@ function readUpload(
 }
 
 async function readWorkbookRequest(c: HonoRequestContext) {
+  if ((c.req.header("content-type") ?? "").startsWith("application/json")) {
+    try {
+      const parsed = workbookUpdateBody(await c.req.json());
+      const session = await activeSession(c);
+      if (!session) return { error: "Unauthorized", status: 400 as const };
+      return await consumeTemporaryWorkbook({
+        pathname: parsed.pathname,
+        projectId: `project-import/${session.user.id}`,
+        run: async ({ bytes }) => ({ bytes, fields: parsed.body, filename: parsed.filename }),
+      });
+    } catch (error) {
+      if (error instanceof TemporaryWorkbookError) {
+        return { error: error.message, status: 400 as const };
+      }
+      throw error;
+    }
+  }
+
   if ((c.req.header("content-type") ?? "").startsWith(WORKBOOK_TRANSPORT_CONTENT_TYPE)) {
     try {
       const decoded = decodeWorkbookTransport(new Uint8Array(await c.req.arrayBuffer()));
@@ -403,7 +464,9 @@ async function readWorkbookRequest(c: HonoRequestContext) {
 function isPublicImportError(error: unknown) {
   return (
     error instanceof Error &&
-    ((typeof error === "object" && "kind" in error) || error.name === "WorkbookLimitError")
+    ((typeof error === "object" && "kind" in error) ||
+      error.name === "WorkbookLimitError" ||
+      error.name === "TemporaryWorkbookError")
   );
 }
 
@@ -427,9 +490,7 @@ async function requireProjectCreate(c: HonoRequestContext): Promise<ProjectCreat
     return { error: "Not found", status: 404 as const };
   }
   const scope = await resolveCompany(session.user, c.req.raw.headers);
-  if (!scope.companyId) {
-    return { error: scope.error ?? "No company assigned", status: scope.status ?? 409 };
-  }
+  if ("error" in scope) return { error: scope.error, status: scope.status };
   return { session, companyId: scope.companyId };
 }
 
@@ -459,13 +520,24 @@ async function consumeWorkbookRequestLimit(userId: string, scope: string, limit:
  * charged — the WHERE excludes it, and `charged: false` says so.
  */
 async function spendTrialAiCredit(userId: string) {
-  const [row] = await db
-    .update(user)
-    .set({ trialAiCredits: sql`${user.trialAiCredits} - 1` })
-    .where(and(eq(user.id, userId), sql`${user.trialAiCredits} > 0`))
-    .returning({ remaining: user.trialAiCredits });
+  const chargeId = crypto.randomUUID();
+  const charged = await db.execute<{ remaining: number }>(sql`
+    with charged as (
+      update "user"
+      set trial_ai_credits = trial_ai_credits - 1
+      where id = ${userId} and trial_ai_credits > 0
+      returning id, trial_ai_credits as remaining
+    ), recorded as (
+      insert into ai_credit_refund (id, user_id, status)
+      select ${chargeId}, id, 'pending' from charged
+      returning user_id
+    )
+    select charged.remaining
+    from charged inner join recorded on recorded.user_id = charged.id
+  `);
+  const row = charged.rows[0];
 
-  if (row) return { charged: true as const, remaining: row.remaining ?? 0 };
+  if (row) return { charged: true as const, chargeId, remaining: row.remaining ?? 0 };
 
   // Either not a trial account (null balance) or genuinely out. Only the
   // second is a refusal, so ask which.
@@ -477,22 +549,468 @@ async function spendTrialAiCredit(userId: string) {
 }
 
 /** Hands a credit back when the model was never reached. */
-async function refundTrialAiCredit(userId: string) {
-  await db
-    .update(user)
-    .set({ trialAiCredits: sql`${user.trialAiCredits} + 1` })
-    .where(and(eq(user.id, userId), sql`${user.trialAiCredits} is not null`));
+async function settleTrialAiCredit(userId: string, chargeId: string, status: "spent" | "refunded") {
+  await db.execute(sql`
+    with settled as (
+      update ai_credit_refund
+      set status = ${status}, settled_at = now()
+      where id = ${chargeId} and user_id = ${userId} and status = 'pending'
+      returning user_id
+    )
+    update "user"
+    set trial_ai_credits = trial_ai_credits + case when ${status} = 'refunded' then 1 else 0 end
+    from settled
+    where "user".id = settled.user_id and "user".trial_ai_credits is not null
+  `);
 }
+
+function workbookUpdateBody(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TemporaryWorkbookError("The workbook request is invalid.");
+  }
+  const body = value as Record<string, unknown>;
+  if (typeof body.pathname !== "string") {
+    throw new TemporaryWorkbookError("The temporary workbook reference is missing.");
+  }
+  const filename =
+    typeof body.filename === "string" && body.filename.trim()
+      ? body.filename.slice(0, 255)
+      : "workbook.xlsx";
+  return { body, pathname: body.pathname, filename };
+}
+
+function workbookUpdateFailure(error: unknown) {
+  const invalidRequest = isInvalidImportRequest(error);
+  if (!isPublicImportError(error) && !invalidRequest) logUnexpectedImportError(error);
+  const conflict =
+    error instanceof Error && typeof error === "object" && "kind" in error && error.kind === "conflict";
+  return {
+    body: {
+      error:
+        isPublicImportError(error) && error instanceof Error
+          ? error.message
+          : "The workbook update could not be completed.",
+      code:
+        error instanceof Error && typeof error === "object" && "code" in error
+          ? (error as { code?: string | null }).code
+          : null,
+    },
+    status: (conflict ? 409 : isPublicImportError(error) || invalidRequest ? 422 : 500) as
+      | 409
+      | 422
+      | 500,
+  };
+}
+
+app.post("/projects/:id/workbook-update/upload", async (c) => {
+  const blobToken = env.BLOB_READ_WRITE_TOKEN;
+  if (!blobToken || !env.CRON_SECRET) {
+    return c.json({ error: "Temporary workbook uploads are not configured." }, 503);
+  }
+
+  let body: HandleUploadBody;
+  try {
+    body = (await c.req.json()) as HandleUploadBody;
+  } catch {
+    return c.json({ error: "The upload request is invalid." }, 400);
+  }
+
+  try {
+    const response = await handleUpload({
+      body,
+      request: c.req.raw,
+      token: blobToken,
+      onBeforeGenerateToken: async (pathname, clientPayload) => {
+        const projectId = c.req.param("id");
+        const access = await requireProjectWrite(c, projectId);
+        if (!("session" in access)) throw new TemporaryWorkbookError(access.error);
+        if (!(await consumeWorkbookRequestLimit(access.session.user.id, "update-upload", 40))) {
+          throw new TemporaryWorkbookError("Too many workbook uploads. Try again in a few minutes.");
+        }
+        assertTemporaryWorkbookPath(pathname, `${projectId}/${access.session.user.id}`);
+        const payload = clientPayload ? (JSON.parse(clientPayload) as unknown) : null;
+        if (
+          !payload ||
+          typeof payload !== "object" ||
+          Array.isArray(payload) ||
+          (payload as { projectId?: unknown }).projectId !== projectId
+        ) {
+          throw new TemporaryWorkbookError("The upload is not assigned to this project.");
+        }
+        return {
+          allowedContentTypes: [XLSX_CONTENT_TYPE],
+          maximumSizeInBytes: MAX_AI_WORKBOOK_BYTES,
+          addRandomSuffix: true,
+          cacheControlMaxAge: 60,
+          validUntil: Date.now() + 10 * 60 * 1000,
+          callbackUrl: `${env.CORS_ORIGIN}/api/projects/${projectId}/workbook-update/upload`,
+          tokenPayload: JSON.stringify({ projectId, userId: access.session.user.id }),
+        };
+      },
+      onUploadCompleted: async ({ blob, tokenPayload }) => {
+        try {
+          const payload = JSON.parse(tokenPayload ?? "") as {
+            projectId?: unknown;
+            userId?: unknown;
+          };
+          if (typeof payload.projectId !== "string") throw new Error();
+          if (typeof payload.userId !== "string") throw new Error();
+          assertTemporaryWorkbookPath(blob.pathname, `${payload.projectId}/${payload.userId}`);
+        } catch {
+          // A callback that cannot be tied back to its authorized project is not
+          // allowed to leave an object behind.
+          await del(blob.pathname);
+          throw new TemporaryWorkbookError("The completed workbook upload is invalid.");
+        }
+      },
+    });
+    return c.json(response);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "The workbook could not be uploaded." },
+      400,
+    );
+  }
+});
+
+app.post("/project-import/upload", async (c) => {
+  const blobToken = env.BLOB_READ_WRITE_TOKEN;
+  if (!blobToken || !env.CRON_SECRET) {
+    return c.json({ error: "Temporary workbook uploads are not configured." }, 503);
+  }
+
+  let body: HandleUploadBody;
+  try {
+    body = (await c.req.json()) as HandleUploadBody;
+  } catch {
+    return c.json({ error: "The upload request is invalid." }, 400);
+  }
+
+  try {
+    const response = await handleUpload({
+      body,
+      request: c.req.raw,
+      token: blobToken,
+      onBeforeGenerateToken: async (pathname) => {
+        const access = await requireProjectCreate(c);
+        if (!("session" in access)) throw new TemporaryWorkbookError(access.error);
+        if (!(await consumeWorkbookRequestLimit(access.session.user.id, "create-upload", 30))) {
+          throw new TemporaryWorkbookError("Too many workbook uploads. Try again in a few minutes.");
+        }
+        assertTemporaryWorkbookPath(pathname, `project-import/${access.session.user.id}`);
+        return {
+          allowedContentTypes: [XLSX_CONTENT_TYPE],
+          maximumSizeInBytes: MAX_AI_WORKBOOK_BYTES,
+          addRandomSuffix: true,
+          cacheControlMaxAge: 60,
+          validUntil: Date.now() + 10 * 60 * 1000,
+          callbackUrl: `${env.CORS_ORIGIN}/api/project-import/upload`,
+          tokenPayload: JSON.stringify({ userId: access.session.user.id }),
+        };
+      },
+      onUploadCompleted: async ({ blob, tokenPayload }) => {
+        try {
+          const payload = JSON.parse(tokenPayload ?? "") as { userId?: unknown };
+          if (typeof payload.userId !== "string") throw new Error();
+          assertTemporaryWorkbookPath(blob.pathname, `project-import/${payload.userId}`);
+        } catch {
+          await del(blob.pathname);
+          throw new TemporaryWorkbookError("The completed workbook upload is invalid.");
+        }
+      },
+    });
+    return c.json(response);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "The workbook could not be uploaded." },
+      400,
+    );
+  }
+});
+
+app.post("/projects/:id/workbook-update/discover", async (c) => {
+  const projectId = c.req.param("id");
+  const access = await requireProjectWrite(c, projectId);
+  if (!("session" in access)) return c.json({ error: access.error }, access.status);
+
+  try {
+    const parsed = workbookUpdateBody(await c.req.json());
+    const owner = `${projectId}/${access.session.user.id}`;
+    if (!(await consumeWorkbookRequestLimit(access.session.user.id, "update-discover", 20))) {
+      await discardTemporaryWorkbook(parsed.pathname, owner);
+      return c.json({ error: "Too many workbook uploads. Try again in a few minutes." }, 429);
+    }
+    return c.json(
+      await consumeTemporaryWorkbook({
+        pathname: parsed.pathname,
+        projectId: owner,
+        run: async ({ bytes }) => {
+          const { loadWorkbook } = await import("./boq-import-parse");
+          const { discoverProjectWorkbookSheets } = await import("./project-workbook");
+          const workbook = await loadWorkbook(bytes);
+          return { sheets: discoverProjectWorkbookSheets(workbook) };
+        },
+      }),
+    );
+  } catch (error) {
+    const failure = workbookUpdateFailure(error);
+    return c.json(failure.body, failure.status);
+  }
+});
+
+app.post("/projects/:id/workbook-update/analyze", async (c) => {
+  const projectId = c.req.param("id");
+  const access = await requireProjectWrite(c, projectId);
+  if (!("session" in access)) return c.json({ error: access.error }, access.status);
+  let parsed: ReturnType<typeof workbookUpdateBody>;
+  try {
+    parsed = workbookUpdateBody(await c.req.json());
+  } catch (error) {
+    const failure = workbookUpdateFailure(error);
+    return c.json(failure.body, failure.status);
+  }
+  const owner = `${projectId}/${access.session.user.id}`;
+  if (!(await consumeWorkbookRequestLimit(access.session.user.id, "update-analyze", 10))) {
+    await discardTemporaryWorkbook(parsed.pathname, owner);
+    return c.json({ error: "Too many workbook analyses. Try again in a few minutes." }, 429);
+  }
+
+  const credit = await spendTrialAiCredit(access.session.user.id);
+  if (!credit.charged && credit.exhausted) {
+    await discardTemporaryWorkbook(parsed.pathname, owner);
+    return c.json(
+      { error: "This trial's AI import allowance is used up.", code: TRIAL_AI_EXHAUSTED },
+      403,
+    );
+  }
+  let settled = false;
+  let spent = false;
+  const refund = async () => {
+    if (!credit.charged || settled) return;
+    await settleTrialAiCredit(access.session.user.id, credit.chargeId, "refunded");
+    settled = true;
+  };
+
+  try {
+    const selectedSheetName = parsed.body.selectedSheetName;
+    if (typeof selectedSheetName !== "string" || !selectedSheetName) {
+      await discardTemporaryWorkbook(parsed.pathname, owner);
+      throw new TemporaryWorkbookError("Choose a worksheet to analyze.");
+    }
+    const existingActualsPromise = db
+      .select({
+        periodIndex: reportingPeriod.periodIndex,
+        cumulativePercent: projectActualCurve.cumulativePercent,
+      })
+      .from(projectActualCurve)
+      .innerJoin(reportingPeriod, eq(reportingPeriod.id, projectActualCurve.periodId))
+      .where(eq(projectActualCurve.projectId, projectId))
+      .orderBy(asc(reportingPeriod.periodIndex));
+    const progressReviewPromise = db.execute<{
+      activeVersionId: string | null;
+      progressEntryCount: number;
+      latestProgressUpdatedAt: Date | string | null;
+    }>(sql`
+      select
+        active.id as "activeVersionId",
+        count(entry.id)::integer as "progressEntryCount",
+        date_trunc('milliseconds', max(entry.updated_at)) as "latestProgressUpdatedAt"
+      from boq_version active
+      left join boq_item item on item.boq_version_id = active.id
+      left join progress_entry entry on entry.boq_item_id = item.id
+      where active.project_id = ${projectId} and active.status = 'active'
+      group by active.id
+      limit 1
+    `);
+    const analysis = await consumeTemporaryWorkbook({
+      pathname: parsed.pathname,
+      projectId: owner,
+      run: async ({ bytes }) => {
+        const { analyzeProjectWorkbook } = await import("./project-workbook");
+        return analyzeProjectWorkbook(bytes, undefined, selectedSheetName, async () => {
+          if (credit.charged) {
+            await settleTrialAiCredit(access.session.user.id, credit.chargeId, "spent");
+          }
+          spent = true;
+          settled = true;
+        });
+      },
+    });
+    if (!settled) await refund();
+    const existingActualSnapshots = (await existingActualsPromise).map((snapshot) => ({
+      periodIndex: snapshot.periodIndex,
+      cumulativePercent: Number(snapshot.cumulativePercent),
+    }));
+    const progressReview = (await progressReviewPromise).rows[0] ?? {
+      activeVersionId: null,
+      progressEntryCount: 0,
+      latestProgressUpdatedAt: null,
+    };
+    const { updatedAt, ...currentProject } = access.project;
+    const latestProgressUpdatedAt = progressReview.latestProgressUpdatedAt
+      ? new Date(progressReview.latestProgressUpdatedAt).toISOString()
+      : null;
+    const reviewed = {
+      ...analysis,
+      currentProject,
+      existingActualSnapshots,
+      reviewState: {
+        projectUpdatedAt: updatedAt.toISOString(),
+        existingActualSnapshots,
+        activeVersionId: progressReview.activeVersionId,
+        progressEntryCount: Number(progressReview.progressEntryCount),
+        latestProgressUpdatedAt,
+      },
+    };
+    return c.json(
+      credit.charged && spent
+        ? { ...reviewed, trialAiCreditsLeft: credit.remaining }
+        : reviewed,
+    );
+  } catch (error) {
+    await refund();
+    const failure = workbookUpdateFailure(error);
+    return c.json(failure.body, failure.status);
+  }
+});
+
+app.post("/projects/:id/workbook-update/commit", async (c) => {
+  const projectId = c.req.param("id");
+  const access = await requireProjectWrite(c, projectId);
+  if (!("session" in access)) return c.json({ error: access.error }, access.status);
+
+  try {
+    const parsed = workbookUpdateBody(await c.req.json());
+    const owner = `${projectId}/${access.session.user.id}`;
+    if (!(await consumeWorkbookRequestLimit(access.session.user.id, "update-commit", 10))) {
+      await discardTemporaryWorkbook(parsed.pathname, owner);
+      return c.json({ error: "Too many workbook updates. Try again in a few minutes." }, 429);
+    }
+    const selectedSheetName = parsed.body.selectedSheetName;
+    const sections = parsed.body.sections;
+    if (typeof selectedSheetName !== "string" || !selectedSheetName) {
+      await discardTemporaryWorkbook(parsed.pathname, owner);
+      throw new TemporaryWorkbookError("Choose a worksheet to import.");
+    }
+    if (!sections || typeof sections !== "object" || Array.isArray(sections)) {
+      await discardTemporaryWorkbook(parsed.pathname, owner);
+      throw new TemporaryWorkbookError("Choose which project sections to update.");
+    }
+    if (!parsed.body.plan || typeof parsed.body.plan !== "object" || Array.isArray(parsed.body.plan)) {
+      await discardTemporaryWorkbook(parsed.pathname, owner);
+      throw new TemporaryWorkbookError("Review the workbook before applying this update.");
+    }
+    const requestedSections = {
+      projectDetails: (sections as Record<string, unknown>).projectDetails === true,
+      boq: (sections as Record<string, unknown>).boq === true,
+      schedule: (sections as Record<string, unknown>).schedule === true,
+      progress: (sections as Record<string, unknown>).progress === true,
+    };
+    if (
+      requestedSections.projectDetails &&
+      !hasPermission(roleOf(access.session.user), "project:update")
+    ) {
+      await discardTemporaryWorkbook(parsed.pathname, owner);
+      return c.json({ error: "Not found" }, 404);
+    }
+    const result = await consumeTemporaryWorkbook({
+      pathname: parsed.pathname,
+      projectId: owner,
+      run: async ({ bytes }) => {
+        const { commitProjectWorkbookUpdate } = await import("./project-workbook-update");
+        return commitProjectWorkbookUpdate({
+          bytes,
+          filename: parsed.filename,
+          projectId,
+          companyId: access.companyId,
+          selectedSheetName,
+          plan: parsed.body.plan,
+          sections: requestedSections,
+          reviewState: parsed.body.reviewState,
+          confirmed:
+            parsed.body.confirmed &&
+            typeof parsed.body.confirmed === "object" &&
+            !Array.isArray(parsed.body.confirmed)
+              ? parsed.body.confirmed
+              : undefined,
+          actor: {
+            id: access.session.user.id,
+            name: access.session.user.name || access.session.user.email,
+          },
+        });
+      },
+    });
+    await recordActivity(
+      {
+        session: access.session,
+        companyId: access.companyId,
+      },
+      {
+        action: "updated",
+        entityType: "project",
+        entityId: projectId,
+        entityLabel: access.project.code,
+        detail: `Workbook update: ${result.sectionsUpdated.join(", ")}`,
+      },
+    );
+    return c.json(result);
+  } catch (error) {
+    const failure = workbookUpdateFailure(error);
+    return c.json(failure.body, failure.status);
+  }
+});
+
+app.get("/internal/temporary-workbooks/cleanup", async (c) => {
+  if (!env.CRON_SECRET || c.req.header("authorization") !== `Bearer ${env.CRON_SECRET}`) {
+    return c.json({ error: "Not found" }, 404);
+  }
+  return c.json({ deleted: await purgeExpiredTemporaryWorkbooks() });
+});
+
+app.post("/project-import/discover", async (c) => {
+  const access = await requireProjectCreate(c);
+  if (!("session" in access)) return c.json({ error: access.error }, access.status);
+  const upload = await readWorkbookRequest(c);
+  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
+  if (!(await consumeWorkbookRequestLimit(access.session.user.id, "discover", 20))) {
+    return c.json({ error: "Too many workbook uploads. Try again in a few minutes." }, 429);
+  }
+
+  try {
+    const { loadWorkbook } = await import("./boq-import-parse");
+    const { discoverProjectWorkbookSheets } = await import("./project-workbook");
+    const workbook = await loadWorkbook(upload.bytes);
+    return c.json({ sheets: discoverProjectWorkbookSheets(workbook) });
+  } catch (error) {
+    const invalidRequest = isInvalidImportRequest(error);
+    if (!isPublicImportError(error) && !invalidRequest) logUnexpectedImportError(error);
+    return c.json(
+      {
+        error:
+          isPublicImportError(error) && error instanceof Error
+            ? error.message
+            : "The workbook worksheets could not be read.",
+      },
+      (isPublicImportError(error) ? 400 : 500) as 400 | 500,
+    );
+  }
+});
 
 app.post("/project-import/analyze", async (c) => {
   const access = await requireProjectCreate(c);
   if (!("session" in access)) return c.json({ error: access.error }, access.status);
+
+  // One-use Blob requests are consumed before any application-level refusal,
+  // so an exhausted allowance or rate limit cannot leave the upload behind.
+  const upload = await readWorkbookRequest(c);
+  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
   if (!(await consumeWorkbookRequestLimit(access.session.user.id, "analyze", 10))) {
     return c.json({ error: "Too many workbook analyses. Try again in a few minutes." }, 429);
   }
-
-  const upload = await readWorkbookRequest(c);
-  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
+  const selectedSheetName = upload.fields.selectedSheetName;
+  if (typeof selectedSheetName !== "string" || !selectedSheetName) {
+    return c.json({ error: "Choose a worksheet to analyze." }, 400);
+  }
 
   // Charged up front and handed back below if the model turned out not to be
   // needed. The other order — analyse, then charge — cannot refuse anything,
@@ -514,25 +1032,30 @@ app.post("/project-import/analyze", async (c) => {
    * answered cannot hand back tokens that were really burned.
    */
   let settled = false;
+  let spent = false;
   const handBackCredit = async () => {
     if (!credit.charged || settled) return;
+    await settleTrialAiCredit(access.session.user.id, credit.chargeId, "refunded");
     settled = true;
-    await refundTrialAiCredit(access.session.user.id);
   };
 
   /** Shared by both response shapes, so they cannot disagree about the outcome. */
   const run = async (onStage: (stage: string) => void) => {
     const { analyzeProjectWorkbook } = await import("./project-workbook");
-    const analysis = await analyzeProjectWorkbook(upload.bytes, onStage);
-    // The reference Indonesian S-curve template is recognised without the
-    // model. Charging for it would sell an allowance the import did not use.
-    if (credit.charged && analysis.plan.profile !== "generic-ai") {
+    const analysis = await analyzeProjectWorkbook(upload.bytes, onStage, selectedSheetName, async () => {
+      if (credit.charged) {
+        await settleTrialAiCredit(access.session.user.id, credit.chargeId, "spent");
+      }
+      spent = true;
+      settled = true;
+    });
+    if (!settled) {
       await handBackCredit();
       return analysis;
     }
-    // The model answered. Whatever happens downstream, this one is spent.
-    settled = true;
-    return credit.charged ? { ...analysis, trialAiCreditsLeft: credit.remaining } : analysis;
+    return credit.charged && spent
+      ? { ...analysis, trialAiCreditsLeft: credit.remaining }
+      : analysis;
   };
 
   const failure = async (error: unknown) => {
@@ -600,11 +1123,11 @@ app.post("/project-import/analyze", async (c) => {
 app.post("/project-import/review", async (c) => {
   const access = await requireProjectCreate(c);
   if (!("session" in access)) return c.json({ error: access.error }, access.status);
+  const upload = await readWorkbookRequest(c);
+  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
   if (!(await consumeWorkbookRequestLimit(access.session.user.id, "review", 30))) {
     return c.json({ error: "Too many workbook reviews. Try again in a few minutes." }, 429);
   }
-  const upload = await readWorkbookRequest(c);
-  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
 
   try {
     const { reviewProjectWorkbook, workbookPlanSchema } = await import("./project-workbook");
@@ -632,12 +1155,11 @@ app.post("/project-import/review", async (c) => {
 app.post("/project-import/commit", async (c) => {
   const access = await requireProjectCreate(c);
   if (!("session" in access)) return c.json({ error: access.error }, access.status);
+  const upload = await readWorkbookRequest(c);
+  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
   if (!(await consumeWorkbookRequestLimit(access.session.user.id, "commit", 10))) {
     return c.json({ error: "Too many workbook imports. Try again in a few minutes." }, 429);
   }
-
-  const upload = await readWorkbookRequest(c);
-  if ("error" in upload) return c.json({ error: upload.error }, upload.status);
 
   let submitted: unknown;
   try {

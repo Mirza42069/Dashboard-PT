@@ -40,7 +40,7 @@ const id = {
       caption: "Dasbor",
     },
     progress: {
-      alt: "Tab progres proyek Fushin dengan kurva-S rencana versus realisasi dan deviasi kumulatif.",
+      alt: "Tab progres proyek Fushin dengan kurva-S rencana versus realisasi, berjalan sampai tanggal data.",
       title: "Progres proyek",
       caption: "Kurva-S",
     },
@@ -59,9 +59,9 @@ const id = {
     title: "Empat langkah per periode.",
     body: "Setiap langkah tercatat: siapa, kapan, alasannya.",
     steps: [
-      { label: "Bangun baseline", detail: "142 item BoQ" },
+      { label: "Bangun baseline", detail: "20 item BoQ" },
       { label: "Catat realisasi", detail: "Volume kumulatif" },
-      { label: "Tinjau deviasi", detail: "−15,0% vs rencana" },
+      { label: "Tinjau deviasi", detail: "−5,5% vs rencana" },
       { label: "Setujui & kunci", detail: "Tercatat permanen" },
     ],
     running: "Memproses",
@@ -77,7 +77,7 @@ const id = {
       ["Anda menyetujui dulu", "Pemetaan kolom ditampilkan untuk ditinjau sebelum baseline dibuat."],
       ["Ada cadangan deterministik", "Bila AI ragu, pembacaan berbasis aturan mengambil alih."],
     ],
-    note: ".xlsx hingga 4 MB. File asli tidak disimpan.",
+    note: ".xlsx hingga 50 MB. AI dapat memproses sampel sel; salinan privat sementara dihapus permanen setelah diproses.",
   },
   attention: {
     title: "Mulai dari yang bermasalah.",
@@ -88,13 +88,36 @@ const id = {
       "Nilai kontrak dan pekerjaan terukur dalam satu tampilan.",
     ],
   },
+  portfolio: {
+    label: "Contoh portofolio",
+    title: "Sepuluh proyek, satu tampilan.",
+    body: "Gedung, jalan tol, rumah sakit, gudang, dan jembatan berjalan berdampingan.",
+    items: [
+      [
+        "Nilai kontrak",
+        "Rp1,7 T berjalan",
+        "Sepuluh proyek dengan baseline BoQ dan jadwal terkunci, sembilan di antaranya masih berjalan.",
+      ],
+      [
+        "Periode",
+        "Mingguan sampai bulanan",
+        "Periode dibuat dari tanggal kontrak, jadi satu dasbor menampung ritme yang berbeda.",
+      ],
+      [
+        "Deviasi",
+        "−15,1% pada yang terburuk",
+        "Proyek paling tertinggal muncul lebih dulu, lengkap dengan lini penyebabnya.",
+      ],
+    ],
+    note: "Portofolio contoh yang dipakai untuk tangkapan layar di halaman ini, bukan data pelanggan.",
+  },
   progress: {
     title: "Angka yang bisa ditelusuri.",
     body: "Kurva-S, deviasi, dan penyumbang keterlambatan dihitung dari baseline aktif.",
     stats: [
-      ["45,0%", "Realisasi"],
-      ["60,0%", "Rencana"],
-      ["−15,0%", "Deviasi"],
+      ["80,6%", "Realisasi"],
+      ["86,1%", "Rencana"],
+      ["−5,5%", "Deviasi"],
     ],
   },
   baseline: {
@@ -169,7 +192,7 @@ const en: Content = {
       caption: "Dashboard",
     },
     progress: {
-      alt: "The Fushin project progress tab with a planned-versus-actual S-curve and cumulative variance.",
+      alt: "The Fushin project progress tab with a planned-versus-actual S-curve running to the data date.",
       title: "Project progress",
       caption: "S-curve",
     },
@@ -188,9 +211,9 @@ const en: Content = {
     title: "Four steps per period.",
     body: "Every step is recorded: who, when, why.",
     steps: [
-      { label: "Build the baseline", detail: "142 BoQ items" },
+      { label: "Build the baseline", detail: "20 BoQ items" },
       { label: "Record actuals", detail: "Cumulative quantities" },
-      { label: "Review variance", detail: "−15.0% vs plan" },
+      { label: "Review variance", detail: "−5.5% vs plan" },
       { label: "Approve & lock", detail: "Recorded permanently" },
     ],
     running: "Running",
@@ -206,7 +229,7 @@ const en: Content = {
       ["You approve first", "The column mapping is shown for review before any baseline is created."],
       ["Deterministic fallback", "If AI is unsure, rule-based parsing takes over."],
     ],
-    note: ".xlsx up to 4 MB. The original file is not stored.",
+    note: ".xlsx up to 50 MB. AI may process sample cells; the private temporary copy is permanently deleted after processing.",
   },
   attention: {
     title: "Start with what is off track.",
@@ -217,13 +240,36 @@ const en: Content = {
       "Contract value and measured work in one view.",
     ],
   },
+  portfolio: {
+    label: "Sample portfolio",
+    title: "Ten projects, one view.",
+    body: "Buildings, a toll road, a hospital, a warehouse, and a bridge running side by side.",
+    items: [
+      [
+        "Contract value",
+        "Rp1.7 T running",
+        "Ten projects with a baselined BoQ and a locked schedule, nine of them still running.",
+      ],
+      [
+        "Periods",
+        "Weekly to monthly",
+        "Periods come from the contract dates, so one dashboard holds different rhythms.",
+      ],
+      [
+        "Deviation",
+        "−15.1% at the worst",
+        "The project furthest behind surfaces first, with the lines causing it.",
+      ],
+    ],
+    note: "The sample portfolio these screenshots were taken from, not customer data.",
+  },
   progress: {
     title: "Numbers you can trace.",
     body: "S-curves, variance, and delay contributors come from the active baseline.",
     stats: [
-      ["45.0%", "Actual"],
-      ["60.0%", "Planned"],
-      ["−15.0%", "Deviation"],
+      ["80.6%", "Actual"],
+      ["86.1%", "Planned"],
+      ["−5.5%", "Deviation"],
     ],
   },
   baseline: {

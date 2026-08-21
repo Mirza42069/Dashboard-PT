@@ -44,6 +44,7 @@
     "db:migrate": "bun run --filter @DashboardV2/db db:migrate",
     "db:seed-admin": "bun --env-file=apps/server/.env scripts/seed-admin.ts",
     "db:seed-demo": "bun --env-file=apps/server/.env scripts/seed-demo.ts",
+    "db:seed-portfolio": "bun --env-file=apps/server/.env scripts/seed-portfolio.ts",
     "deploy:setup": "vercel link",
     "dev:vercel": "vercel dev -L",
     "env:preview": "bun scripts/sync-vercel-env.ts preview",
@@ -54,6 +55,7 @@
     "release:check": "bun run check-types && bun test && bun run db:check && bun run build && bun run deploy:check"
   },
   "dependencies": {
+    "@DashboardV2/api": "workspace:*",
     "@DashboardV2/auth": "workspace:*",
     "@DashboardV2/db": "workspace:*",
     "@DashboardV2/env": "workspace:*",

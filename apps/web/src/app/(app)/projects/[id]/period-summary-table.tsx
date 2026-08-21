@@ -1,9 +1,25 @@
 "use client";
 
+import { Download } from "@DashboardV2/ui/components/icons";
 import type { PeriodSummary } from "@DashboardV2/api/lib/curves";
 import { groupPeriodsByMonth } from "@DashboardV2/api/lib/periods";
 
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@DashboardV2/ui/components/table";
+
+import { BulkActionsBar } from "@/components/bulk-actions-bar";
+import { SelectAllHead, SelectRowCell, ToolbarAction } from "@/components/table-selection";
+import { plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { downloadBlob } from "@/lib/download-file";
+import { toast } from "@/lib/toast";
+import { useRowSelection } from "@/lib/use-row-selection";
 import { useFormat } from "@/lib/use-format";
 
 /**
@@ -76,6 +92,46 @@ export default function PeriodSummaryTable({
 
   const dataDateIndex = summary.findIndex((row) => row.isCurrent);
 
+  /**
+   * These rows are derived figures — nothing here can be deleted or edited, so
+   * the one thing a selection can usefully do is take the numbers somewhere
+   * else. Built on the client from what is already on screen rather than
+   * through the server's spreadsheet export: the figures are all here, and a
+   * second export endpoint for a subset of one table is not worth its weight.
+   */
+  const selection = useRowSelection(summary, { getId: (row) => row.period.id });
+
+  function exportSelected() {
+    const header = [
+      t.periodSummary.period,
+      t.periodSummary.dates,
+      t.periodSummary.plannedPeriod,
+      t.periodSummary.actualPeriod,
+      t.periodSummary.plannedCumulative,
+      t.periodSummary.actualCumulative,
+      t.periodSummary.deviationPeriod,
+      t.periodSummary.deviationCumulative,
+    ];
+    const body = selection.selectedRows.map((row) => [
+      String(row.period.periodIndex),
+      formatDateRange(row.period.startDate, row.period.endDate),
+      figure(row.plannedPeriod),
+      figure(row.actualPeriod),
+      figure(row.plannedCumulative),
+      figure(row.actualCumulative),
+      figure(row.deviationPeriod),
+      figure(row.deviationCumulative),
+    ]);
+    const csv = [header, ...body]
+      .map((cells) => cells.map(csvCell).join(","))
+      .join("\r\n");
+    // The BOM is what makes Excel read this as UTF-8 rather than as the local
+    // codepage, which is where the month names would otherwise come apart.
+    downloadBlob(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }), "periods.csv");
+    toast.success(plural(t.periodSummary.exportedToast, selection.selectedCount));
+    selection.clear();
+  }
+
   return (
     <div className="space-y-3">
       {/*
@@ -95,7 +151,7 @@ export default function PeriodSummaryTable({
             <li
               key={row.period.id}
               className={`rounded-lg border p-3 ${
-                row.isCurrent ? "border-l-2 border-l-[var(--chart-3)] bg-accent/40" : ""
+                row.isCurrent ? "border-l-2 border-l-[var(--chart-1)] bg-accent/40" : ""
               }`}
             >
               <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -130,27 +186,56 @@ export default function PeriodSummaryTable({
       </ul>
 
       {/*
-       * The overflow affordance. `overflow-x-auto` alone gives a scrollbar that
-       * macOS hides until it moves, so on a trackpad there is nothing to say
-       * the table continues past the fold. The gradient is that cue, and it is
-       * aria-hidden because it says nothing a keyboard or screen-reader user
-       * does not already get from the table itself.
+       * No overflow affordance, because there is no overflow: the table is
+       * fitted to the card (scrollX={false} plus the shares below). What used
+       * to live here was first a hand-rolled edge gradient and then the
+       * primitive's table-scroll-shadows, both of them cues that columns had
+       * been pushed off the side. Fitting removed the thing they pointed at.
+       *
+       * Below `sm` the stacked card list above is still the answer — eight
+       * columns do not divide a phone into anything readable.
        */}
-      <div className="relative hidden sm:block">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-card to-transparent sm:hidden"
-        />
-        <div className="overflow-x-auto">
-          <table id={id} className="w-full min-w-3xl border-collapse text-sm">
+      {/* Below `sm` the card list is what renders, and it carries no
+          checkboxes — so the toolbar is hidden there too rather than offering
+          an action over a selection that cannot be made. */}
+      <div className="hidden px-3 sm:block">
+        <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
+          <ToolbarAction
+            icon={<Download />}
+            label={t.periodSummary.exportSelected}
+            onClick={exportSelected}
+          />
+        </BulkActionsBar>
+      </div>
+
+      <div className="hidden sm:block">
+          <Table id={id} scrollX={false} className="w-full table-fixed border-collapse">
+            {/*
+             * table-fixed plus explicit shares, so the eight columns divide
+             * the card between them instead of each demanding its min-content
+             * width. That min-content floor — set by the nowrap headers over
+             * "Planned cumulative" and "Cumulative deviation" — is what used
+             * to force this table wider than the screen.
+             */}
+            <colgroup>
+              <col style={{ width: "5%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "15%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "12%" }} />
+            </colgroup>
             <caption className="sr-only">
               {dataDate
                 ? `${t.periodSummary.caption} ${t.periodSummary.dataDateIs} ${formatDate(dataDate)}.`
                 : t.periodSummary.caption}
             </caption>
 
-            <thead>
-              <tr className="border-b text-xs text-muted-foreground">
+            <TableHeader>
+              <TableRow>
                 {/*
                  * Two header rows: the month band spans its run of periods, the
                  * row beneath names the six figures. `scope` is set on both so
@@ -158,55 +243,59 @@ export default function PeriodSummaryTable({
                  * "Cumulative deviation", which is what makes the table
                  * navigable rather than a wall of numbers.
                  */}
-                <th scope="col" className="sticky left-0 z-10 bg-card px-3 py-2 text-left font-medium">
+                <SelectAllHead selection={selection} label={t.periodSummary.selectAllPeriods} />
+                <TableHead className="whitespace-normal align-bottom">
                   {t.periodSummary.period}
-                </th>
-                <th scope="col" className="px-3 py-2 text-left font-medium">
-                  {t.periodSummary.dates}
-                </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
+                </TableHead>
+                <TableHead className="whitespace-normal align-bottom">{t.periodSummary.dates}</TableHead>
+                <TableHead className="whitespace-normal align-bottom text-right">
                   {t.periodSummary.plannedPeriod}
-                </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
+                </TableHead>
+                <TableHead className="whitespace-normal align-bottom text-right">
                   {t.periodSummary.actualPeriod}
-                </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
+                </TableHead>
+                <TableHead className="whitespace-normal align-bottom text-right">
                   {t.periodSummary.plannedCumulative}
-                </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
+                </TableHead>
+                <TableHead className="whitespace-normal align-bottom text-right">
                   {t.periodSummary.actualCumulative}
-                </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
+                </TableHead>
+                <TableHead className="whitespace-normal align-bottom text-right">
                   {t.periodSummary.deviationPeriod}
-                </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
+                </TableHead>
+                <TableHead className="whitespace-normal align-bottom pr-4 text-right">
                   {t.periodSummary.deviationCumulative}
-                </th>
-              </tr>
-            </thead>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
 
-            <tbody>
+            <TableBody>
               {summary.map((row, index) => {
                 const group = monthStart.get(index);
                 const isLocked = row.period.status === "locked";
 
                 return (
-                  <tr
+                  <TableRow
                     key={row.period.id}
-                    className={[
-                      "border-b last:border-0",
+                    className={
                       // The current period is marked by a rule down its left
                       // edge *and* by the word in the identity cell. The rule
                       // alone would be colour-only.
                       row.isCurrent
-                        ? "bg-accent/40 [&>th:first-child]:border-l-2 [&>th:first-child]:border-l-[var(--chart-3)]"
-                        : "",
-                    ].join(" ")}
+                        ? "bg-accent/40 [&>th:first-child]:border-l-2 [&>th:first-child]:border-l-[var(--chart-1)]"
+                        : ""
+                    }
                     aria-current={row.isCurrent ? "true" : undefined}
+                    data-state={selection.isSelected(row.period.id) ? "selected" : undefined}
                   >
+                    <SelectRowCell
+                      selection={selection}
+                      id={row.period.id}
+                      name={String(row.period.periodIndex)}
+                    />
                     <th
                       scope="row"
-                      className="sticky left-0 z-10 bg-card px-3 py-1.5 text-left font-normal"
+                      className="p-2 text-left align-middle font-normal"
                     >
                       <span className="flex items-baseline gap-2">
                         {group && (
@@ -223,9 +312,9 @@ export default function PeriodSummaryTable({
                       )}
                     </th>
 
-                    <td className="whitespace-nowrap px-3 py-1.5 text-muted-foreground tabular-nums">
+                    <TableCell className="text-muted-foreground tabular-nums">
                       {formatDateRange(row.period.startDate, row.period.endDate)}
-                    </td>
+                    </TableCell>
 
                     <Figure value={row.plannedPeriod} />
                     <Figure value={row.actualPeriod} />
@@ -233,12 +322,11 @@ export default function PeriodSummaryTable({
                     <Figure value={row.actualCumulative} emphasis />
                     <Deviation value={row.deviationPeriod} />
                     <Deviation value={row.deviationCumulative} emphasis />
-                  </tr>
+                  </TableRow>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
       </div>
 
       <p className="px-3 text-xs text-muted-foreground">
@@ -295,19 +383,19 @@ function Figure({ value, emphasis }: { value: number | null; emphasis?: boolean 
 
   if (value === null) {
     return (
-      <td className="px-3 py-1.5 text-right text-muted-foreground">
+      <TableCell className="text-right text-muted-foreground">
         <span aria-hidden>—</span>
         <span className="sr-only">{t.periodSummary.notReported}</span>
-      </td>
+      </TableCell>
     );
   }
 
   return (
-    <td
-      className={`px-3 py-1.5 text-right tabular-nums ${emphasis ? "font-medium" : "text-muted-foreground"}`}
+    <TableCell
+      className={`text-right tabular-nums ${emphasis ? "font-medium" : "text-muted-foreground"}`}
     >
       {value.toFixed(2)}
-    </td>
+    </TableCell>
   );
 }
 
@@ -317,10 +405,10 @@ function Deviation({ value, emphasis }: { value: number | null; emphasis?: boole
 
   if (value === null) {
     return (
-      <td className="px-3 py-1.5 text-right text-muted-foreground">
+      <TableCell className="text-right text-muted-foreground">
         <span aria-hidden>—</span>
         <span className="sr-only">{t.periodSummary.notReported}</span>
-      </td>
+      </TableCell>
     );
   }
 
@@ -328,9 +416,9 @@ function Deviation({ value, emphasis }: { value: number | null; emphasis?: boole
   const isAhead = value >= NOISE;
 
   return (
-    <td
+    <TableCell
       className={[
-        "px-3 py-1.5 text-right tabular-nums",
+        "text-right tabular-nums",
         emphasis ? "font-medium" : "",
         isBehind ? "text-destructive" : isAhead ? "text-success" : "text-muted-foreground",
       ].join(" ")}
@@ -340,6 +428,18 @@ function Deviation({ value, emphasis }: { value: number | null; emphasis?: boole
         {" "}
         {isBehind ? t.progress.behind : isAhead ? t.progress.ahead : t.progress.onTrack}
       </span>
-    </td>
+    </TableCell>
   );
+}
+
+/** A blank stays blank in the export: it is not a reading of zero. */
+function figure(value: number | null): string {
+  return value === null ? "" : value.toFixed(2);
+}
+
+/** Quotes only what needs it, and doubles any quote inside. */
+function csvCell(value: string): string {
+  return /[",\r\n]/.test(value)
+    ? `"${value.replaceAll('"', '""')}"`
+    : value;
 }

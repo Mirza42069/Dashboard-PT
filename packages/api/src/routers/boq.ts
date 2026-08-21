@@ -18,12 +18,15 @@ import z from "zod";
 import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
+import { databaseErrorIncludes } from "../lib/database-error";
 import {
   WEIGHT_TOLERANCE,
   getVersion,
   leafPredicate,
   leafWeightTotal,
   recalcWeights,
+  recalcWeightsStatement,
+  refreshTotalValueStatement,
   requireDraft,
   requireDraftForItem,
   serializeItem,
@@ -58,6 +61,45 @@ async function projectLabel(companyId: string, projectId: string) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
   return `${row.code} - ${row.name}`;
+}
+
+async function runDraftMutation(
+  projectId: string,
+  versionId: string,
+  statements: Parameters<typeof runBatch>[0],
+) {
+  try {
+    await runBatch([
+      db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${projectId}, 0))`),
+      db.execute(sql`
+        select 1 / case when exists (
+          select 1 from boq_version
+          where id = ${versionId} and project_id = ${projectId} and status = 'draft'
+        ) then 1 else 0 end
+      `),
+      ...statements,
+    ]);
+  } catch (error) {
+    if (databaseErrorIncludes(error, "division by zero")) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "This BoQ was baselined while it was being edited. Refresh and try again.",
+      });
+    }
+    throw error;
+  }
+}
+
+function liveItemsGuard(versionId: string, itemIds: string[]) {
+  const ids = sql.join(itemIds.map((id) => sql`${id}`), sql`, `);
+  return db.execute(sql`
+    select 1 / case when (
+      select count(distinct id) from boq_item
+      where boq_version_id = ${versionId}
+        and deleted_at is null
+        and id in (${ids})
+    ) = ${itemIds.length} then 1 else 0 end
+  `);
 }
 
 /** Rejects a code that already exists among the item's siblings. */
@@ -276,6 +318,7 @@ export const boqRouter = router({
               cumulativeQuantity: entry.cumulativeQuantity,
               cumulativePercent: entry.cumulativePercent,
               pctComplete: entry.pctComplete,
+              noProgress: entry.noProgress,
               note: entry.note,
               recordedById: entry.recordedById,
             })),
@@ -301,8 +344,11 @@ export const boqRouter = router({
   recalcWeights: companyPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await requireDraft(ctx, input.versionId);
-      await recalcWeights(input.versionId);
+      const draft = await requireDraft(ctx, input.versionId);
+      await runDraftMutation(draft.projectId, input.versionId, [
+        db.execute(recalcWeightsStatement(input.versionId)),
+        db.execute(refreshTotalValueStatement(input.versionId)),
+      ]);
       const version = await getVersion(ctx, input.versionId);
       return { version: serializeVersion(version), weightTotal: await leafWeightTotal(input.versionId) };
     }),
@@ -377,12 +423,10 @@ export const boqRouter = router({
       }
 
       const now = new Date();
-      const [currentActive] = await db
-        .select({ id: boqVersion.id })
-        .from(boqVersion)
-        .where(and(eq(boqVersion.projectId, draft.projectId), eq(boqVersion.status, "active")));
       const statements: Parameters<typeof runBatch>[0] = [
         db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${draft.projectId}, 0))`),
+        db.execute(recalcWeightsStatement(input.versionId)),
+        db.execute(refreshTotalValueStatement(input.versionId)),
         db.execute(sql`
           select 1 / case when
             exists (
@@ -410,6 +454,16 @@ export const boqRouter = router({
                   where distribution.boq_item_id = item.id
                 ), 0) - 100) > ${WEIGHT_TOLERANCE}
             )
+            and abs(coalesce((
+              select sum(item.weight)
+              from boq_item item
+              where item.boq_version_id = ${input.versionId}
+                and item.deleted_at is null
+                and not exists (
+                  select 1 from boq_item child
+                  where child.parent_id = item.id and child.deleted_at is null
+                )
+            ), 0) - 100) <= ${WEIGHT_TOLERANCE}
             and exists (
               select 1 from boq_version
               where id = ${input.versionId} and schedule_status = 'draft'
@@ -419,69 +473,43 @@ export const boqRouter = router({
         `),
       ];
 
-      if (currentActive && currentActive.id !== input.versionId) {
-        const [sourceItems, targetItems, latestProgress] = await Promise.all([
-          db
-            .select({ id: boqItem.id, lineageId: boqItem.lineageId })
-            .from(boqItem)
-            .where(eq(boqItem.boqVersionId, currentActive.id)),
-          db
-            .select({ id: boqItem.id, lineageId: boqItem.lineageId })
-            .from(boqItem)
-            .where(eq(boqItem.boqVersionId, input.versionId)),
-          db
-            .select({ entry: progressEntry, itemId: boqItem.id })
-            .from(progressEntry)
-            .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
-            .where(eq(boqItem.boqVersionId, currentActive.id)),
-        ]);
-        const sourceLineage = new Map(sourceItems.map((item) => [item.id, item.lineageId]));
-        const targetByLineage = new Map(targetItems.map((item) => [item.lineageId, item.id]));
-        const carried = latestProgress.flatMap(({ entry, itemId }) => {
-          const targetId = targetByLineage.get(sourceLineage.get(itemId) ?? "");
-          return targetId
-            ? [
-                {
-                  projectId: entry.projectId,
-                  periodId: entry.periodId,
-                  boqItemId: targetId,
-                  cumulativeQuantity: entry.cumulativeQuantity,
-                  cumulativePercent: entry.cumulativePercent,
-                  pctComplete: entry.pctComplete,
-                  note: entry.note,
-                  recordedById: entry.recordedById,
-                },
-              ]
-            : [];
-        });
-        if (carried.length > 0) {
-          statements.push(
-            db
-              .insert(progressEntry)
-              .values(carried)
-              .onConflictDoUpdate({
-                target: [progressEntry.periodId, progressEntry.boqItemId],
-                set: {
-                  cumulativeQuantity: sql`excluded.cumulative_quantity`,
-                  cumulativePercent: sql`excluded.cumulative_percent`,
-                  pctComplete: sql`excluded.pct_complete`,
-                  note: sql`excluded.note`,
-                  recordedById: sql`excluded.recorded_by_id`,
-                  updatedAt: now,
-                },
-              }),
-          );
-        }
-      }
-
-      if (currentActive && currentActive.id !== input.versionId) {
-        statements.push(
-          db
+      statements.push(
+        db.execute(sql`
+          insert into progress_entry
+            (id, project_id, period_id, boq_item_id, cumulative_quantity,
+             cumulative_percent, pct_complete, no_progress, note, recorded_by_id)
+          select
+            md5(entry.id || ':' || target.id), entry.project_id, entry.period_id, target.id,
+            entry.cumulative_quantity, entry.cumulative_percent, entry.pct_complete,
+            entry.no_progress, entry.note, entry.recorded_by_id
+          from boq_version source_version
+          join boq_item source on source.boq_version_id = source_version.id
+          join boq_item target on target.boq_version_id = ${input.versionId}
+            and target.lineage_id = source.lineage_id
+          join progress_entry entry on entry.boq_item_id = source.id
+          where source_version.project_id = ${draft.projectId}
+            and source_version.status = 'active'
+            and source_version.id <> ${input.versionId}
+          on conflict (period_id, boq_item_id) do update set
+            cumulative_quantity = excluded.cumulative_quantity,
+            cumulative_percent = excluded.cumulative_percent,
+            pct_complete = excluded.pct_complete,
+            no_progress = excluded.no_progress,
+            note = excluded.note,
+            recorded_by_id = excluded.recorded_by_id,
+            updated_at = ${now}
+        `),
+        db
           .update(boqVersion)
           .set({ status: "superseded" })
-          .where(eq(boqVersion.id, currentActive.id)),
-        );
-      }
+          .where(
+            and(
+              eq(boqVersion.projectId, draft.projectId),
+              eq(boqVersion.status, "active"),
+              sql`${boqVersion.id} <> ${input.versionId}`,
+            ),
+          ),
+      );
       statements.push(
         db
           .update(boqVersion)
@@ -498,7 +526,7 @@ export const boqRouter = router({
       try {
         await runBatch(statements);
       } catch (error) {
-        if (error instanceof Error && error.message.toLowerCase().includes("division by zero")) {
+        if (databaseErrorIncludes(error, "division by zero")) {
           throw new TRPCError({
             code: "CONFLICT",
             message: "The baseline changed while it was being activated. Review it and try again.",
@@ -559,7 +587,7 @@ export const boqRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await requireDraft(ctx, input.versionId);
+      const version = await requireDraft(ctx, input.versionId);
 
       const parentId = input.parentId ?? null;
       if (parentId) {
@@ -592,9 +620,11 @@ export const boqRouter = router({
           ),
         );
 
-      const [created] = await db
-        .insert(boqItem)
-        .values({
+      const itemId = crypto.randomUUID();
+      await runDraftMutation(version.projectId, input.versionId, [
+        ...(parentId ? [liveItemsGuard(input.versionId, [parentId])] : []),
+        db.insert(boqItem).values({
+          id: itemId,
           boqVersionId: input.versionId,
           parentId,
           code: input.code,
@@ -607,8 +637,9 @@ export const boqRouter = router({
           distribution: input.distribution,
           progressMode: input.progressMode,
           sortOrder: Number(last?.value ?? 0) + 1,
-        })
-        .returning();
+        }),
+      ]);
+      const [created] = await db.select().from(boqItem).where(eq(boqItem.id, itemId));
 
       return { item: created ? serializeItem(created) : null };
     }),
@@ -617,6 +648,7 @@ export const boqRouter = router({
     .input(itemSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const current = await requireDraftForItem(ctx, input.id);
+      const version = await getVersion(ctx, current.boqVersionId);
       const { id, code, quantity, unitRate, weight, ...rest } = input;
 
       if (code && code !== current.code) {
@@ -628,9 +660,9 @@ export const boqRouter = router({
         });
       }
 
-      await db
-        .update(boqItem)
-        .set({
+      await runDraftMutation(version.projectId, current.boqVersionId, [
+        liveItemsGuard(current.boqVersionId, [id]),
+        db.update(boqItem).set({
           ...rest,
           ...(code ? { code } : {}),
           ...(quantity !== undefined
@@ -640,8 +672,8 @@ export const boqRouter = router({
             ? { unitRate: unitRate === null ? null : toQuantityString(unitRate) }
             : {}),
           ...(weight !== undefined && weight !== null ? { weight: weight.toFixed(6) } : {}),
-        })
-        .where(eq(boqItem.id, id));
+        }).where(eq(boqItem.id, id)),
+      ]);
 
       const [updated] = await db.select().from(boqItem).where(eq(boqItem.id, id));
       return { item: updated ? serializeItem(updated) : null };
@@ -655,23 +687,121 @@ export const boqRouter = router({
   deleteItem: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await requireDraftForItem(ctx, input.id);
+      const item = await requireDraftForItem(ctx, input.id);
+      const version = await getVersion(ctx, item.boqVersionId);
 
-      await db.execute(sql`
-        update boq_item
-        set deleted_at = now(), updated_at = now()
-        where deleted_at is null
-          and id in (
-            with recursive tree as (
-              select id from boq_item where id = ${input.id}
-              union all
-              select child.id from boq_item child join tree on child.parent_id = tree.id
-            )
-            select id from tree
-          )
-      `);
+      try {
+        await db.batch([
+          db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${version.projectId}, 0))`),
+          db.execute(sql`
+            select 1 / case when exists (
+              select 1 from boq_version
+              where id = ${item.boqVersionId}
+                and project_id = ${version.projectId}
+                and status = 'draft'
+            ) then 1 else 0 end
+          `),
+          db.execute(sql`
+            update boq_item
+            set deleted_at = now(), updated_at = now()
+            where deleted_at is null
+              and boq_version_id = ${item.boqVersionId}
+              and id in (
+                with recursive tree as (
+                  select id from boq_item
+                  where id = ${input.id} and boq_version_id = ${item.boqVersionId}
+                  union all
+                  select child.id from boq_item child join tree on child.parent_id = tree.id
+                )
+                select id from tree
+              )
+          `),
+        ]);
+      } catch (error) {
+        if (databaseErrorIncludes(error, "division by zero")) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "This BoQ was baselined while it was being edited. Refresh and try again.",
+          });
+        }
+        throw error;
+      }
 
       return { success: true };
+    }),
+
+  /**
+   * Bulk counterpart of deleteItem: the same recursive cascade, seeded from an
+   * array instead of one id.
+   *
+   * Deliberately not a client-side loop over deleteItem. Two reasons beyond the
+   * round trips: a selection can hold both a section and a line underneath it,
+   * and deleting the section first makes the second call race its own cascade;
+   * and a partial failure would leave a half-deleted tree, which is exactly the
+   * parentless-leaves-still-drawing-weight state the cascade exists to prevent.
+   *
+   * The version is taken as input so the draft gate is one query rather than
+   * one per id, and the statement is scoped to it so an id from another version
+   * — or another company's project — matches nothing.
+   */
+  deleteItems: companyPermissionProcedure("project:write")
+    .input(
+      z.object({
+        versionId: z.string().min(1),
+        ids: z.array(z.string().min(1)).min(1).max(2000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const version = await requireDraft(ctx, input.versionId);
+
+      const ids = sql.join(
+        input.ids.map((id) => sql`${id}`),
+        sql`, `,
+      );
+
+      let count = 0;
+      try {
+        const [, , result] = await db.batch([
+          db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${version.projectId}, 0))`),
+          db.execute(sql`
+            select 1 / case when exists (
+              select 1 from boq_version
+              where id = ${input.versionId}
+                and project_id = ${version.projectId}
+                and status = 'draft'
+            ) then 1 else 0 end
+          `),
+          db.execute(sql`
+            update boq_item
+            set deleted_at = now(), updated_at = now()
+            where deleted_at is null
+              and boq_version_id = ${input.versionId}
+              and id in (
+                with recursive tree as (
+                  select id from boq_item
+                  where id in (${ids}) and boq_version_id = ${input.versionId}
+                  union all
+                  select child.id from boq_item child join tree on child.parent_id = tree.id
+                )
+                select id from tree
+              )
+          `),
+        ]);
+        count = result.rowCount ?? 0;
+      } catch (error) {
+        if (databaseErrorIncludes(error, "division by zero")) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "This BoQ was baselined while it was being edited. Refresh and try again.",
+          });
+        }
+        throw error;
+      }
+
+      // The cascade means this is the number of *lines* removed, not the number
+      // ticked — deleting one section can be twenty rows. That is the figure
+      // worth reporting back.
+      return { success: true, count };
     }),
 
   /** Applies a new ordering to a group of siblings in one statement. */
@@ -683,20 +813,23 @@ export const boqRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await requireDraft(ctx, input.versionId);
+      const version = await requireDraft(ctx, input.versionId);
 
       const rows = sql.join(
         input.orderedIds.map((id, index) => sql`(${id}::text, ${index}::int)`),
         sql`, `,
       );
 
-      await db.execute(sql`
-        update boq_item
-        set sort_order = ordering.position, updated_at = now()
-        from (values ${rows}) as ordering(id, position)
-        where boq_item.id = ordering.id
-          and boq_item.boq_version_id = ${input.versionId}
-      `);
+      await runDraftMutation(version.projectId, input.versionId, [
+        liveItemsGuard(input.versionId, input.orderedIds),
+        db.execute(sql`
+          update boq_item
+          set sort_order = ordering.position, updated_at = now()
+          from (values ${rows}) as ordering(id, position)
+          where boq_item.id = ordering.id
+            and boq_item.boq_version_id = ${input.versionId}
+        `),
+      ]);
 
       return { success: true };
     }),

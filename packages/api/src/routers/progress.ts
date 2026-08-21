@@ -519,18 +519,30 @@ export const progressRouter = router({
       const [, changed] = await db.batch([
         db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${period.projectId}, 0))`),
         db.execute<{ id: string }>(sql`
-        with editable as (
-          update reporting_period
-          set status = case when status = 'open' then 'draft' else status end,
-              updated_at = ${new Date()}
-          where id = ${input.periodId} and status in ('open', 'draft', 'returned')
-          returning id
-        ), input_rows as (
+        with input_rows as (
           select * from jsonb_to_recordset(${JSON.stringify(values)}::jsonb) as value(
             id text, "projectId" text, "periodId" text, "boqItemId" text,
             "cumulativeQuantity" numeric, "cumulativePercent" numeric,
             "pctComplete" numeric, "noProgress" boolean, note text, "recordedById" text
           )
+        ), editable as (
+          update reporting_period
+          set status = case when status = 'open' then 'draft' else status end,
+              updated_at = ${new Date()}
+          where id = ${input.periodId} and status in ('open', 'draft', 'returned')
+            and not exists (
+              select 1 from input_rows input
+              where not exists (
+                select 1
+                from boq_item item
+                join boq_version version on version.id = item.boq_version_id
+                where item.id = input."boqItemId"
+                  and item.deleted_at is null
+                  and version.project_id = ${period.projectId}
+                  and version.status = 'active'
+              )
+            )
+          returning id
         ), upserted as (
           insert into progress_entry
             (id, project_id, period_id, boq_item_id, cumulative_quantity, cumulative_percent,
@@ -644,40 +656,59 @@ export const progressRouter = router({
       }));
       const [, changed] = await db.batch([
         db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${period.projectId}, 0))`),
-        db.execute<{ id: string }>(sql`
-        with editable as (
-          update reporting_period
-          set status = case when status = 'open' then 'draft' else status end,
-              updated_at = ${new Date()}
-          where id = ${input.periodId} and status in ('open', 'draft', 'returned')
-          returning id
-        ), input_rows as (
+        db.execute<{ marked: number }>(sql`
+        with input_rows as (
           select * from jsonb_to_recordset(${JSON.stringify(values)}::jsonb) as value(
             id text, "projectId" text, "periodId" text, "boqItemId" text,
             "noProgress" boolean, "recordedById" text
           )
+        ), editable as (
+          update reporting_period
+          set status = case when status = 'open' then 'draft' else status end,
+              updated_at = ${new Date()}
+          where id = ${input.periodId} and status in ('open', 'draft', 'returned')
+            and not exists (
+              select 1 from input_rows input
+              where not exists (
+                select 1
+                from boq_item item
+                join boq_version version on version.id = item.boq_version_id
+                where item.id = input."boqItemId"
+                  and item.deleted_at is null
+                  and version.project_id = ${period.projectId}
+                  and version.status = 'active'
+              )
+            )
+          returning id
+        ), upserted as (
+          insert into progress_entry
+            (id, project_id, period_id, boq_item_id, cumulative_quantity, cumulative_percent,
+             pct_complete, no_progress, recorded_by_id)
+          select
+            input_rows.id, input_rows."projectId", input_rows."periodId", input_rows."boqItemId",
+            null, null, 0, input_rows."noProgress", input_rows."recordedById"
+          from input_rows cross join editable
+          on conflict (period_id, boq_item_id) do update set
+            no_progress = excluded.no_progress,
+            updated_at = ${new Date()}
+          where excluded.no_progress = false
+             or (progress_entry.cumulative_percent is null
+                 and progress_entry.cumulative_quantity is null)
+          returning id
         )
-        insert into progress_entry
-          (id, project_id, period_id, boq_item_id, cumulative_quantity, cumulative_percent,
-           pct_complete, no_progress, recorded_by_id)
-        select
-          input_rows.id, input_rows."projectId", input_rows."periodId", input_rows."boqItemId",
-          null, null, 0, input_rows."noProgress", input_rows."recordedById"
-        from input_rows cross join editable
-        on conflict (period_id, boq_item_id) do update set
-          no_progress = excluded.no_progress,
-          updated_at = ${new Date()}
-        returning id
+        select count(upserted.id)::int as marked
+        from editable left join upserted on true
+        group by editable.id
         `),
       ]);
-      if (changed.rows.length !== values.length) {
+      if (changed.rows.length === 0) {
         throw new TRPCError({
           code: "CONFLICT",
           message: "This period is no longer editable. Refresh and try again.",
         });
       }
 
-      return { marked: leaves.length };
+      return { marked: changed.rows[0]?.marked ?? 0 };
     }),
 
   /**

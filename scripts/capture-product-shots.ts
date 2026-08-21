@@ -33,6 +33,20 @@ dotenv.config({ path: join(ROOT, "apps", "marketing", ".env.local"), quiet: true
 const EMAIL = process.env.CAPTURE_EMAIL;
 const PASSWORD = process.env.CAPTURE_PASSWORD;
 const BASE_URL = process.env.CAPTURE_BASE_URL ?? "http://localhost:3001";
+/**
+ * Which project the progress and BoQ shots come from, by code.
+ *
+ * Without it the shots come from whichever row the list happens to put first,
+ * which is the most recently created project — often the one with the least in
+ * it. The two shots are of a populated schedule and a populated BoQ, so which
+ * project they come from is a decision, not an accident.
+ *
+ * Pick one whose current period has already been submitted. The progress tab
+ * puts the entry matrix above the S-curve while the period is still editable
+ * (progress-tab.tsx, `entryFirst`), which pushes the chart — the actual subject
+ * of the shot — out of the first viewport.
+ */
+const PROJECT_CODE = process.env.CAPTURE_PROJECT_CODE?.trim();
 
 if (!EMAIL || !PASSWORD) {
   console.error(
@@ -43,6 +57,7 @@ if (!EMAIL || !PASSWORD) {
       "  CAPTURE_EMAIL=you@example.com",
       "  CAPTURE_PASSWORD=…",
       "  CAPTURE_BASE_URL=http://localhost:3001",
+      "  CAPTURE_PROJECT_CODE=PRJ-109   # optional, picks the project to shoot",
     ].join("\n"),
   );
   process.exit(1);
@@ -79,8 +94,8 @@ async function main() {
   try {
     await signIn(page);
 
-    const projectHref = await firstProjectHref(page);
-    if (!projectHref) {
+    const target = await projectHref(page);
+    if (!target) {
       skipped.push({ name: "progress", reason: "no project found in /projects" });
       skipped.push({ name: "boq", reason: "no project found in /projects" });
     }
@@ -94,23 +109,41 @@ async function main() {
           await p.waitForLoadState("networkidle");
         },
       },
-      ...(projectHref
+      ...(target
         ? ([
             {
               name: "progress",
-              path: `${projectHref}${projectHref.includes("?") ? "&" : "?"}tab=progress`,
+              path: `${target}${target.includes("?") ? "&" : "?"}tab=progress`,
               settle: async (p) => {
-                await p.getByRole("tab", { selected: true }).waitFor({ timeout: 30_000 });
+                // The selected tab exists before its content does — waiting on
+                // it photographs the loading skeleton. Wait for the card that is
+                // the subject of the shot.
+                const chart = p.getByText(/rencana vs realisasi|planned vs actual/i).first();
+                await chart.waitFor({ state: "visible", timeout: 30_000 });
                 await p.waitForLoadState("networkidle");
                 // The S-curve is a client chart; give it a frame to draw.
                 await p.waitForTimeout(1200);
+                /*
+                 * The progress tab puts the entry grid above the figures while
+                 * any period is still open (progress-tab.tsx, `entryFirst`),
+                 * which is every live project — so the chart is usually below
+                 * the fold. Bring it into frame rather than photographing a
+                 * grid of input boxes.
+                 */
+                await chart.scrollIntoViewIfNeeded();
+                await p.waitForTimeout(500);
               },
             },
             {
               name: "boq",
-              path: `${projectHref}${projectHref.includes("?") ? "&" : "?"}tab=baseline`,
+              path: `${target}${target.includes("?") ? "&" : "?"}tab=baseline`,
               settle: async (p) => {
-                await p.getByRole("tab", { selected: true }).waitFor({ timeout: 30_000 });
+                // Same reasoning: the priced lines, not the skeleton that
+                // precedes them. The weight column header is on every BoQ.
+                await p
+                  .getByText(/^(bobot|weight)$/i)
+                  .first()
+                  .waitFor({ state: "visible", timeout: 30_000 });
                 await p.waitForLoadState("networkidle");
                 await p.waitForTimeout(800);
               },
@@ -203,14 +236,29 @@ async function signIn(page: Page) {
   }
 }
 
-/** Returns the href of the first project row, or null if the list is empty. */
-async function firstProjectHref(page: Page): Promise<string | null> {
+/**
+ * The href of the project to screenshot: the one named by CAPTURE_PROJECT_CODE
+ * if it is set and present, otherwise the first row. Returns null on an empty
+ * list, which downgrades those shots to placeholders rather than failing.
+ */
+async function projectHref(page: Page): Promise<string | null> {
   try {
     await page.goto(`${BASE_URL}/projects`, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await page.waitForLoadState("networkidle");
-    const link = page.locator('a[href^="/projects/"]').first();
-    await link.waitFor({ state: "attached", timeout: 20_000 });
-    return await link.getAttribute("href");
+
+    const links = page.locator('a[href^="/projects/"]');
+    await links.first().waitFor({ state: "attached", timeout: 20_000 });
+
+    if (PROJECT_CODE) {
+      // The link text is the project name; the code sits in a sibling element,
+      // so the match has to be made against the whole row.
+      const row = page.getByRole("row").filter({ hasText: PROJECT_CODE }).first();
+      const link = row.locator('a[href^="/projects/"]').first();
+      if ((await link.count()) > 0) return await link.getAttribute("href");
+      console.warn(`CAPTURE_PROJECT_CODE=${PROJECT_CODE} matched no row; using the first one.`);
+    }
+
+    return await links.first().getAttribute("href");
   } catch {
     return null;
   }

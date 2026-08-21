@@ -58,6 +58,10 @@ export const env = createEnv({
       .regex(/^[a-z0-9-]+(?:\/[a-z0-9-]+)?$/)
       .optional(),
     OPENROUTER_REASONING_EFFORT: z.enum(["low", "medium", "high"]).optional(),
+    // Static token is required only to mint direct browser-upload tokens.
+    // Reads and deletes use Vercel OIDC when it is available.
+    BLOB_READ_WRITE_TOKEN: z.string().min(1).optional(),
+    CRON_SECRET: z.string().min(16).optional(),
   },
   runtimeEnv: runtimeEnv,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

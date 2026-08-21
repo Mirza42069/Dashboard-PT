@@ -41,5 +41,11 @@
         "service": "web"
       }
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/internal/temporary-workbooks/cleanup",
+      "schedule": "0 0 * * *"
+    }
   ]
 }

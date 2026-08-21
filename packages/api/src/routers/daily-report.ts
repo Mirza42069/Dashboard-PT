@@ -645,7 +645,63 @@ export const dailyReportRouter = router({
           message: "Only a draft report can be deleted. Return it for correction instead.",
         });
       }
-      await db.delete(dailyReport).where(eq(dailyReport.id, input.id));
+      const deleted = await db
+        .delete(dailyReport)
+        .where(and(eq(dailyReport.id, input.id), eq(dailyReport.status, "draft")))
+        .returning({ id: dailyReport.id });
+      if (deleted.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "The report was submitted while it was being deleted. Refresh and try again.",
+        });
+      }
       return { success: true };
+    }),
+
+  /**
+   * Bulk counterpart of delete.
+   *
+   * Skips rather than throws on a non-draft. The single-report version can
+   * refuse outright because the caller asked about exactly one thing; a
+   * selection of twenty where one has since been submitted is not a request to
+   * do nothing, and failing the whole call would leave the user re-selecting
+   * nineteen rows to find out which one. The counts come back so the client can
+   * say what actually happened.
+   *
+   * The client still disables the action unless every selected row is a draft,
+   * from the status it already has. This is the guard for the case where that
+   * status went stale between the render and the click.
+   */
+  deleteMany: companyPermissionProcedure("project:write")
+    .input(z.object({ ids: z.array(z.string().min(1)).min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      const rows = await db
+        .select({ report: dailyReport })
+        .from(dailyReport)
+        .innerJoin(project, eq(project.id, dailyReport.projectId))
+        .where(and(inArray(dailyReport.id, input.ids), eq(project.companyId, ctx.companyId)));
+
+      if (rows.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "No daily reports found" });
+      }
+
+      for (const projectId of new Set(rows.map((row) => row.report.projectId))) {
+        await assertProjectAccess(ctx, projectId);
+      }
+
+      const deleted = await db
+        .delete(dailyReport)
+        .where(
+          and(
+            inArray(
+              dailyReport.id,
+              rows.map((row) => row.report.id),
+            ),
+            eq(dailyReport.status, "draft"),
+          ),
+        )
+        .returning({ id: dailyReport.id });
+
+      return { success: true, deleted: deleted.length, skipped: rows.length - deleted.length };
     }),
 });

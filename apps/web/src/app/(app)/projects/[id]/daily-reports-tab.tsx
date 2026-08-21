@@ -19,17 +19,41 @@ import {
   SelectValue,
 } from "@DashboardV2/ui/components/select";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
-import { Plus } from "@DashboardV2/ui/components/icons";
+import { Plus, Trash2 } from "@DashboardV2/ui/components/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@DashboardV2/ui/components/alert-dialog";
+
+import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { QueryError } from "@/components/query-error";
+import { SelectAllHead, SelectRowCell, ToolbarAction } from "@/components/table-selection";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@DashboardV2/ui/components/table";
+
 import { StatusBadge } from "@/components/status-badge";
-import { interpolate } from "@/i18n";
+import { interpolate, plural } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
 import { datePickerLabels } from "@/lib/date-picker-labels";
 import { toast } from "@/lib/toast";
+import { summarizeSelection } from "@/lib/summarize-selection";
 import { useFormat } from "@/lib/use-format";
+import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
 import DailyReportForm from "./daily-report-form";
@@ -76,6 +100,7 @@ export default function DailyReportsTab({
   const queryClient = useQueryClient();
 
   const [openId, setOpenId] = useState<string | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [status, setStatus] = useState<string>(ALL);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -96,6 +121,34 @@ export default function DailyReportsTab({
     }),
   );
   const open = useMutation(trpc.dailyReport.open.mutationOptions());
+  const deleteReports = useMutation(trpc.dailyReport.deleteMany.mutationOptions());
+
+  // Above the early return below, not beside the rows it selects: opening a
+  // report unmounts the table, and a hook that only runs on the list branch
+  // would change the hook order between the two.
+  const reports = listQuery.data?.reports ?? [];
+  const selection = useRowSelection(reports, {
+    getId: (row) => row.id,
+    resetKey: `${status}\u0000${from}\u0000${to}\u0000${page}`,
+  });
+  // Only a draft can be deleted; a submitted report is part of the record. The
+  // server enforces this too, and skips rather than fails on a stale status.
+  const deletableSelection =
+    selection.selectedCount > 0 &&
+    selection.selectedRows.every((row) => row.status === "draft");
+
+  async function confirmBulkDelete() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    try {
+      const result = await deleteReports.mutateAsync({ ids });
+      await queryClient.invalidateQueries(trpc.dailyReport.pathFilter());
+      toast.success(plural(t.daily.bulkDeletedToast, result.deleted));
+      selection.clear();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.common.bulkDeleteFailed);
+    }
+  }
 
   if (openId) {
     return (
@@ -111,7 +164,6 @@ export default function DailyReportsTab({
   }
 
   const data = listQuery.data;
-  const reports = data?.reports ?? [];
   const total = data?.total ?? 0;
   const filtered = status !== ALL || from !== "" || to !== "";
 
@@ -268,34 +320,48 @@ export default function DailyReportsTab({
           </Empty>
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-xs text-muted-foreground">
-                    <th scope="col" className="px-3 py-2 text-left font-medium">
-                      {t.daily.date}
-                    </th>
-                    <th scope="col" className="px-3 py-2 text-left font-medium">
-                      {t.common.actions}
-                    </th>
-                    <th scope="col" className="px-3 py-2 text-left font-medium">
-                      {t.daily.weather}
-                    </th>
-                    <th scope="col" className="px-3 py-2 text-right font-medium">
-                      {t.daily.manpower}
-                    </th>
-                    <th scope="col" className="px-3 py-2 text-right font-medium">
-                      {t.daily.photos}
-                    </th>
-                    <th scope="col" className="px-3 py-2 text-left font-medium">
-                      {t.daily.preparedBy}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
+            <div className="px-4 pb-2">
+              <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
+                <ToolbarAction
+                  icon={<Trash2 />}
+                  variant="destructive"
+                  label={
+                    deletableSelection
+                      ? plural(t.daily.deleteSelectedLabel, selection.selectedCount)
+                      : t.daily.onlyDraftsDeletable
+                  }
+                  disabled={!deletableSelection}
+                  onClick={() => setBulkDeleteOpen(true)}
+                />
+              </BulkActionsBar>
+            </div>
+            <Table className="min-w-[44rem] table-fixed">
+                <TableHeader>
+                  <TableRow>
+                    <SelectAllHead selection={selection} />
+                    <TableHead>{t.daily.date}</TableHead>
+                    <TableHead>{t.common.actions}</TableHead>
+                    <TableHead>{t.daily.weather}</TableHead>
+                    <TableHead className="text-right">{t.daily.manpower}</TableHead>
+                    <TableHead className="text-right">{t.daily.photos}</TableHead>
+                    <TableHead className="pr-4">{t.daily.preparedBy}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {reports.map((row) => (
-                    <tr key={row.id} className="border-b last:border-0">
-                      <th scope="row" className="px-3 py-2 text-left font-normal">
+                    <TableRow
+                      key={row.id}
+                      data-state={selection.isSelected(row.id) ? "selected" : undefined}
+                    >
+                      <SelectRowCell
+                        selection={selection}
+                        id={row.id}
+                        name={formatDate(row.reportDate)}
+                      />
+                      {/* The date names the row, so it stays a <th scope="row">
+                          — carrying TableCell's classes so it lines up with the
+                          columns beside it. */}
+                      <th scope="row" className="p-2 text-left align-middle font-normal">
                         <button
                           type="button"
                           className="font-medium underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
@@ -309,24 +375,25 @@ export default function DailyReportsTab({
                           </span>
                         )}
                       </th>
-                      <td className="px-3 py-2">
+                      <TableCell>
                         <StatusBadge kind="dailyReport" value={row.status} />
-                      </td>
-                      <td className="px-3 py-2 text-muted-foreground">
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
                         {row.weather ? (weatherLabel[row.weather] ?? row.weather) : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
                         {row.headcount > 0 ? row.headcount : <span className="text-muted-foreground">—</span>}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
                         {row.photoCount > 0 ? row.photoCount : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-muted-foreground">{row.preparedByName}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell className="pr-4 text-muted-foreground">
+                        {row.preparedByName}
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </TableBody>
+            </Table>
 
             {total > PAGE_SIZE && (
               <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -360,6 +427,37 @@ export default function DailyReportsTab({
           </>
         )}
       </CardContent>
+
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {plural(t.common.bulkDeleteTitle, selection.selectedCount)}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">{t.daily.bulkDeleteDescription}</span>
+              <span className="block font-medium text-foreground">
+                {summarizeSelection(
+                  selection.selectedRows.map((row) => formatDate(row.reportDate)),
+                  t,
+                )}
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.common.cancel}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setBulkDeleteOpen(false);
+                void confirmBulkDelete();
+              }}
+            >
+              {t.common.delete}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

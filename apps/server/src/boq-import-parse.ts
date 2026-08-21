@@ -1,4 +1,5 @@
 import { PLAN_TOLERANCE, validatePlanWindow } from "@DashboardV2/api/lib/schedule-plan";
+import { MAX_WORKBOOK_SHEETS } from "@DashboardV2/api/lib/workbook-limits";
 import { inflateRawSync } from "node:zlib";
 // Type-only for the reason given in project-export.ts: exceljs is CommonJS over
 // a tree of dynamic requires that Vercel's bundler will not resolve at boot.
@@ -20,7 +21,6 @@ export const MAX_IMPORT_BYTES = 4 * 1024 * 1024;
 const MAX_XLSX_ENTRIES = 5_000;
 const MAX_XLSX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
 const MAX_XLSX_ENTRY_BYTES = 32 * 1024 * 1024;
-const MAX_WORKBOOK_SHEETS = 20;
 export const MAX_WORKBOOK_ROWS = 10_000;
 export const MAX_WORKBOOK_COLUMNS = 1_000;
 const MAX_WORKBOOK_CELLS = 250_000;

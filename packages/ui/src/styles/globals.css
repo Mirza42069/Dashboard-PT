@@ -47,25 +47,69 @@
   --input: oklch(0.9013 0.0156 257.2001);
   --ring: oklch(0.6503 0.0220 257.4949);
   /*
-   * Sequential single-hue ramp, ordered by *prominence against this theme's
-   * page*: step 1 has the most contrast, step 5 the least. Not by raw
-   * lightness — that is what broke before.
+   * Sequential ramp, ordered by *prominence against this theme's page*: step 1
+   * has the most contrast, step 5 the least. Not by raw lightness — that is
+   * what broke before.
    *
-   * These are the same five values the ramp has always had, reversed. The old
-   * order made --chart-1 the palest (L 0.81), and the S-curve reasonably asked
-   * for --chart-1 to draw its most important series: the actual-progress line
-   * came out at L 0.81 on an L 0.99 card and all but vanished. Indexing by
-   * prominence means "reach for chart-1 first" is now the right instinct.
+   * The old order made --chart-1 the palest (L 0.81), and the S-curve
+   * reasonably asked for --chart-1 to draw its most important series: the
+   * actual-progress line came out at L 0.81 on an L 0.99 card and all but
+   * vanished. Indexing by prominence means "reach for chart-1 first" is now the
+   * right instinct.
    *
-   * .dark carries its own ramp under the same rule — see below. Hue tracks
-   * lightness the way it always did: the pale end sits near 252, the dark end
-   * near 266.
+   * Teal through green to amber. This used to be a single blue hue drifting
+   * 252 → 266, which made every series and every accent in the product some
+   * shade of the same colour — the S-curve's two lines were two blues, and
+   * whatever reached for a step of this ramp as a decorative accent read as
+   * "the blue one" rather than as anything in particular. Spreading the hue
+   * gives the ramp's ends somewhere to be: --chart-1 and --chart-4 are now
+   * genuinely different colours, which is what a two-series chart needs.
+   *
+   * --chart-3 sits at hue 168 rather than the 155 it would take as the middle
+   * of an even sweep, deliberately: --success is at 155, and this ramp encodes
+   * magnitude, not sentiment. Holding it apart is what keeps a chart step from
+   * reading as "good" (see the note on --success above).
+   *
+   * .dark carries its own ramp under the same rule — see below.
    */
-  --chart-1: oklch(0.4200 0.1800 266);
-  --chart-2: oklch(0.4900 0.2200 264);
-  --chart-3: oklch(0.5500 0.2200 263);
-  --chart-4: oklch(0.6200 0.1900 260);
-  --chart-5: oklch(0.8100 0.1000 252);
+  --chart-1: oklch(0.4300 0.0900 195);
+  --chart-2: oklch(0.5100 0.1000 185);
+  --chart-3: oklch(0.5500 0.1200 168);
+  --chart-4: oklch(0.6500 0.1400 75);
+  --chart-5: oklch(0.8300 0.0800 85);
+  /*
+   * Progress bands. A bar's fill is chosen from these by percentage complete,
+   * so a column of bars at different completions reads as a spread of colour
+   * rather than one repeated blue — which is what it was, because both bar
+   * primitives hardcoded a single step of the ramp above and almost every call
+   * site took that default.
+   *
+   * Separate from --chart-* on purpose. The chart ramp encodes magnitude for a
+   * data series; these encode how far along one bar is, and the two want
+   * different things — a chart step must sit legibly beside four other chart
+   * steps, a progress band must be told apart from the band either side of it.
+   *
+   * Amber for barely-started, teal through the middle, green at the top. The
+   * jump from amber to teal is the one deliberate discontinuity: it marks "has
+   * this actually got going". Behind-schedule bars ignore this ramp entirely
+   * and take --destructive, so red keeps meaning trouble rather than magnitude.
+   *
+   * Neighbours are separated on *two* axes, hue and lightness, not one. A first
+   * pass moved hue alone and the middle of the scale collapsed: bands 2 and 3
+   * came out as two teals and 4 and 5 as two greens, which is the same failure
+   * as the blue it replaced, just further along. Alternating light and dark —
+   * light cyan, deep teal, bright green, deep green — is what makes adjacent
+   * bands tell apart at a glance.
+   *
+   * Lightness is capped around 0.64 so every band clears 3:1 against the card
+   * it is drawn on (WCAG 1.4.11, non-text contrast) — the bands are graphical
+   * objects carrying information, so that is the bar they have to clear.
+   */
+  --progress-1: oklch(0.6400 0.1400 62);
+  --progress-2: oklch(0.6200 0.1100 212);
+  --progress-3: oklch(0.5000 0.1000 182);
+  --progress-4: oklch(0.5900 0.1500 145);
+  --progress-5: oklch(0.4200 0.1300 158);
   --radius: 0.375rem;
   --sidebar: oklch(0.9601 0.0103 261.7889);
   --sidebar-foreground: oklch(0.1443 0.0191 261.1564);
@@ -146,14 +190,26 @@
    * to :root, which meant whichever series used the dark end was unreadable in
    * dark mode no matter how the light end was fixed.
    *
-   * Chroma is scaled down as lightness climbs so every step stays inside sRGB;
-   * blue simply cannot hold C 0.22 at L 0.87.
+   * Chroma is scaled down as lightness climbs so every step stays inside sRGB.
+   *
+   * Kept in step with the :root ramp's move off blue, even though nothing
+   * renders from this block today — getTheme() in apps/web/src/lib/theme.ts
+   * forces dark to light, so .dark is unreachable. Leaving five blues here
+   * while the light ramp is teal-to-amber would make the one-line revert that
+   * file describes land the product in a different palette than it left.
    */
-  --chart-1: oklch(0.8700 0.0800 252);
-  --chart-2: oklch(0.7900 0.1200 256);
-  --chart-3: oklch(0.7000 0.1600 260);
-  --chart-4: oklch(0.6200 0.1900 263);
-  --chart-5: oklch(0.4900 0.2200 266);
+  --chart-1: oklch(0.8600 0.0600 190);
+  --chart-2: oklch(0.7800 0.0900 185);
+  --chart-3: oklch(0.7200 0.1300 165);
+  --chart-4: oklch(0.7600 0.1400 75);
+  --chart-5: oklch(0.5200 0.1000 195);
+  /* The progress bands, lifted for a dark card. Same unreachable-for-now note
+     as the ramp above. */
+  --progress-1: oklch(0.7600 0.1400 65);
+  --progress-2: oklch(0.7800 0.1000 212);
+  --progress-3: oklch(0.6400 0.1100 182);
+  --progress-4: oklch(0.7600 0.1500 145);
+  --progress-5: oklch(0.6200 0.1400 158);
   --sidebar: oklch(0.2452 0.0305 256.8649);
   --sidebar-foreground: oklch(0.9392 0.0101 238.5151);
   --sidebar-primary: oklch(0.4887 0.2427 263.9688);
@@ -201,6 +257,11 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+  --color-progress-5: var(--progress-5);
+  --color-progress-4: var(--progress-4);
+  --color-progress-3: var(--progress-3);
+  --color-progress-2: var(--progress-2);
+  --color-progress-1: var(--progress-1);
   --color-chart-5: var(--chart-5);
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);

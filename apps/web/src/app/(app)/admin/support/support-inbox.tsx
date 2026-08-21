@@ -50,7 +50,12 @@ type SupportStatus = (typeof STATUSES)[number];
 type SupportRequest = inferOutput<typeof trpc.support.list>["requests"][number];
 
 function statusClass(status: SupportStatus) {
-  if (status === "new") return "border-blue-500/25 bg-blue-500/10 text-blue-700 dark:text-blue-300";
+  // Violet, not blue: blue is gone from the product, and an unanswered request
+  // is the "needs a person" state the mark's purple stands for elsewhere. Raw
+  // palette classes rather than tokens to match the three statuses below it.
+  if (status === "new") {
+    return "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300";
+  }
   if (status === "accepted") {
     return "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300";
   }

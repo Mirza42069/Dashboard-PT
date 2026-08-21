@@ -42,10 +42,14 @@ import { Fragment, useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { QueryError } from "@/components/query-error";
-import { interpolate } from "@/i18n";
+import { interpolate, plural } from "@/i18n";
 import { Hint } from "@/components/hint";
 import { useT } from "@/i18n/provider";
 import { buildSections, sectionAmount, sectionWeight, totalLeafWeight } from "@/lib/boq/curves";
+import { BulkActionsBar } from "@/components/bulk-actions-bar";
+import { SelectAllHead, SelectRowCell, ToolbarAction } from "@/components/table-selection";
+import { summarizeSelection } from "@/lib/summarize-selection";
+import { useRowSelection } from "@/lib/use-row-selection";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
@@ -78,8 +82,8 @@ export default function BoqTab({
   const queryClient = useQueryClient();
 
   const [dialog, setDialog] = useState<DialogTarget | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<{ id: string; code: string } | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   const boqQuery = useQuery(
     trpc.boq.overview.queryOptions({
@@ -90,7 +94,7 @@ export default function BoqTab({
   const versionsQuery = useQuery(trpc.boq.listVersions.queryOptions({ projectId }));
   const createDraft = useMutation(trpc.boq.getOrCreateDraft.mutationOptions());
   const recalcWeights = useMutation(trpc.boq.recalcWeights.mutationOptions());
-  const deleteItem = useMutation(trpc.boq.deleteItem.mutationOptions());
+  const deleteItems = useMutation(trpc.boq.deleteItems.mutationOptions());
   const reorder = useMutation(trpc.boq.reorderItems.mutationOptions());
 
   async function refresh() {
@@ -111,6 +115,16 @@ export default function BoqTab({
     }
   }
 
+  // Above the early returns: this component has three of them, and a hook that
+  // only ran on the happy path would change the hook order between renders.
+  // Selection is over the flat item list, so "select all" covers sections and
+  // lines alike.
+  const allItems = boqQuery.data?.items ?? [];
+  const selection = useRowSelection(allItems, {
+    getId: (item) => item.id,
+    resetKey: boqQuery.data?.version?.id ?? "",
+  });
+
   if (boqQuery.isPending || versionsQuery.isPending) return <Skeleton className="h-64 w-full" />;
   if (boqQuery.isError || versionsQuery.isError) {
     return (
@@ -122,7 +136,7 @@ export default function BoqTab({
   }
 
   const version = boqQuery.data?.version ?? null;
-  const items = boqQuery.data?.items ?? [];
+  const items = allItems;
   const versions = versionsQuery.data ?? [];
   const versionOptions = versions.map((candidate) => ({
     value: candidate.id,
@@ -163,6 +177,33 @@ export default function BoqTab({
   const editable = canEdit && isDraft;
   const hasDraft = versions.some((candidate) => candidate.status === "draft");
   const sections = buildSections(items);
+  /**
+   * Lines that will go with the sections ticked, without being ticked
+   * themselves.
+   *
+   * Deleting a section cascades to everything under it — that is the whole
+   * point of the recursive delete — so a confirmation that only counts the
+   * checkboxes understates what is about to happen. This is the difference,
+   * and it is what the dialog reports.
+   */
+  const cascadedLineCount = sections
+    .filter((section) => selection.isSelected(section.header.id))
+    .flatMap((section) => section.leaves)
+    .filter((leaf) => !selection.isSelected(leaf.id)).length;
+
+  async function confirmBulkDelete() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0 || !version) return;
+    try {
+      const result = await deleteItems.mutateAsync({ versionId: version.id, ids });
+      await refresh();
+      toast.success(plural(t.boq.bulkDeletedToast, result.count));
+      selection.clear();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.common.bulkDeleteFailed);
+    }
+  }
+
   const weightTotal = totalLeafWeight(items);
   const weightsReady = Math.abs(weightTotal - 100) <= WEIGHT_TOLERANCE;
 
@@ -267,23 +308,61 @@ export default function BoqTab({
 
       <Card>
         <CardContent className="px-0">
-          <Table>
+          {/*
+           * table-fixed with scrollX off: the seven narrow columns keep their
+           * declared widths and the description takes what is left, wrapping
+           * rather than pushing the table past the card. Codes truncate for the
+           * same reason — a long one used to set a min-content floor that the
+           * whole table had to widen to satisfy.
+           */}
+          {editable && (
+            <div className="px-4 pb-2">
+              <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
+                {/* Edit is a single-row action, so it is offered only when the
+                    selection is one row. A bulk edit form for BoQ lines would
+                    have to invent semantics for "set the quantity of twelve
+                    different lines", which is not a thing anyone asked for. */}
+                <ToolbarAction
+                  icon={<Pencil />}
+                  label={t.boq.editSelected}
+                  disabled={selection.selectedCount !== 1}
+                  onClick={() => {
+                    const target = items.find((item) => item.id === selection.selectedIds[0]);
+                    if (!target) return;
+                    setDialog({
+                      parentId: target.parentId,
+                      editingId: target.id,
+                      initialValues: toFormValues(target),
+                    });
+                  }}
+                />
+                <ToolbarAction
+                  icon={<Trash2 />}
+                  variant="destructive"
+                  label={plural(t.boq.deleteSelectedLabel, selection.selectedCount)}
+                  onClick={() => setBulkDeleteOpen(true)}
+                />
+              </BulkActionsBar>
+            </div>
+          )}
+          <Table className="min-w-[48rem] table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead className="pl-4 w-24">{t.boq.code}</TableHead>
+                {editable && <SelectAllHead selection={selection} />}
+                <TableHead className={editable ? "w-24" : "w-24 pl-4"}>{t.boq.code}</TableHead>
                 <TableHead>{t.boq.description}</TableHead>
                 <TableHead className="w-16">{t.boq.unit}</TableHead>
                 <TableHead className="w-28 text-right">{t.boq.quantity}</TableHead>
                 <TableHead className="w-32 text-right">{t.boq.unitRate}</TableHead>
                 <TableHead className="w-36 text-right">{t.boq.amount}</TableHead>
                 <TableHead className="w-20 text-right">{t.boq.weight}</TableHead>
-                {editable && <TableHead className="pr-4 w-32" />}
+                {editable && <TableHead className="pr-4 w-24" />}
               </TableRow>
             </TableHeader>
             <TableBody>
               {sections.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={editable ? 8 : 7}>
+                  <TableCell colSpan={editable ? 9 : 7}>
                     <Empty className="border-0 py-6">
                       <EmptyHeader>
                         <EmptyMedia variant="icon">
@@ -301,8 +380,22 @@ export default function BoqTab({
 
                 return (
                   <Fragment key={section.header.id}>
-                    <TableRow className="bg-muted/40">
-                      <TableCell className="pl-4 font-mono font-medium whitespace-nowrap">
+                    <TableRow
+                      className="bg-muted/40"
+                      data-state={
+                        selection.isSelected(section.header.id) ? "selected" : undefined
+                      }
+                    >
+                      {editable && (
+                        <SelectRowCell
+                          selection={selection}
+                          id={section.header.id}
+                          name={section.header.code}
+                        />
+                      )}
+                      <TableCell
+                        className={`truncate font-mono font-medium ${editable ? "" : "pl-4"}`}
+                      >
                         {section.header.code}
                       </TableCell>
                       <TableCell className="font-medium">{section.header.description}</TableCell>
@@ -358,41 +451,20 @@ export default function BoqTab({
                             >
                               <ChevronDown />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              aria-label={t.common.edit}
-                              onClick={() =>
-                                setDialog({
-                                  parentId: null,
-                                  editingId: section.header.id,
-                                  initialValues: toFormValues(section.header),
-                                })
-                              }
-                            >
-                              <Pencil />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              aria-label={t.boq.deleteLine}
-                              onClick={() =>
-                                setPendingDelete({
-                                  id: section.header.id,
-                                  code: section.header.code,
-                                })
-                              }
-                            >
-                              <Trash2 />
-                            </Button>
                           </div>
                         </TableCell>
                       )}
                     </TableRow>
 
                     {section.leaves.map((leaf) => (
-                      <TableRow key={leaf.id}>
-                        <TableCell className="pl-8 font-mono whitespace-nowrap text-muted-foreground">
+                      <TableRow
+                        key={leaf.id}
+                        data-state={selection.isSelected(leaf.id) ? "selected" : undefined}
+                      >
+                        {editable && (
+                          <SelectRowCell selection={selection} id={leaf.id} name={leaf.code} />
+                        )}
+                        <TableCell className="truncate pl-8 font-mono text-muted-foreground">
                           {leaf.code}
                         </TableCell>
                         <TableCell>{leaf.description}</TableCell>
@@ -427,28 +499,6 @@ export default function BoqTab({
                                 onClick={() => move(leafIds, leaf.id, 1)}
                               >
                                 <ChevronDown />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                aria-label={t.common.edit}
-                                onClick={() =>
-                                  setDialog({
-                                    parentId: section.header.id,
-                                    editingId: leaf.id,
-                                    initialValues: toFormValues(leaf),
-                                  })
-                                }
-                              >
-                                <Pencil />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                aria-label={t.boq.deleteLine}
-                                onClick={() => setPendingDelete({ id: leaf.id, code: leaf.code })}
-                              >
-                                <Trash2 />
                               </Button>
                             </div>
                           </TableCell>
@@ -490,17 +540,27 @@ export default function BoqTab({
         />
       )}
 
-      <AlertDialog
-        open={pendingDelete !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingDelete(null);
-        }}
-      >
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{t.boq.deleteLine}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {interpolate(t.boq.deleteConfirm, { code: pendingDelete?.code ?? "" })}
+            <AlertDialogTitle>
+              {plural(t.common.bulkDeleteTitle, selection.selectedCount)}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <span className="block">{t.boq.bulkDeleteDescription}</span>
+              <span className="block font-medium text-foreground">
+                {summarizeSelection(
+                  selection.selectedRows.map((item) => `${item.code} - ${item.description}`),
+                  t,
+                )}
+              </span>
+              {/* The cascade, stated. Ticking one section can remove twenty
+                  rows, and a count of the checkboxes would not say so. */}
+              {cascadedLineCount > 0 && (
+                <span className="block">
+                  {interpolate(t.boq.bulkDeleteCascade, { count: cascadedLineCount })}
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -508,11 +568,8 @@ export default function BoqTab({
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
-                const target = pendingDelete;
-                setPendingDelete(null);
-                if (target) {
-                  void run(() => deleteItem.mutateAsync({ id: target.id }), t.boq.deleted);
-                }
+                setBulkDeleteOpen(false);
+                void confirmBulkDelete();
               }}
             >
               {t.common.delete}

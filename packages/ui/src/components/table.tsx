@@ -4,14 +4,53 @@ import * as React from "react"
 
 import { cn } from "@DashboardV2/ui/lib/utils"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({
+  className,
+  containerRef,
+  containerClassName,
+  containerProps,
+  scrollX = true,
+  ...props
+}: React.ComponentProps<"table"> & {
+  /**
+   * A handle on the scroll container, not on the table.
+   *
+   * The virtualised grids measure and scroll the *container* — it is what their
+   * ResizeObserver watches and what their scroll offsets are read from. Without
+   * this they had to hand-roll the whole wrapper, which is how five tables in
+   * one tab ended up with five different paddings and three different scroll
+   * affordances.
+   */
+  containerRef?: React.Ref<HTMLDivElement>
+  /** Merged onto the container: max height, overscroll, scrollbar gutter. */
+  containerClassName?: string
+  /** role, aria-label, tabIndex, onScroll — anything the container itself needs. */
+  containerProps?: Omit<React.ComponentProps<"div">, "className" | "ref">
+  /**
+   * Whether the container may scroll sideways. On by default.
+   *
+   * False for tables that fit themselves to the container instead of letting
+   * the reader chase columns off the edge. The scroll shadows go with it —
+   * they are the affordance for hidden columns, and a fitted table has none.
+   * This has to be a prop rather than something `containerClassName` cancels:
+   * `table-scroll-shadows` is a component class, not a utility, so
+   * tailwind-merge has nothing to override it with.
+   */
+  scrollX?: boolean
+}) {
   return (
     <div
       data-slot="table-container"
+      ref={containerRef}
       // table-scroll-shadows (globals.css) fades in a shadow on whichever side
       // still has hidden columns — the affordance a bare overflow-x-auto never
       // gives on a narrow screen.
-      className="relative w-full overflow-x-auto table-scroll-shadows"
+      className={cn(
+        "relative w-full",
+        scrollX && "overflow-x-auto table-scroll-shadows",
+        containerClassName
+      )}
+      {...containerProps}
     >
       <table
         data-slot="table"

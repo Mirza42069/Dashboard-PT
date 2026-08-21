@@ -29,20 +29,35 @@ import {
   ChevronRight,
   Copy,
   Save,
+  SlidersHorizontal,
   Trash2,
 } from "@DashboardV2/ui/components/icons";
 import { useState } from "react";
 import { toast } from "@/lib/toast";
 
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@DashboardV2/ui/components/table";
+
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import {
-  MatrixColumnSpacer,
   MatrixRowSpacer,
   useMatrixWindow,
   WindowedMonthBandRow,
 } from "@/components/matrix-window";
 import { QueryError } from "@/components/query-error";
-import { interpolate } from "@/i18n";
+import { interpolate, plural } from "@/i18n";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@DashboardV2/ui/components/popover";
 import {
   Tooltip,
   TooltipContent,
@@ -53,23 +68,47 @@ import { Hint } from "@/components/hint";
 import { useLocale, useT } from "@/i18n/provider";
 import { computePlannedCurve, distributionMap, scheduleRows } from "@/lib/boq/curves";
 import { datePickerLabels } from "@/lib/date-picker-labels";
-import { buildPeriodHeader } from "@/lib/period-header";
+import {
+  COMPACT_CELL_WIDTH,
+  MAX_PERIOD_WIDTH,
+  MIN_PERIOD_WIDTH_EDITABLE,
+  MIN_PERIOD_WIDTH_READONLY,
+  fitMatrix,
+} from "@/lib/matrix-fit";
+import { toggleFold, type MonthFoldState } from "@/lib/month-fold";
+import { useRowSelection } from "@/lib/use-row-selection";
+import { buildMatrixColumns, buildPeriodHeader, lastPeriodOf } from "@/lib/period-header";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 /** A row is "complete" when its cells total 100, within rounding. */
 const ROW_TOLERANCE = 0.5;
 
-/** Columns before the period grid: select, line, start, finish, duration, rate. */
-const LEADING_COLUMNS = 6;
+/**
+ * Columns before the period grid: select, line.
+ *
+ * It used to be six. Start, finish, duration and weight-per-period spent 352px
+ * of a laptop's width before a single week was drawn, which is why this grid
+ * could not be fitted to the screen at all — the period columns were dividing
+ * whatever was left of about 300px. They now live in the row's plan popover,
+ * where the same editors do the same job without every row paying for them.
+ *
+ * Declared as widths and summed, rather than as a total restated beside the
+ * <colgroup>: the fit arithmetic depends on the two agreeing, and they used to
+ * be kept in step by hand.
+ */
+const LEADING_COL_WIDTHS = [40, 256] as const;
 /** Columns after it: row total and the row menu. */
-const TRAILING_COLUMNS = 2;
+const TRAILING_COL_WIDTHS = [88, 80] as const;
+const sumWidths = (widths: readonly number[]) => widths.reduce((total, w) => total + w, 0);
+
+const LEADING_COLUMNS = LEADING_COL_WIDTHS.length;
+const TRAILING_COLUMNS = TRAILING_COL_WIDTHS.length;
+const LEADING_WIDTH = sumWidths(LEADING_COL_WIDTHS);
+const TRAILING_WIDTH = sumWidths(TRAILING_COL_WIDTHS);
 const ESTIMATED_ROW_HEIGHT = 44;
-const PERIOD_WIDTH = 80;
 const ESTIMATED_HEADER_HEIGHT = 72;
-const LEADING_WIDTH = 648;
 const STICKY_LEADING_WIDTH = 40;
-const TRAILING_WIDTH = 168;
 
 const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
 
@@ -95,27 +134,67 @@ export default function ScheduleTab({
 
   const [drafts, setDrafts] = useState<Map<string, string>>(new Map());
   const [planDrafts, setPlanDrafts] = useState<Map<string, PlanDraft>>(new Map());
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+
   /** The line whose plan the bulk bar will paste. Set from a row's menu. */
   const [copySource, setCopySource] = useState<string | null>(null);
   const [bulkPlan, setBulkPlan] = useState<PlanDraft>({ start: "", finish: "" });
   const [saving, setSaving] = useState(false);
   const [applying, setApplying] = useState(false);
   const [showFullMatrix, setShowFullMatrix] = useState(false);
+  /**
+   * What the reader has said about each month — see the same state in
+   * progress-tab.tsx and lib/month-fold.ts. The two grids fold independently,
+   * because they are read for different reasons and rarely at the same width.
+   */
+  const [monthFold, setMonthFold] = useState<MonthFoldState>(() => new Map());
 
   const reportQuery = useQuery(
     trpc.progress.report.queryOptions({ projectId, versionId: targetVersionId }),
   );
+  const matrixPeriods = reportQuery.data?.periods ?? [];
+  // Built here rather than after the early returns, because the selection hook
+  // below needs it and hooks cannot be called conditionally.
+  const matrixRows = scheduleRows(reportQuery.data?.items ?? []);
+  /**
+   * The shared selection, replacing a hand-rolled Set that did the same job
+   * slightly differently from every other table in the app.
+   *
+   * Keyed on `leaf.id`: a row here is `{ section, leaf }`, and the leaf is the
+   * BoQ line every bulk action addresses.
+   */
+  const selection = useRowSelection(matrixRows, { getId: (row) => row.leaf.id });
+  // Called before the fit: this is what measures the container the fit divides.
+  // Its own column window is off, so the count it takes need only be stable.
   const matrixWindow = useMatrixWindow({
-    rowCount: scheduleRows(reportQuery.data?.items ?? []).length,
-    columnCount: reportQuery.data?.periods.length ?? 0,
+    rowCount: matrixRows.length,
+    columnCount: matrixPeriods.length,
     estimatedRowHeight: ESTIMATED_ROW_HEIGHT,
-    columnWidth: PERIOD_WIDTH,
+    // Constant on purpose — the fitted width moves on every resize tick and
+    // this value sits in the observer effect's dependency list.
+    columnWidth: MAX_PERIOD_WIDTH,
     estimatedHeaderHeight: ESTIMATED_HEADER_HEIGHT,
     leadingWidth: LEADING_WIDTH,
     stickyLeadingWidth: STICKY_LEADING_WIDTH,
     windowed: !showFullMatrix,
+    windowColumns: false,
   });
+  const fit = fitMatrix({
+    available: showFullMatrix ? 0 : matrixWindow.containerWidth,
+    leadingWidth: LEADING_WIDTH,
+    trailingWidth: TRAILING_WIDTH,
+    periods: matrixPeriods,
+    state: monthFold,
+    minPeriodWidth: canEdit ? MIN_PERIOD_WIDTH_EDITABLE : MIN_PERIOD_WIDTH_READONLY,
+    dataDate: reportQuery.data?.project.dataDate ?? null,
+  });
+  const allMatrixColumns = buildMatrixColumns(matrixPeriods, fit.collapsed);
+
+  function toggleMonth(monthKey: string) {
+    // Against what is rendered, not what is stored: a month the fitter folded
+    // has no stored intent to invert.
+    const rendered = fit.collapsed.has(monthKey);
+    setMonthFold((current) => toggleFold(current, monthKey, rendered));
+  }
   const generatePeriods = useMutation(trpc.schedule.generatePeriods.mutationOptions());
   const setCells = useMutation(trpc.schedule.setDistributionCells.mutationOptions());
   const setItemPlan = useMutation(trpc.schedule.setItemPlan.mutationOptions());
@@ -204,23 +283,57 @@ export default function ScheduleTab({
     );
   }
 
-  const rows = scheduleRows(items);
+  const rows = matrixRows;
   const visibleRows = rows.slice(matrixWindow.rowWindow.start, matrixWindow.rowWindow.end);
-  const visiblePeriods = periods.slice(
-    matrixWindow.columnWindow.start,
-    matrixWindow.columnWindow.end,
-  );
+  // Every column. Columns are no longer virtualised — the grid is fitted to
+  // the card instead, so there is nothing off the side to leave unrendered.
+  const visibleColumns = allMatrixColumns;
   const visibleHeader = buildPeriodHeader(
     format,
-    visiblePeriods,
+    visibleColumns,
     report?.project.dataDate ?? null,
+    // The derived set, not the intent: a month the fitter folded still has to
+    // be offered an unfold control, and only this knows it is folded.
+    fit.collapsed,
   );
-  const renderedColumnCount =
-    LEADING_COLUMNS +
-    visiblePeriods.length +
-    TRAILING_COLUMNS +
-    Number(matrixWindow.columnWindow.beforeSize > 0) +
-    Number(matrixWindow.columnWindow.afterSize > 0);
+  /**
+   * Where each period sits in the flat period list.
+   *
+   * The planned curves below are arrays indexed by period position, so a folded
+   * column — which stands for several of them — needs their indices to add up or
+   * to read the last of.
+   */
+  const periodIndexById = new Map(periods.map((period, index) => [period.id, index]));
+  /**
+   * One footer figure for one column.
+   *
+   * The curves are arrays indexed by period position; a column may stand for a
+   * run of them. How the run reduces is the caller's business, because the two
+   * footer rows differ on exactly that: per-period shares add up, running totals
+   * do not.
+   */
+  function plannedForColumn(
+    curve: number[],
+    column: (typeof allMatrixColumns)[number],
+    reduce: "sum" | "last",
+  ): number {
+    if (column.kind === "period") {
+      return curve[periodIndexById.get(column.period.id) ?? -1] ?? 0;
+    }
+    if (reduce === "last") {
+      return curve[periodIndexById.get(lastPeriodOf(column).id) ?? -1] ?? 0;
+    }
+    return column.periods.reduce(
+      (total, period) => total + (curve[periodIndexById.get(period.id) ?? -1] ?? 0),
+      0,
+    );
+  }
+
+  const renderedColumnCount = LEADING_COLUMNS + visibleColumns.length + TRAILING_COLUMNS;
+  /** The two states a fitted grid can still exceed its container in. */
+  const scrollsSideways = showFullMatrix || fit.overflows;
+  /** Narrow enough to hold a figure but not a caption under it. */
+  const compact = fit.periodWidth < COMPACT_CELL_WIDTH;
   const firstIndex = periods[0]?.periodIndex ?? 1;
   const lastIndex = periods[periods.length - 1]?.periodIndex ?? 1;
 
@@ -335,7 +448,7 @@ export default function ScheduleTab({
   }
 
   const allComplete = rows.every((row) => Math.abs(rowTotal(row.leaf.id) - 100) <= ROW_TOLERANCE);
-  const selectedRows = rows.filter((row) => selected.has(row.leaf.id));
+  const selectedRows = selection.selectedRows;
   const sourceRow = rows.find((row) => row.leaf.id === copySource);
 
   return (
@@ -343,7 +456,7 @@ export default function ScheduleTab({
       {settings}
 
       {editable && (
-        <BulkActionsBar count={selected.size} onClear={() => setSelected(new Set())}>
+        <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
           <div className="flex flex-wrap items-center gap-2">
             <Label htmlFor="bulk-start" className="text-xs text-muted-foreground">
               {t.schedule.planStart}
@@ -434,6 +547,22 @@ export default function ScheduleTab({
               <Trash2 />
               {t.schedule.clearSelected}
             </Button>
+            {/* Fill-right was already a per-row action; over a selection it is
+                the same pure draft edit repeated, so it costs nothing on the
+                server and saves the most tedious pass over a wide grid. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                for (const row of selectedRows) fillRight(row.leaf);
+                toast.success(
+                  interpolate(t.schedule.fillRightDone, { count: selectedRows.length }),
+                );
+              }}
+            >
+              <ChevronRight />
+              {t.schedule.fillRightSelected}
+            </Button>
           </div>
         </BulkActionsBar>
       )}
@@ -447,7 +576,9 @@ export default function ScheduleTab({
                 <Badge variant={isDraft ? "outline" : "secondary"}>
                   {isDraft ? t.boq.draft : t.boq.active}
                 </Badge>
-                <Hint text={editable ? t.schedule.planHint : t.schedule.lockedNote} />
+                <Hint
+                  text={`${editable ? t.schedule.planHint : t.schedule.lockedNote} ${t.progress.monthFoldedHint}`}
+                />
               </CardTitle>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -456,6 +587,7 @@ export default function ScheduleTab({
                 size="sm"
                 aria-pressed={showFullMatrix}
                 aria-controls="schedule-matrix-table"
+                title={t.common.fullTableHint}
                 onClick={() => setShowFullMatrix((current) => !current)}
               >
                 {t.common.fullTable}
@@ -489,154 +621,151 @@ export default function ScheduleTab({
         </CardHeader>
 
         <CardContent className="px-0">
-          <div className="relative">
-            {/* Overflow cue — see the note in period-summary-table.tsx. */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-card to-transparent"
-            />
-            <div
-              ref={matrixWindow.scrollRef}
-              role="region"
-              aria-label={t.schedule.title}
-              tabIndex={0}
-              onScroll={matrixWindow.onScroll}
-              className={`max-h-[36rem] max-w-[120rem] overflow-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
-                showFullMatrix ? "" : "[overflow-anchor:none]"
-              }`}
-            >
-              <table
+          {/* The fold is visible on the band row; that it happened on its own,
+              because the window changed size, is not. */}
+          <p className="sr-only" role="status" aria-live="polite">
+            {fit.overflows
+              ? t.progress.tooWide
+              : fit.autoCollapsed.size > 0
+                ? plural(t.progress.autoFolded, fit.autoCollapsed.size)
+                : ""}
+          </p>
+
+          {/* The shared Table shell — see the matching note in progress-tab.tsx
+              for why the window hook needs containerRef, and why this asks for
+              overflow-y-auto rather than the overflow-auto shorthand. */}
+              <Table
                 id="schedule-matrix-table"
+                containerRef={matrixWindow.scrollRef}
+                containerProps={{
+                  role: "region",
+                  "aria-label": t.schedule.title,
+                  tabIndex: 0,
+                  onScroll: matrixWindow.onScroll,
+                }}
+                scrollX={scrollsSideways}
+                containerClassName={`max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
+                  showFullMatrix ? "" : "[overflow-anchor:none]"
+                } ${scrollsSideways ? "" : "overflow-x-clip"}`}
                 aria-rowcount={rows.length + 4}
-                aria-colcount={LEADING_COLUMNS + periods.length + TRAILING_COLUMNS}
-                className="table-fixed text-sm"
+                aria-colcount={LEADING_COLUMNS + allMatrixColumns.length + TRAILING_COLUMNS}
+                className="table-fixed"
                 style={{
-                  width: LEADING_WIDTH + periods.length * PERIOD_WIDTH + TRAILING_WIDTH,
-                  minWidth: "100%",
+                  // The width the fitter arrived at, not one the reader has to
+                  // scroll to reach. minWidth only where the grid can still
+                  // exceed the container: "Full table", or an unfold that will
+                  // not fit however much is folded around it.
+                  width: fit.tableWidth,
+                  minWidth: scrollsSideways ? "100%" : undefined,
                 }}
               >
                 <caption className="sr-only">
                   {t.schedule.title}. {t.schedule.planHint}
                 </caption>
+                {/* Rendered from the width arrays, so the <colgroup> and the
+                    fit arithmetic cannot drift apart. */}
                 <colgroup>
-                  <col style={{ width: 40 }} />
-                  <col style={{ width: 256 }} />
-                  <col style={{ width: 72 }} />
-                  <col style={{ width: 72 }} />
-                  <col style={{ width: 96 }} />
-                  <col style={{ width: 112 }} />
-                  {matrixWindow.columnWindow.beforeSize > 0 && (
-                    <col style={{ width: matrixWindow.columnWindow.beforeSize }} />
-                  )}
-                  {visiblePeriods.map((period) => (
-                    <col key={period.id} style={{ width: PERIOD_WIDTH }} />
+                  {LEADING_COL_WIDTHS.map((width, index) => (
+                    <col key={`leading-${index}`} style={{ width }} />
                   ))}
-                  {matrixWindow.columnWindow.afterSize > 0 && (
-                    <col style={{ width: matrixWindow.columnWindow.afterSize }} />
-                  )}
-                  <col style={{ width: 88 }} />
-                  <col style={{ width: 80 }} />
+                  {visibleColumns.map((column, index) => (
+                    <col key={column.key} style={{ width: fit.columnWidths[index] }} />
+                  ))}
+                  {TRAILING_COL_WIDTHS.map((width, index) => (
+                    <col key={`trailing-${index}`} style={{ width }} />
+                  ))}
                 </colgroup>
-                <thead>
+                <TableHeader>
                   <WindowedMonthBandRow
                     header={visibleHeader}
                     leadingLabel={t.schedule.line}
                     leadingColSpan={LEADING_COLUMNS}
                     trailingColSpan={TRAILING_COLUMNS}
-                    beforeSize={matrixWindow.columnWindow.beforeSize}
-                    afterSize={matrixWindow.columnWindow.afterSize}
+                    beforeSize={0}
+                    afterSize={0}
+                    onToggleMonth={toggleMonth}
+                    gridId="schedule-matrix-table"
                   />
-                  <tr className="border-b">
-                    <th
-                      className="sticky left-0 z-10 bg-card px-2 py-2"
-                      style={{ width: 40 }}
+                  <TableRow>
+                    <TableHead
+                      className="sticky left-0 z-10 h-auto bg-card px-2 py-2"
                     >
                       {editable && (
                         <Checkbox
                           aria-label={t.schedule.selectAll}
-                          checked={selected.size > 0 && selected.size === rows.length}
-                          indeterminate={selected.size > 0 && selected.size < rows.length}
-                          onCheckedChange={(checked) =>
-                            setSelected(
-                              checked ? new Set(rows.map((row) => row.leaf.id)) : new Set(),
-                            )
-                          }
+                          checked={selection.allSelected}
+                          indeterminate={selection.someSelected}
+                          onCheckedChange={selection.toggleAll}
                         />
                       )}
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-2 py-2 text-left font-medium"
-                      style={{ width: 256 }}
-                    >
+                    </TableHead>
+                    {/* Start, finish, duration and weight/period used to be four
+                        more columns here. They are in the row's plan popover
+                        now; the width they cost every row is what the period
+                        columns are spending instead. */}
+                    <TableHead scope="col" className="sticky left-10 z-10 h-auto bg-card px-2 py-2">
                       {t.schedule.line}
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-2 py-2 text-right font-medium"
-                      style={{ width: 72 }}
-                    >
-                      {t.schedule.planStart}
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-2 py-2 text-right font-medium"
-                      style={{ width: 72 }}
-                    >
-                      {t.schedule.planFinish}
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-2 py-2 text-right font-medium"
-                      style={{ width: 96 }}
-                    >
-                      {t.schedule.planDuration}
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-2 py-2 text-right font-medium"
-                      style={{ width: 112 }}
-                    >
-                      {t.schedule.planWeightPerPeriod}
-                    </th>
-                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} header />
-                    {visibleHeader.columns.map((column, index) => (
-                      <th
-                        key={column.period.id}
+                    </TableHead>
+                    {visibleHeader.columns.map((view, index) => (
+                      <TableHead
+                        key={view.column.key}
                         scope="col"
-                        aria-colindex={LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1}
-                        aria-current={column.isCurrent ? "true" : undefined}
-                        className={`w-20 px-2 py-2 text-right font-medium ${
-                          column.isCurrent ? "border-b-2 border-b-[var(--chart-3)]" : ""
+                        aria-colindex={LEADING_COLUMNS + index + 1}
+                        aria-current={view.isCurrent ? "true" : undefined}
+                        aria-label={view.accessibleName}
+                        // h-auto: these headers carry two lines, and TableHead's
+                        // h-10 is sized for one.
+                        //
+                        // No w-20: the colgroup owns the width now, and a
+                        // utility here would fight the fitted value on the <col>.
+                        className={`h-auto py-2 text-right ${compact ? "px-1" : "px-2"} ${
+                          view.isCurrent ? "border-b-2 border-b-[var(--chart-1)]" : ""
                         }`}
+                        title={compact ? view.accessibleName : undefined}
                       >
-                        <span className="block tabular-nums">{column.number}</span>
-                        <span className="block text-xs font-normal text-muted-foreground tabular-nums">
-                          {column.range}
-                        </span>
-                      </th>
+                        {/* A folded column names the periods inside it — "5–8" —
+                            rather than repeating the month above it. */}
+                        <span className="block tabular-nums">{view.number}</span>
+                        {/* truncate + title: a folded month's range ("3-30 Mei") is the
+                                longest label this row can hold, and at this column
+                                width an untruncated one runs into its neighbour.
+                                The full text stays reachable on the cell.
+
+                                Dropped entirely below the compact width, where a
+                                truncation would leave "3-3…". The month band above
+                                already names the month and the number above it
+                                names the period; the range is the line that can
+                                go. It survives in the cell's title. */}
+                        {!compact && (
+                          <span
+                            className="block truncate text-xs font-normal text-muted-foreground tabular-nums"
+                            title={view.range}
+                          >
+                            {view.range}
+                          </span>
+                        )}
+                      </TableHead>
                     ))}
-                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} header />
-                    <th
+                    <TableHead
                       scope="col"
-                      aria-colindex={LEADING_COLUMNS + periods.length + 1}
-                      className="px-3 py-2 text-right font-medium"
+                      aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 1}
+                      className="h-auto px-3 py-2 text-right"
                       style={{ width: 88 }}
                     >
                       {t.schedule.rowTotal}
-                    </th>
-                    <th
+                    </TableHead>
+                    <TableHead
                       scope="col"
-                      aria-colindex={LEADING_COLUMNS + periods.length + 2}
-                      className="px-2 py-2"
+                      aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 2}
+                      className="h-auto px-2 py-2"
                       style={{ width: 80 }}
                     >
                       <span className="sr-only">{t.common.actions}</span>
-                    </th>
-                  </tr>
-                </thead>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
 
-                <tbody>
+                <TableBody>
                   <MatrixRowSpacer
                     height={matrixWindow.rowWindow.beforeSize}
                     colSpan={renderedColumnCount}
@@ -671,32 +800,32 @@ export default function ScheduleTab({
                     };
 
                     return (
-                      <tr
+                      <TableRow
                         key={row.leaf.id}
                         data-matrix-row-index={rowIndex}
                         aria-rowindex={rowIndex + 3}
-                        className="border-b last:border-0"
+                        // The grid had no selected-row tint at all, which on a
+                        // wide matrix means the checkbox scrolls out of sight
+                        // vertically and nothing else says the row is ticked.
+                        // The Table primitive already styles this attribute.
+                        data-state={selection.isSelected(row.leaf.id) ? "selected" : undefined}
                       >
-                        <td className="sticky left-0 z-10 bg-card px-2 py-1">
+                        <TableCell className="sticky left-0 z-10 bg-card px-2 py-1">
                           {editable && (
                             <Checkbox
                               aria-label={interpolate(t.schedule.selectRow, { code: row.leaf.code })}
-                              checked={selected.has(row.leaf.id)}
-                              onCheckedChange={(checked) =>
-                                setSelected((current) => {
-                                  const next = new Set(current);
-                                  if (checked) next.add(row.leaf.id);
-                                  else next.delete(row.leaf.id);
-                                  return next;
-                                })
-                              }
+                              checked={selection.isSelected(row.leaf.id)}
+                              onCheckedChange={() => selection.toggle(row.leaf.id)}
                             />
                           )}
-                        </td>
+                        </TableCell>
 
+                        {/* A <th scope="row">: the BoQ line names the row. Kept
+                            tight — ESTIMATED_ROW_HEIGHT is what the windowing
+                            scrolls by, so the padding here is load-bearing. */}
                         <th
                           scope="row"
-                          className="max-w-64 truncate px-2 py-1.5 text-left font-normal"
+                          className="sticky left-10 z-10 max-w-64 truncate bg-card px-2 py-1.5 text-left align-middle font-normal"
                           title={`${row.section} - ${row.leaf.description}`}
                         >
                           <span className="font-mono text-xs text-muted-foreground">
@@ -705,68 +834,35 @@ export default function ScheduleTab({
                           {row.leaf.description}
                         </th>
 
-                        <PlanInput
-                          value={draft.start}
-                          label={`${t.schedule.planStart} — ${row.leaf.code}`}
-                          min={firstIndex}
-                          max={lastIndex}
-                          editable={editable}
-                          invalid={invertedWindow}
-                          describedBy={invertedWindow ? errorId : undefined}
-                          onChange={(next) =>
-                            setPlanDrafts((current) =>
-                              new Map(current).set(row.leaf.id, { ...draft, start: next }),
-                            )
-                          }
-                          onCommit={commit}
-                        />
-                        <PlanInput
-                          value={draft.finish}
-                          label={`${t.schedule.planFinish} — ${row.leaf.code}`}
-                          min={firstIndex}
-                          max={lastIndex}
-                          editable={editable}
-                          invalid={invertedWindow}
-                          describedBy={invertedWindow ? errorId : undefined}
-                          onChange={(next) =>
-                            setPlanDrafts((current) =>
-                              new Map(current).set(row.leaf.id, { ...draft, finish: next }),
-                            )
-                          }
-                          onCommit={commit}
-                        />
-
-                        <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">
-                          {invertedWindow ? (
-                            // The message lives in the cell rather than a
-                            // tooltip so it is announced with the field and
-                            // survives a keyboard-only pass.
-                            <span id={errorId} className="text-xs font-medium text-destructive">
-                              {t.schedule.finishBeforeStart}
-                            </span>
-                          ) : duration > 0 ? (
-                            duration
-                          ) : (
-                            <span className="text-xs">{t.schedule.notScheduled}</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">
-                          {rate === null ? "—" : rate.toFixed(3)}
-                        </td>
-
-                        <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
-                        {visibleHeader.columns.map(({ period, accessibleName }, index) => {
-                          const value = cells.get(cellKey(row.leaf.id, period.id)) ?? 0;
+                        {/* Start, finish, duration and weight/period were four
+                            columns here. They live in the plan popover in the
+                            actions cell now: the same editors on the same commit
+                            path, no longer costing every row 352px of width. */}
+                        {visibleHeader.columns.map(({ column, accessibleName }, index) => {
+                          // Planned percentages are per-period shares of the
+                          // line, so a folded month is their sum — unlike the
+                          // progress grid, whose cumulative figures must not be
+                          // added. Same fold, opposite arithmetic.
+                          const folded = column.kind === "month";
+                          const period =
+                            column.kind === "period" ? column.period : lastPeriodOf(column);
+                          const value = folded
+                            ? column.periods.reduce(
+                                (total, item) =>
+                                  total + (cells.get(cellKey(row.leaf.id, item.id)) ?? 0),
+                                0,
+                              )
+                            : (cells.get(cellKey(row.leaf.id, period.id)) ?? 0);
                           const key = cellKey(row.leaf.id, period.id);
                           return (
-                            <td
-                              key={period.id}
+                            <TableCell
+                              key={column.key}
                               aria-colindex={
-                                LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
+                                LEADING_COLUMNS + index + 1
                               }
                               className="px-1 py-1"
                             >
-                              {editable ? (
+                              {editable && !folded ? (
                                 <Input
                                   type="number"
                                   min={0}
@@ -774,25 +870,32 @@ export default function ScheduleTab({
                                   step="any"
                                   value={drafts.get(key) ?? (value === 0 ? "" : String(value))}
                                   aria-label={`${row.leaf.code} - ${accessibleName}`}
+                                  // px-1 once the column is compact: the Input
+                                  // primitive spends 22px on padding and borders
+                                  // before a digit is drawn.
                                   className={`h-8 text-right tabular-nums ${
-                                    drafts.has(key) ? "border-[var(--chart-3)]" : ""
-                                  }`}
+                                    compact ? "px-1" : ""
+                                  } ${drafts.has(key) ? "border-[var(--chart-1)]" : ""}`}
                                   onChange={(e) =>
                                     setDrafts((current) => new Map(current).set(key, e.target.value))
                                   }
                                 />
                               ) : (
-                                <span className="block px-2 py-1 text-right tabular-nums text-muted-foreground">
-                                  {value === 0 ? "—" : value}
+                                <span
+                                  className={`block py-1 text-right tabular-nums text-muted-foreground ${
+                                    compact ? "px-1" : "px-2"
+                                  }`}
+                                  title={folded ? accessibleName : undefined}
+                                >
+                                  {value === 0 ? "—" : folded ? value.toFixed(1) : value}
                                 </span>
                               )}
-                            </td>
+                            </TableCell>
                           );
                         })}
-                        <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
 
-                        <td
-                          aria-colindex={LEADING_COLUMNS + periods.length + 1}
+                        <TableCell
+                          aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 1}
                           className={`px-3 py-1 text-right tabular-nums ${
                             isComplete ? "text-muted-foreground" : "font-medium text-destructive"
                           }`}
@@ -806,14 +909,111 @@ export default function ScheduleTab({
                               })}
                             </span>
                           )}
-                        </td>
+                        </TableCell>
 
-                        <td
-                          aria-colindex={LEADING_COLUMNS + periods.length + 2}
+                        <TableCell
+                          aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 2}
                           className="px-2 py-1"
                         >
-                          {editable && (
-                            <div className="flex justify-end gap-1">
+                          <div className="flex justify-end gap-1">
+                              {/* The plan window, which used to be four columns
+                                  on every row. A popover rather than a dialog:
+                                  it is a two-field edit that commits on blur,
+                                  and the grid behind it is the context for what
+                                  is being set. */}
+                              <Popover>
+                                <PopoverTrigger
+                                  render={
+                                    <Button
+                                      variant={
+                                        invertedWindow
+                                          ? "destructive"
+                                          : duration > 0
+                                            ? "secondary"
+                                            : "ghost"
+                                      }
+                                      size="icon-sm"
+                                      aria-label={interpolate(t.schedule.rowActions, {
+                                        code: row.leaf.code,
+                                      })}
+                                    />
+                                  }
+                                >
+                                  <SlidersHorizontal />
+                                </PopoverTrigger>
+                                <PopoverContent align="end" className="w-72 space-y-3">
+                                  <p className="text-sm font-medium">
+                                    {row.leaf.code} · {t.schedule.planStart} /{" "}
+                                    {t.schedule.planFinish}
+                                  </p>
+                                  <div className="flex items-end gap-2">
+                                    <PlanField
+                                      value={draft.start}
+                                      label={t.schedule.planStart}
+                                      name={`plan-start-${row.leaf.id}`}
+                                      min={firstIndex}
+                                      max={lastIndex}
+                                      readOnly={!editable}
+                                      invalid={invertedWindow}
+                                      describedBy={invertedWindow ? errorId : undefined}
+                                      onChange={(next) =>
+                                        setPlanDrafts((current) =>
+                                          new Map(current).set(row.leaf.id, {
+                                            ...draft,
+                                            start: next,
+                                          }),
+                                        )
+                                      }
+                                      onCommit={commit}
+                                    />
+                                    <PlanField
+                                      value={draft.finish}
+                                      label={t.schedule.planFinish}
+                                      name={`plan-finish-${row.leaf.id}`}
+                                      min={firstIndex}
+                                      max={lastIndex}
+                                      readOnly={!editable}
+                                      invalid={invertedWindow}
+                                      describedBy={invertedWindow ? errorId : undefined}
+                                      onChange={(next) =>
+                                        setPlanDrafts((current) =>
+                                          new Map(current).set(row.leaf.id, {
+                                            ...draft,
+                                            finish: next,
+                                          }),
+                                        )
+                                      }
+                                      onCommit={commit}
+                                    />
+                                  </div>
+                                  {/* The error sits with the fields rather than
+                                      in a tooltip, so it is announced with them
+                                      and survives a keyboard-only pass. */}
+                                  {invertedWindow && (
+                                    <p
+                                      id={errorId}
+                                      className="text-xs font-medium text-destructive"
+                                    >
+                                      {t.schedule.finishBeforeStart}
+                                    </p>
+                                  )}
+                                  <dl className="grid grid-cols-2 gap-1 text-xs text-muted-foreground">
+                                    <dt>{t.schedule.planDuration}</dt>
+                                    <dd className="text-right tabular-nums">
+                                      {duration > 0 ? duration : t.schedule.notScheduled}
+                                    </dd>
+                                    <dt>{t.schedule.planWeightPerPeriod}</dt>
+                                    <dd className="text-right tabular-nums">
+                                      {rate === null ? "—" : rate.toFixed(3)}
+                                    </dd>
+                                  </dl>
+                                  <p className="text-xs text-muted-foreground">
+                                    {t.schedule.planHint}
+                                  </p>
+                                </PopoverContent>
+                              </Popover>
+                              {editable && (
+                              <>
                               <Tooltip>
                                 <TooltipTrigger
                                   render={
@@ -844,73 +1044,73 @@ export default function ScheduleTab({
                               >
                                 <Copy />
                               </Button>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
+                              </>
+                              )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
                     );
                   })}
                   <MatrixRowSpacer
                     height={matrixWindow.rowWindow.afterSize}
                     colSpan={renderedColumnCount}
                   />
-                </tbody>
+                </TableBody>
 
-                <tfoot className="border-t-2">
-                  <tr aria-rowindex={rows.length + 3}>
+                {/* TableFooter already carries the top rule and the muted
+                    ground; border-t-2 keeps the heavier rule this grid used to
+                    separate the totals from the lines. */}
+                <TableFooter className="border-t-2">
+                  <TableRow aria-rowindex={rows.length + 3}>
                     <th
                       scope="row"
                       colSpan={LEADING_COLUMNS}
-                      className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium"
+                      className="sticky left-0 z-10 bg-card px-4 py-2 text-left align-middle font-medium"
                     >
                       {t.schedule.plannedPerPeriod}
                     </th>
-                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
-                    {planned.perPeriod
-                      .slice(matrixWindow.columnWindow.start, matrixWindow.columnWindow.end)
-                      .map((value, index) => (
-                        <td
-                          key={visiblePeriods[index]?.id ?? index}
-                          aria-colindex={
-                            LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
-                          }
-                          className="px-2 py-2 text-right tabular-nums text-muted-foreground"
-                        >
-                          {value.toFixed(1)}
-                        </td>
-                      ))}
-                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
-                    <td colSpan={TRAILING_COLUMNS} />
-                  </tr>
-                  <tr aria-rowindex={rows.length + 4}>
+                    {/* Indexed by column, not by period: these arrays are one
+                        entry per period, so a folded column has to gather the
+                        entries it covers rather than take the one that happens
+                        to sit at its position. */}
+                    {visibleColumns.map((column, index) => (
+                      <TableCell
+                        key={column.key}
+                        aria-colindex={
+                          LEADING_COLUMNS + index + 1
+                        }
+                        className="px-2 py-2 text-right tabular-nums text-muted-foreground"
+                      >
+                        {plannedForColumn(planned.perPeriod, column, "sum").toFixed(1)}
+                      </TableCell>
+                    ))}
+                    <TableCell colSpan={TRAILING_COLUMNS} />
+                  </TableRow>
+                  <TableRow aria-rowindex={rows.length + 4}>
                     <th
                       scope="row"
                       colSpan={LEADING_COLUMNS}
-                      className="sticky left-0 z-10 bg-card px-4 py-2 text-left font-medium"
+                      className="sticky left-0 z-10 bg-card px-4 py-2 text-left align-middle font-medium"
                     >
                       {t.schedule.plannedCumulative}
                     </th>
-                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
-                    {planned.cumulative
-                      .slice(matrixWindow.columnWindow.start, matrixWindow.columnWindow.end)
-                      .map((value, index) => (
-                        <td
-                          key={visiblePeriods[index]?.id ?? index}
-                          aria-colindex={
-                            LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
-                          }
-                          className="px-2 py-2 text-right font-medium tabular-nums"
-                        >
-                          {value.toFixed(1)}
-                        </td>
-                      ))}
-                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
-                    <td colSpan={TRAILING_COLUMNS} />
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
+                    {/* Cumulative, so a folded month is where it *ended*, never
+                        the sum of the running totals inside it. */}
+                    {visibleColumns.map((column, index) => (
+                      <TableCell
+                        key={column.key}
+                        aria-colindex={
+                          LEADING_COLUMNS + index + 1
+                        }
+                        className="px-2 py-2 text-right font-medium tabular-nums"
+                      >
+                        {plannedForColumn(planned.cumulative, column, "last").toFixed(1)}
+                      </TableCell>
+                    ))}
+                    <TableCell colSpan={TRAILING_COLUMNS} />
+                  </TableRow>
+                </TableFooter>
+              </Table>
         </CardContent>
       </Card>
     </div>
@@ -925,12 +1125,21 @@ export default function ScheduleTab({
  * into sixty scroll-and-click gestures. The dates are one column away in the
  * header, which is where someone reads them from anyway.
  */
-function PlanInput({
+/**
+ * One end of a line's planning window, as a labelled field.
+ *
+ * It used to render its own <TableCell> and live in the grid. The cell went
+ * when start and finish moved into the row's plan popover; what is left is the
+ * input and its label, because a popover has room for a label and a 72px
+ * column never did.
+ */
+function PlanField({
   value,
   label,
+  name,
   min,
   max,
-  editable,
+  readOnly,
   invalid,
   describedBy,
   onChange,
@@ -938,37 +1147,42 @@ function PlanInput({
 }: {
   value: string;
   label: string;
+  name: string;
   min: number;
   max: number;
-  editable: boolean;
+  /**
+   * An active baseline's distribution is fixed, so the fields state the window
+   * rather than offering to change it. Read-only rather than disabled: the
+   * value is still the answer someone opened this to read, and a disabled
+   * input is skipped by the keyboard and dimmed past comfortable reading.
+   */
+  readOnly: boolean;
   invalid: boolean;
   describedBy?: string;
   onChange: (value: string) => void;
   onCommit: () => void;
 }) {
-  if (!editable) {
-    return (
-      <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{value || "—"}</td>
-    );
-  }
-
   return (
-    <td className="px-1 py-1">
+    <div className="flex-1 space-y-1">
+      <Label htmlFor={name} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
       <Input
+        id={name}
         type="number"
         inputMode="numeric"
         min={min}
         max={max}
         step={1}
         value={value}
-        aria-label={label}
+        readOnly={readOnly}
         aria-invalid={invalid || undefined}
         aria-describedby={describedBy}
-        className="h-8 w-16 text-right tabular-nums"
+        className="h-8 text-right tabular-nums"
         onChange={(e) => onChange(e.target.value)}
         onBlur={onCommit}
-        // Enter applies without leaving the cell, so a row can be filled from
-        // the keyboard without reaching for the mouse between lines.
+        // Enter applies without closing the popover, so both ends of a window
+        // can be typed without reaching for the mouse in between.
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -976,7 +1190,7 @@ function PlanInput({
           }
         }}
       />
-    </td>
+    </div>
   );
 }
 

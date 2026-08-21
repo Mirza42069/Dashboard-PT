@@ -38,8 +38,17 @@ export async function recordActivity(
   ctx: Pick<Context, "session"> & { companyId: string },
   input: ActivityInput,
 ): Promise<void> {
+  await recordActivities(ctx, [input]);
+}
+
+/** Writes a bulk action's audit rows in one request. */
+export async function recordActivities(
+  ctx: Pick<Context, "session"> & { companyId: string },
+  inputs: ActivityInput[],
+): Promise<void> {
+  if (inputs.length === 0) return;
   try {
-    await db.insert(activityLog).values({
+    await db.insert(activityLog).values(inputs.map((input) => ({
       companyId: ctx.companyId,
       actorId: ctx.session?.user.id ?? null,
       actorName: ctx.session?.user.name ?? "System",
@@ -48,10 +57,10 @@ export async function recordActivity(
       entityId: input.entityId,
       entityLabel: input.entityLabel,
       detail: input.detail,
-    });
+    })));
   } catch (error) {
     console.warn(
-      `[activity] failed to record ${input.entityType}.${input.action}:`,
+      `[activity] failed to record ${inputs.length} event(s):`,
       error instanceof Error ? error.message : error,
     );
   }

@@ -16,7 +16,7 @@ import { Empty, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Pencil } from "@DashboardV2/ui/components/icons";
+import { AiFile, ArrowLeft, Pencil } from "@DashboardV2/ui/components/icons";
 import type { Route } from "next";
 import dynamic from "next/dynamic";
 import Link from "next/link";
@@ -61,6 +61,7 @@ const ProgressTab = dynamic(() => import("./progress-tab"), { loading: tabLoadin
 const TeamTab = dynamic(() => import("./team-tab"), { loading: tabLoading });
 const TicketsTab = dynamic(() => import("./tickets-tab"), { loading: tabLoading });
 const ProjectFormDialog = dynamic(() => import("../project-form-dialog"));
+const ProjectWorkbookUpdateDialog = dynamic(() => import("./project-workbook-update-dialog"));
 
 export default function ProjectDetail({
   projectId,
@@ -84,6 +85,7 @@ export default function ProjectDetail({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [editValues, setEditValues] = useState<ProjectFormValues | null>(null);
+  const [updateOpen, setUpdateOpen] = useState(false);
   const [dailyDirty, setDailyDirty] = useState(false);
   const [pendingTab, setPendingTab] = useState<string | null>(null);
 
@@ -141,7 +143,7 @@ export default function ProjectDetail({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <Link
           href="/projects"
           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
@@ -149,16 +151,24 @@ export default function ProjectDetail({
           <ArrowLeft className="size-3.5" />
           {t.projects.allProjects}
         </Link>
-        {canUpdateProject && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setEditValues(projectToFormValues(project))}
-          >
-            <Pencil />
-            {t.projects.editProject}
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {canUpdateProject && canWrite && (
+            <Button variant="outline" size="sm" onClick={() => setUpdateOpen(true)}>
+              <AiFile />
+              {t.projectUpdate.trigger}
+            </Button>
+          )}
+          {canUpdateProject && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditValues(projectToFormValues(project))}
+            >
+              <Pencil />
+              {t.projects.editProject}
+            </Button>
+          )}
+        </div>
       </div>
 
       <Card className="h-[120px] overflow-hidden bg-[linear-gradient(112deg,color-mix(in_oklab,var(--card),#f2ebff_42%)_0%,color-mix(in_oklab,var(--card),#eaf7fa_52%)_100%)] py-0">
@@ -268,6 +278,21 @@ export default function ProjectDetail({
           progressLocked={project.progressSource === "boq"}
           canManageMembers={canManageMembers}
           currentUserId={currentUserId}
+        />
+      )}
+
+      {canUpdateProject && canWrite && updateOpen && (
+        <ProjectWorkbookUpdateDialog
+          open
+          projectId={projectId}
+          currentUserId={currentUserId}
+          onOpenChange={setUpdateOpen}
+          onUpdated={(result) => {
+            if (result.draftVersionId) selectTab("boq");
+            else if (result.sectionsUpdated.length === 1 && result.sectionsUpdated[0] === "progress") {
+              selectTab("progress");
+            }
+          }}
         />
       )}
 

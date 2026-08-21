@@ -15,11 +15,12 @@ import {
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, ilike, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
-import { recordActivity } from "../lib/activity";
+import { recordActivities, recordActivity } from "../lib/activity";
+import { databaseErrorIncludes } from "../lib/database-error";
 import { runBatch } from "../lib/batch";
 import {
   createdAtCursorCondition,
@@ -131,6 +132,37 @@ async function ticketInScope(ctx: ProjectScopeCtx, ticketId: string) {
     await assertMember(row.projectId, ctx.session.user.id, "Ticket not found");
   }
   return row;
+}
+
+/**
+ * The bulk counterpart of ticketInScope.
+ *
+ * One query for the scope check rather than one per id, and one assertMember
+ * per distinct project rather than per ticket — a selection of thirty tickets
+ * on one project should not be thirty membership round trips.
+ *
+ * Cross-tenant ids are not rejected, they are simply not matched: the company
+ * filter shares its where clause with the id filter, so an id from another
+ * company comes back as "not found" without ever confirming it exists.
+ */
+async function ticketsInScope(ctx: ProjectScopeCtx, ticketIds: string[]) {
+  const rows = await db
+    .select({ ticket, projectId: project.id, projectCode: project.code, projectName: project.name })
+    .from(ticket)
+    .innerJoin(project, eq(ticket.projectId, project.id))
+    .where(and(inArray(ticket.id, ticketIds), eq(project.companyId, ctx.companyId)));
+  if (rows.length === 0) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "No tickets found" });
+  }
+  if (rows.length !== new Set(ticketIds).size) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "One or more tickets were not found" });
+  }
+  if (roleOf(ctx.session.user) === "user") {
+    for (const projectId of new Set(rows.map((row) => row.projectId))) {
+      await assertMember(projectId, ctx.session.user.id, "Ticket not found");
+    }
+  }
+  return rows;
 }
 
 async function assertReferencesInProject(
@@ -410,7 +442,9 @@ export const ticketRouter = router({
       const assignments = [sql`status = ${input.status}`, sql`updated_at = ${now}`];
       if (reopening) assignments.push(sql`closed_at = null`, sql`resolution = null`);
 
-      const changed = await db.execute<{ id: string }>(sql`
+      let changed;
+      try {
+        changed = await db.execute<{ id: string }>(sql`
         with changed as (
           update ticket
           set ${sql.join(assignments, sql`, `)}
@@ -424,7 +458,16 @@ export const ticketRouter = router({
           ${ctx.session.user.id}, ${ctx.session.user.name}
         from changed
         returning id
-      `);
+        `);
+      } catch (error) {
+        if (databaseErrorIncludes(error, "division by zero")) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "One or more actions changed while you were viewing them. Refresh and try again.",
+          });
+        }
+        throw error;
+      }
       if (changed.rows.length === 0) {
         throw new TRPCError({
           code: "CONFLICT",
@@ -439,6 +482,85 @@ export const ticketRouter = router({
         detail: input.status,
       });
       return { success: true };
+    }),
+
+  setStatusMany: companyPermissionProcedure("project:write")
+    .input(
+      z.object({
+        ids: z.array(z.string().min(1)).min(1).max(100),
+        status: statusSchema.exclude(["closed"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ticketsInScope(ctx, input.ids);
+      const changes = rows
+        .filter((row) => row.ticket.status !== input.status)
+        .map((row) => ({
+          id: row.ticket.id,
+          fromStatus: row.ticket.status,
+          eventId: crypto.randomUUID(),
+        }));
+      if (changes.length === 0) return { success: true, count: 0 };
+
+      let changed;
+      try {
+        changed = await db.execute<{ id: string }>(sql`
+        with input_rows as (
+          select * from jsonb_to_recordset(${JSON.stringify(changes)}::jsonb) as value(
+            id text, "fromStatus" text, "eventId" text
+          )
+        ), changed as (
+          update ticket
+          set status = ${input.status},
+              closed_at = case when input_rows."fromStatus" = 'closed' then null else ticket.closed_at end,
+              resolution = case when input_rows."fromStatus" = 'closed' then null else ticket.resolution end,
+              updated_at = now()
+          from input_rows
+          where ticket.id = input_rows.id and ticket.status = input_rows."fromStatus"
+          returning ticket.id
+        ), guarded as (
+          select 1 / case when (select count(*) from changed) = ${changes.length}
+            then 1 else 0 end as valid
+        )
+        insert into ticket_event
+          (id, ticket_id, field, from_value, to_value, actor_id, actor_name)
+        select
+          input_rows."eventId", input_rows.id, 'status', input_rows."fromStatus", ${input.status},
+          ${ctx.session.user.id}, ${ctx.session.user.name}
+        from input_rows
+        join changed on changed.id = input_rows.id
+        cross join guarded
+        where guarded.valid = 1
+        returning ticket_id as id
+        `);
+      } catch (error) {
+        if (databaseErrorIncludes(error, "division by zero")) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "One or more actions changed while you were viewing them. Refresh and try again.",
+          });
+        }
+        throw error;
+      }
+      if (changed.rows.length !== changes.length) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "One or more actions changed while you were viewing them. Refresh and try again.",
+        });
+      }
+      await recordActivities(
+        ctx,
+        rows
+          .filter((row) => row.ticket.status !== input.status)
+          .map((row) => ({
+            action: "status_changed" as const,
+            entityType: "ticket" as const,
+            entityId: row.ticket.id,
+            entityLabel: row.ticket.title,
+            detail: input.status,
+          })),
+      );
+      return { success: true, count: changes.length };
     }),
 
   /** The discussion on one action, oldest first — it reads as a conversation. */
@@ -704,5 +826,34 @@ export const ticketRouter = router({
         detail: `${current.projectCode} - ${current.projectName}`,
       });
       return { success: true };
+    }),
+
+  /**
+   * Bulk counterpart of delete.
+   *
+   * One statement, not a loop of single deletes from the client: a partial
+   * failure halfway through a selection leaves the table in a state nobody can
+   * reason about, and the row that failed is the one the user cannot see.
+   */
+  deleteMany: companyPermissionProcedure("project:write")
+    .input(z.object({ ids: z.array(z.string().min(1)).min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ticketsInScope(ctx, input.ids);
+      const ids = rows.map((row) => row.ticket.id);
+
+      await db.delete(ticket).where(inArray(ticket.id, ids));
+
+      await recordActivities(
+        ctx,
+        rows.map((row) => ({
+          action: "deleted",
+          entityType: "ticket" as const,
+          entityId: row.ticket.id,
+          entityLabel: row.ticket.title,
+          detail: `${row.projectCode} - ${row.projectName}`,
+        })),
+      );
+
+      return { success: true, count: ids.length };
     }),
 });

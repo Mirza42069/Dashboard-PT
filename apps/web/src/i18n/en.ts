@@ -51,6 +51,8 @@ export const en = {
     discardChanges: "Discard changes",
     keepEditing: "Keep editing",
     fullTable: "Full table",
+    fullTableHint:
+      "Show every row and period at full width. The table may scroll sideways.",
     // Date picker. packages/ui has no dictionary of its own, so these are passed
     // in as props — the same arrangement as DialogContent's closeLabel.
     pickDate: "Pick a date",
@@ -62,7 +64,7 @@ export const en = {
   nav: {
     overview: "Overview",
     administration: "Administration",
-    dashboard: "Dashboard",
+    dashboard: "Overview",
     projects: "Projects",
     users: "Users",
     companies: "Companies",
@@ -140,9 +142,9 @@ export const en = {
     role: "Role",
   },
   dashboard: {
-    title: "Dashboard",
-    loading: "Loading dashboard data…",
-    loaded: "Dashboard data loaded",
+    title: "Overview",
+    loading: "Loading overview data…",
+    loaded: "Overview data loaded",
     workCompleted: "Work completed",
     projectProgressMeter: "Actual progress for {project}",
   },
@@ -327,7 +329,9 @@ export const en = {
     excelDescription: "Upload an .xlsx file and review the AI mapping.",
     wizardTitle: "Import Excel with AI",
     uploadLabel: "Choose an Excel workbook",
-    uploadHint: ".xlsx, up to 4 MB. AI may process sample cells; the original file is not stored.",
+    uploadHint: ".xlsx, up to 50 MB. AI may process worksheet cell samples. Each private temporary copy is permanently deleted after processing; the original file is not retained.",
+    fileTypeError: "Choose an .xlsx workbook.",
+    fileSizeError: "The workbook must be 50 MB or smaller.",
     analyzing: "Analyzing workbook…",
     analyzeFailed: "The workbook could not be analyzed",
     codeChecking: "Checking whether this code is available…",
@@ -403,6 +407,79 @@ export const en = {
     createAction: "Create project and draft baseline",
     rowError: "Row {row}: {message}",
   },
+  projectUpdate: {
+    trigger: "Update with AI",
+    title: "Update project with AI",
+    description:
+      "Choose a workbook, confirm its worksheet, then select exactly what should change.",
+    step: "Step {current} of {total}",
+    stepFile: "Choose workbook",
+    chooseFile: "Excel workbook",
+    fileHint:
+      ".xlsx, up to 50 MB. AI may process worksheet cell samples. Each private temporary upload is permanently deleted after its request; the original file is not retained.",
+    fileTypeError: "Choose an .xlsx workbook.",
+    fileSizeError: "The workbook must be 50 MB or smaller.",
+    uploadingDiscover: "Uploading a private temporary copy and finding worksheets…",
+    discoveryReady: "Worksheets found. Confirm which one to analyze.",
+    discoveryFailed: "The worksheets could not be read.",
+    retryDiscovery: "Try reading again",
+    noSheets: "This workbook has no worksheets.",
+    stepSheet: "Confirm worksheet",
+    sheetHint:
+      "The likely S-curve worksheet is selected first. Hidden worksheets remain available for review.",
+    sheetLabel: "Worksheet",
+    sheetOption: "{name} · {state} · {rows} rows × {columns} columns",
+    sheetStates: {
+      visible: "visible",
+      hidden: "hidden",
+      veryHidden: "very hidden",
+    },
+    knownSCurve: "Known S-curve layout",
+    otherLayout: "Other workbook layout",
+    sheetActuals: "{count} actual points; latest {percent}% at period {period}.",
+    noSheetActuals: "No valid actual progress points detected on this worksheet.",
+    analyzeAction: "Analyze worksheet",
+    uploadingAnalyze: "Uploading a fresh private copy and analyzing the worksheet…",
+    analysisReady: "Analysis ready. Choose the sections to update.",
+    analysisFailed: "The worksheet could not be analyzed.",
+    stepSections: "Choose updates",
+    sectionsHint: "Only checked sections will change.",
+    summaryLines: "BoQ lines",
+    summarySections: "Sections",
+    summaryPeriods: "Periods",
+    summaryActuals: "Actual points",
+    sectionProjectDetails: "Project details",
+    sectionProjectDetailsHint: "Update the project code, name, client, and location found in the workbook.",
+    keepCurrentValue: "Keep current value",
+    currentValue: "Current",
+    incomingValue: "Workbook",
+    resultValue: "Result",
+    storedResultValue: "Stored aggregate result",
+    sectionBoq: "BoQ",
+    sectionBoqHint: "Import work items and pricing into a new draft revision.",
+    sectionSchedule: "Schedule",
+    sectionScheduleHint: "Import the planned distribution into that same draft revision.",
+    draftCoupledHint:
+      "BoQ and Schedule are selected together and create one reviewable draft. The active baseline is not activated or replaced here.",
+    draftBlockedHint:
+      "BoQ and Schedule are unavailable because the workbook has validation errors. Valid weekly actual progress can still be updated.",
+    sectionProgress: "Weekly actual progress",
+    sectionProgressHint:
+      "Import aggregate cumulative weekly progress only. Item progress is never inferred, and periods after the first Excel error remain unchanged.",
+    progressUnavailableHint: "No valid actual snapshots were found, so progress cannot be updated.",
+    warningsTitle: "Analysis warnings",
+    validationTitle: "Workbook validation errors",
+    validationHint:
+      "These errors block the BoQ and Schedule draft, but do not block valid aggregate progress points.",
+    validationError: "Row {row}: {message}",
+    selectOne: "Select at least one section.",
+    updateAction: "Update project",
+    uploadingCommit: "Uploading a fresh private copy and applying the selected updates…",
+    updateSucceeded: "Project updated from the workbook.",
+    updateFailed: "The project could not be updated from this workbook.",
+    errorTitle: "Workbook update needs attention",
+    requestFailed: "The workbook request failed. Try again.",
+  },
   boq: {
     title: "Bill of Quantities",
     draft: "Draft",
@@ -441,12 +518,14 @@ export const en = {
     emptyLines: "No lines in this section",
     saved: "Saved",
     saveFailed: "Could not save that line",
-    deleteLine: "Delete line",
-    deleteConfirm: "Delete {code}? Any lines under it go too.",
-    deleted: "Line deleted",
     moveUp: "Move up",
     moveDown: "Move down",
     addFirstSection: "Add the first section",
+    deleteSelectedLabel: { one: "Delete 1 line", other: "Delete {count} lines" },
+    bulkDeleteDescription: "These lines will be removed from the draft.",
+    bulkDeleteCascade: "Deleting the sections selected also removes {count} lines under them.",
+    bulkDeletedToast: { one: "1 line deleted", other: "{count} lines deleted" },
+    editSelected: "Edit the selected line",
   },
   schedule: {
     title: "Planned distribution",
@@ -494,6 +573,8 @@ export const en = {
     clearDone: "Plan cleared on {count} lines",
     fillRight: "Fill right",
     fillRightHint: "Repeats the start period’s value across the rest of the window.",
+    fillRightSelected: "Fill right on selected",
+    fillRightDone: "Filled right on {count} lines",
     rowActions: "Row actions for {code}",
   },
   baseline: {
@@ -606,6 +687,33 @@ export const en = {
     periodUnlocked: "Period unlocked",
     chartLabel: "Planned against actual progress across the reporting periods",
     dataDateMarker: "Data date",
+    collapseMonth: "Fold {month} into one column",
+    expandMonth: "Unfold {month} back into its periods",
+    monthFolded: "{month}, folded — showing the figure at the end of the month",
+    monthFoldedHint:
+      "Fold a month to bring the ones on either side of it onto the screen. Nothing is lost; unfold it to enter figures again.",
+    /*
+     * Announced, not drawn. The folding is visible on the band row; what a
+     * screen reader has no way to notice is that it happened on its own,
+     * because the window changed size rather than because anyone asked.
+     */
+    autoFolded: {
+      one: "One month folded so the grid fits the screen.",
+      other: "{count} months folded so the grid fits the screen.",
+    },
+    /*
+     * The one case where a fitted grid still scrolls: a month was unfolded by
+     * hand and will not fit however much is folded around it. Says which
+     * choice caused it, so the way out is obvious.
+     */
+    tooWide:
+      "Wider than the screen, because a month is unfolded. Fold it again to bring the grid back into view.",
+    clearSelected: "Clear readings",
+    clearedToast: { one: "Reading cleared on 1 line", other: "Readings cleared on {count} lines" },
+    markNoProgressSelected: "Mark as unchanged",
+    selectLine: "Select {code}",
+    selectAllLines: "Select all lines",
+    selectionNeedsPeriod: "Open an editable period to act on a selection.",
   },
   periodSummary: {
     title: "Plan vs actual by period",
@@ -622,6 +730,10 @@ export const en = {
     deviationCumulative: "Cumulative deviation",
     current: "Current period",
     notReported: "Not reported",
+    selectPeriod: "Select period {period}",
+    selectAllPeriods: "Select all periods",
+    exportSelected: "Export selected periods",
+    exportedToast: { one: "1 period exported", other: "{count} periods exported" },
     dataDateIs: "Measured to",
     missingNote: "A dash means nothing was reported. Figures behind plan are shown in brackets.",
   },
@@ -716,6 +828,18 @@ export const en = {
     openIssues: "Open actions",
     variance: "Variance",
     dataDate: "Data date",
+    /**
+     * The name of the merged deviation column.
+     *
+     * The cell states two figures — the cumulative deviation and the movement
+     * since the previous period — so the header names neither in full and the
+     * hint beside it carries the rule. A header wide enough for "Cumulative
+     * deviation" is a header two lines tall, and two lines is most of what
+     * moving the captions off the rows just bought back.
+     */
+    deviationColumn: "Deviation",
+    deviationColumnHint:
+      "Cumulative deviation from the baseline.",
     empty: "Nothing needs attention.",
     filterEmpty: "No projects match this problem filter.",
     showAll: "Show all problems",
@@ -725,6 +849,34 @@ export const en = {
     },
     noReadings: "No readings",
     viewProject: "Open {name}",
+    /**
+     * What is actually wrong, in the signal's own popup.
+     *
+     * A name alone ("Stale reporting") tells a reader which bucket the project
+     * fell into, not what happened to it. These say the second thing, using the
+     * project's own figures, because that is the sentence someone repeats to
+     * the site team.
+     */
+    behindDetail:
+      "{actual} of the work is done against {planned} planned, which is {deviation} behind the baseline.",
+    reportsDueDetail: {
+      one: "1 reporting period has ended with nothing submitted against it.",
+      other: "{count} reporting periods have ended with nothing submitted against them.",
+    },
+    staleDetail:
+      "The last reading was taken {age}, on {date}. Past two weeks the picture stops being current enough to act on.",
+    unreportedDetail:
+      "Nothing has ever been reported against this baseline, so there is no actual progress to compare the plan with.",
+    awaitingReviewDetail: {
+      one: "1 submitted report is waiting on a review decision.",
+      other: "{count} submitted reports are waiting on a review decision.",
+    },
+    baselineMissingDetail:
+      "No BoQ baseline is active, so planned progress cannot be worked out and this project cannot be measured against anything.",
+    openActionsDetail: {
+      one: "1 action is still open on this project.",
+      other: "{count} actions are still open on this project.",
+    },
   },
   daily: {
     tab: "Daily reports",
@@ -789,6 +941,10 @@ export const en = {
     reopened: "Report reopened",
     deleteReport: "Delete draft",
     deleted: "Draft deleted",
+    deleteSelectedLabel: { one: "Delete 1 draft", other: "Delete {count} drafts" },
+    bulkDeleteDescription: "These drafts will be permanently removed.",
+    bulkDeletedToast: { one: "1 draft deleted", other: "{count} drafts deleted" },
+    onlyDraftsDeletable: "Only drafts can be deleted. Deselect the submitted reports first.",
     deleteTitle: "Delete this draft?",
     deleteBody: "The report for {date} will be permanently removed. Only drafts can be deleted.",
     returnedNotice: "Returned for correction",
@@ -864,6 +1020,7 @@ export const en = {
     title: "Actions",
     newTicket: "New action",
     editTicket: "Edit action",
+    editSelected: "Edit the selected action",
     titleLabel: "Title",
     description: "Description",
     issuer: "Issuer",
@@ -879,15 +1036,15 @@ export const en = {
     saved: "Action saved",
     saveFailed: "Could not save the action",
     statusFailed: "Could not update action status",
-    deleteTitle: "Delete action?",
-    deleteDescription: "“{title}” will be permanently deleted.",
-    deleted: "Action deleted",
-    deleteFailed: "Could not delete the action",
     titleRequired: "Title is required",
     descriptionRequired: "Description is required",
     responsibleRequired: "Responsible person is required",
     contactRequired: "Contact number is required",
     contactInvalid: "Use a valid contact number",
+    deleteSelectedLabel: { one: "Delete 1 action", other: "Delete {count} actions" },
+    bulkDeleteDescription: "These actions will be permanently deleted.",
+    bulkDeletedToast: { one: "1 action deleted", other: "{count} actions deleted" },
+    setStatusSelected: "Set status of selected",
   },
   company: {
     title: "Companies",

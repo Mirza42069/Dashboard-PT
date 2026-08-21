@@ -614,6 +614,37 @@ export const workbookRequestLimit = pgTable(
   ],
 );
 
+/** Durable one-use claim for private workbook uploads across serverless instances. */
+export const temporaryWorkbookClaim = pgTable(
+  "temporary_workbook_claim",
+  {
+    pathname: text("pathname").primaryKey(),
+    claimedAt: timestamp("claimed_at").defaultNow().notNull(),
+  },
+  (table) => [index("temporaryWorkbookClaim_claimedAt_idx").on(table.claimedAt)],
+);
+
+/** Durable AI charge ledger; stale pending charges are refunded by the cleanup job. */
+export const aiCreditRefund = pgTable(
+  "ai_credit_refund",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    status: text("status")
+      .$type<"pending" | "spent" | "refunded">()
+      .default("pending")
+      .notNull(),
+    settledAt: timestamp("settled_at"),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index("aiCreditRefund_createdAt_idx").on(table.createdAt),
+    index("aiCreditRefund_statusCreatedAt_idx").on(table.status, table.createdAt),
+  ],
+);
+
 export const projectActualCurve = pgTable(
   "project_actual_curve",
   {

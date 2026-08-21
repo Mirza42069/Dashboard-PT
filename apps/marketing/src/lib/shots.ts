@@ -36,10 +36,12 @@ export type Shot = { src: string; width: number; height: number; framing?: ShotF
 const FRAMING: Partial<Record<ShotName, ShotFraming>> = {
   // The AI import dialog, with some of the project list bleeding around it.
   import: { left: 0.21, top: 0.285, right: 0.21, bottom: 0.29 },
-  // "Rencana vs realisasi" — the S-curve card, stopping short of the stat column.
-  progress: { left: 0.185, top: 0.615, right: 0.282, bottom: 0 },
-  // The BoQ line items, out to the Jumlah column.
-  boq: { left: 0.18, top: 0.572, right: 0.07, bottom: 0 },
+  // "Rencana vs realisasi" — the S-curve card, stopping short of the stat
+  // column, whose figures the page already prints beside it.
+  progress: { left: 0.19, top: 0.49, right: 0.283, bottom: 0 },
+  // The BoQ line items, out to the Bobot column — the weight is what every
+  // other figure on this page is derived from, so it stays in frame.
+  boq: { left: 0.19, top: 0.565, right: 0.02, bottom: 0 },
 };
 
 const PNG_SIGNATURE = "89504e470d0a1a0a";

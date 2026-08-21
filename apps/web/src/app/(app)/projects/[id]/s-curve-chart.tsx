@@ -1,13 +1,17 @@
 "use client";
 
 import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@DashboardV2/ui/components/chart";
+import {
   Area,
   CartesianGrid,
   ComposedChart,
   Line,
   ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
@@ -17,7 +21,7 @@ import { useT } from "@/i18n/provider";
 /**
  * Planned vs actual completion over the reporting periods — the S-curve.
  *
- * Two decisions worth keeping:
+ * Three decisions worth keeping:
  *
  * - The actual series is drawn with `connectNulls` off. Periods after the last
  *   reading come through as null, so the line simply stops rather than running
@@ -26,7 +30,9 @@ import { useT } from "@/i18n/provider";
  *
  * - Planned is a dashed area, actual a solid line. The two series are told
  *   apart by shape as well as by hue, so the chart survives greyscale printing
- *   and the common colour deficiencies.
+ *   and the common colour deficiencies. The legend below is hand-drawn for the
+ *   same reason: `ChartLegendContent` draws filled squares, which would state
+ *   the hue and drop the shape — the half that does the work here.
  *
  * - The drawing itself is hidden from assistive technology and the figures are
  *   read from the summary table below instead, via `describedById`. An SVG of
@@ -53,19 +59,21 @@ export default function SCurveChart({
 }) {
   const t = useT();
 
+  const config = {
+    planned: { label: t.progress.chartPlanned, color: "var(--chart-4)" },
+    actual: { label: t.progress.chartActual, color: "var(--chart-1)" },
+  } satisfies ChartConfig;
+
   return (
-    <div
-      className="h-72 w-full"
-      role="img"
-      aria-label={t.progress.chartLabel}
-      aria-describedby={describedById}
-    >
-      <ResponsiveContainer width="100%" height="100%">
+    <div role="img" aria-label={t.progress.chartLabel} aria-describedby={describedById}>
+      {/* ChartContainer defaults to aspect-video; this chart is a fixed height
+          beside a column of KPI tiles, so the aspect ratio has to be released. */}
+      <ChartContainer config={config} className="aspect-auto h-72 w-full">
         <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
           <defs>
             <linearGradient id="planned-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--chart-4)" stopOpacity={0.35} />
-              <stop offset="100%" stopColor="var(--chart-4)" stopOpacity={0.02} />
+              <stop offset="0%" stopColor="var(--color-planned)" stopOpacity={0.35} />
+              <stop offset="100%" stopColor="var(--color-planned)" stopOpacity={0.02} />
             </linearGradient>
           </defs>
 
@@ -85,18 +93,30 @@ export default function SCurveChart({
             tick={{ fontSize: 12, fill: "var(--muted-foreground)" }}
             width={48}
           />
-          <Tooltip
-            contentStyle={{
-              background: "var(--popover)",
-              border: "1px solid var(--border)",
-              borderRadius: "0.5rem",
-              fontSize: "0.75rem",
-              color: "var(--popover-foreground)",
-            }}
-            formatter={(value, name) => [
-              typeof value === "number" ? `${value.toFixed(1)}%` : "—",
-              String(name),
-            ]}
+          {/* A formatter replaces the whole tooltip row, swatch included, so
+              the swatch is redrawn here. It buys the one thing the default
+              cannot do: these are percentages to one decimal, not counts. */}
+          <ChartTooltip
+            content={
+              <ChartTooltipContent
+                formatter={(value, name, item) => (
+                  <>
+                    <span
+                      className="size-2.5 shrink-0 rounded-[2px]"
+                      style={{ background: item.color }}
+                    />
+                    <div className="flex flex-1 items-center justify-between gap-3 leading-none">
+                      <span className="text-muted-foreground">
+                        {config[name as keyof typeof config]?.label ?? name}
+                      </span>
+                      <span className="font-mono font-medium tabular-nums text-foreground">
+                        {typeof value === "number" ? `${value.toFixed(1)}%` : "—"}
+                      </span>
+                    </div>
+                  </>
+                )}
+              />
+            }
           />
 
           {/*
@@ -122,8 +142,7 @@ export default function SCurveChart({
           <Area
             type="monotone"
             dataKey="planned"
-            name={t.progress.chartPlanned}
-            stroke="var(--chart-4)"
+            stroke="var(--color-planned)"
             strokeWidth={2}
             strokeDasharray="5 4"
             fill="url(#planned-fill)"
@@ -133,15 +152,14 @@ export default function SCurveChart({
           <Line
             type="monotone"
             dataKey="actual"
-            name={t.progress.chartActual}
-            stroke="var(--chart-1)"
+            stroke="var(--color-actual)"
             strokeWidth={2.5}
-            dot={{ r: 2.5, fill: "var(--chart-1)", strokeWidth: 0 }}
+            dot={{ r: 2.5, fill: "var(--color-actual)", strokeWidth: 0 }}
             connectNulls={false}
             isAnimationActive={false}
           />
         </ComposedChart>
-      </ResponsiveContainer>
+      </ChartContainer>
 
       <div className="mt-2 flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">

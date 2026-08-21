@@ -15,7 +15,15 @@ import { TRIAL_AI_EXHAUSTED } from "@DashboardV2/api/lib/trial";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
 import { Clock, Loader2, Lock, TriangleAlert, Upload, X } from "@DashboardV2/ui/components/icons";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@DashboardV2/ui/components/select";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { upload } from "@vercel/blob/client";
 import { useRef, useState } from "react";
 
 import { StepRunner } from "@/components/step-runner";
@@ -23,10 +31,6 @@ import { interpolate, plural } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
 import { getServerUrl } from "@/lib/server-url";
 import { useDebounced } from "@/lib/use-debounced";
-import {
-  createWorkbookTransport,
-  WORKBOOK_TRANSPORT_CONTENT_TYPE,
-} from "@/lib/workbook-transport";
 import { trpc } from "@/utils/trpc";
 
 type PeriodType = "weekly" | "biweekly" | "monthly";
@@ -85,6 +89,13 @@ type Analysis = {
     description: string;
     kind: "item" | "section" | "excluded";
     parentRow: number | null;
+    code: string | null;
+    unit: string | null;
+    quantity: number | null;
+    unitRate: number | null;
+    weight: number | null;
+    startPeriodIndex: number | null;
+    finishPeriodIndex: number | null;
   }[];
   summary: {
     sectionCount: number;
@@ -97,6 +108,17 @@ type Analysis = {
     latestActualPeriodIndex: number | null;
     validationErrors: { row: number; column: string | null; message: string }[];
   };
+};
+type SheetCandidate = {
+  sheetName: string;
+  state: "visible" | "hidden" | "veryHidden";
+  rowCount: number;
+  columnCount: number;
+  knownSCurve: boolean;
+  warnings: { row: number; column: string | null; message: string }[];
+  actualSnapshotCount: number;
+  latestActualPeriodIndex: number | null;
+  latestActualPercent: number | null;
 };
 type Answers = {
   name: string;
@@ -131,6 +153,18 @@ const QUESTIONS = [
 ] as const;
 type Question = (typeof QUESTIONS)[number];
 const CODE_QUESTION_INDEX = QUESTIONS.indexOf("code");
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
+const XLSX_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+function preferredSheet(sheets: SheetCandidate[]) {
+  return (
+    sheets.find((sheet) => sheet.sheetName.trim().toUpperCase() === "S CURVE NOV") ??
+    sheets.find((sheet) => sheet.knownSCurve && sheet.actualSnapshotCount > 0) ??
+    sheets.find((sheet) => sheet.knownSCurve) ??
+    sheets[0]
+  );
+}
 
 type PeriodCountIssue = {
   code: "period_count_mismatch";
@@ -229,6 +263,24 @@ async function readJson<T>(response: Response): Promise<T | null> {
   }
 }
 
+async function uploadWorkbook(
+  file: File,
+  currentUserId: string,
+  metadata: Record<string, unknown> = {},
+): Promise<string> {
+  const blob = await upload(
+    `temporary-workbooks/project-import/${currentUserId}/${crypto.randomUUID()}.xlsx`,
+    file,
+    {
+      access: "private",
+      handleUploadUrl: `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/upload`,
+      contentType: XLSX_CONTENT_TYPE,
+      multipart: false,
+    },
+  );
+  return JSON.stringify({ pathname: blob.pathname, filename: file.name, ...metadata });
+}
+
 /** Mirrors NDJSON_CONTENT_TYPE in apps/server/src/index.ts. */
 const NDJSON_CONTENT_TYPE = "application/x-ndjson";
 
@@ -236,7 +288,7 @@ const NDJSON_CONTENT_TYPE = "application/x-ndjson";
 const SERVER_STAGES = ["reading", "recognising", "interpreting", "building"] as const;
 type ServerStage = (typeof SERVER_STAGES)[number];
 
-/** The two the browser can time itself: compressing the file, then sending it. */
+/** The two the browser can time itself: preparing the upload, then sending it. */
 const CLIENT_STAGES = ["preparing", "uploading"] as const;
 const CLIENT_STAGE_COUNT = CLIENT_STAGES.length;
 const ALL_STAGES = [...CLIENT_STAGES, ...SERVER_STAGES] as const;
@@ -302,11 +354,13 @@ export default function ProjectWorkbookImportDialog({
   open,
   onOpenChange,
   onCreated,
+  currentUserId,
   trialAiCredits,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (projectId: string) => void;
+  currentUserId: string;
   /** AI imports this trial has left; null on an account with no trial. */
   trialAiCredits: number | null;
 }) {
@@ -314,6 +368,9 @@ export default function ProjectWorkbookImportDialog({
   const { locale } = useLocale();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
+  const [sheets, setSheets] = useState<SheetCandidate[] | null>(null);
+  const [selectedSheetName, setSelectedSheetName] = useState("");
+  const [discovering, setDiscovering] = useState(false);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [answers, setAnswers] = useState<Answers>(EMPTY);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -369,6 +426,9 @@ export default function ProjectWorkbookImportDialog({
 
   function reset() {
     setFile(null);
+    setSheets(null);
+    setSelectedSheetName("");
+    setDiscovering(false);
     setAnalysis(null);
     setAnswers(EMPTY);
     setQuestionIndex(0);
@@ -390,7 +450,46 @@ export default function ProjectWorkbookImportDialog({
     setRowErrors([]);
   }
 
-  async function analyze(chosen: File) {
+  async function discover(chosen: File) {
+    if (!chosen.name.toLowerCase().endsWith(".xlsx")) {
+      setError(t.projectImport.fileTypeError);
+      return;
+    }
+    if (chosen.size > MAX_FILE_BYTES) {
+      setError(t.projectImport.fileSizeError);
+      return;
+    }
+    setFile(chosen);
+    setSheets(null);
+    setSelectedSheetName("");
+    setError(null);
+    setAiExhausted(false);
+    setDiscovering(true);
+    try {
+      const data = await uploadWorkbook(chosen, currentUserId);
+      const response = await fetch(
+        `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/discover`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: data,
+        },
+      );
+      const body = await readJson<{ sheets?: SheetCandidate[]; error?: string }>(response);
+      if (!response.ok || !body?.sheets) {
+        throw new Error(body?.error ?? t.projectUpdate.discoveryFailed);
+      }
+      setSheets(body.sheets);
+      setSelectedSheetName(preferredSheet(body.sheets)?.sheetName ?? "");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t.projectUpdate.discoveryFailed);
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  async function analyze(chosen: File, sheetName: string) {
     setBusy(true);
     setError(null);
     setAiExhausted(false);
@@ -398,16 +497,16 @@ export default function ProjectWorkbookImportDialog({
     setSkippedStages([]);
     seenStages.current.clear();
     try {
-      const data = await createWorkbookTransport(chosen);
-      // Compression is done; the upload is the next thing the user waits on.
       setStagesDone(1);
+      const data = await uploadWorkbook(chosen, currentUserId, { selectedSheetName: sheetName });
+      setStagesDone(2);
       const response = await fetch(
         `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/analyze`,
         {
           method: "POST",
           credentials: "include",
           headers: {
-            "Content-Type": WORKBOOK_TRANSPORT_CONTENT_TYPE,
+            "Content-Type": "application/json",
             // Asks for stage-by-stage progress. The route still answers with a
             // single JSON body without this, which is what readAnalysis falls
             // back to when a proxy buffers the stream away.
@@ -416,8 +515,6 @@ export default function ProjectWorkbookImportDialog({
           body: data,
         },
       );
-      // Headers are in, so the bytes are up.
-      setStagesDone(2);
       const body = await readAnalysis(response, {
         onStage: (stage) => {
           const index = SERVER_STAGES.indexOf(stage);
@@ -438,7 +535,6 @@ export default function ProjectWorkbookImportDialog({
         return;
       }
       if (!response.ok || !body?.plan) throw new Error(body?.error ?? t.projectImport.analyzeFailed);
-      setFile(chosen);
       setAnalysis(body);
       setServerScheduleIssue(null);
       setAnswers({
@@ -667,13 +763,13 @@ export default function ProjectWorkbookImportDialog({
     setBusy(true);
     setError(null);
     try {
-      const data = await createWorkbookTransport(file, { plan: analysis.plan });
+      const data = await uploadWorkbook(file, currentUserId, { plan: analysis.plan });
       const response = await fetch(
         `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/review`,
         {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": WORKBOOK_TRANSPORT_CONTENT_TYPE },
+          headers: { "Content-Type": "application/json" },
           body: data,
         },
       );
@@ -739,7 +835,7 @@ export default function ProjectWorkbookImportDialog({
     setError(null);
     setRowErrors([]);
     try {
-      const data = await createWorkbookTransport(file, {
+      const data = await uploadWorkbook(file, currentUserId, {
         confirmed: {
           plan: analysis.plan,
           project: {
@@ -759,7 +855,7 @@ export default function ProjectWorkbookImportDialog({
         {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": WORKBOOK_TRANSPORT_CONTENT_TYPE },
+          headers: { "Content-Type": "application/json" },
           body: data,
         },
       );
@@ -846,6 +942,8 @@ export default function ProjectWorkbookImportDialog({
   };
   const availableSections =
     analysis?.rowPreview.filter((row) => row.kind === "section") ?? [];
+  const selectedSheet =
+    sheets?.find((candidate) => candidate.sheetName === selectedSheetName) ?? null;
   const scheduleIssue = analysis
     ? getWorkbookCalendarIssue(answers, analysis.plan) ??
       getPeriodCountIssue(answers, analysis.plan) ??
@@ -972,13 +1070,91 @@ export default function ProjectWorkbookImportDialog({
               className="mx-auto mt-4 max-w-sm"
               type="file"
               accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              disabled={busy}
+              disabled={busy || discovering}
               onChange={(event) => {
                 const chosen = event.target.files?.[0];
                 event.currentTarget.value = "";
-                if (chosen) void analyze(chosen);
+                if (chosen) void discover(chosen);
               }}
             />
+            {discovering && (
+              <p className="mt-4 flex items-center justify-center gap-2 text-muted-foreground" role="status">
+                <Loader2 className="size-4 animate-spin motion-reduce:animate-none" />
+                {t.projectUpdate.uploadingDiscover}
+              </p>
+            )}
+            {sheets && sheets.length === 0 && (
+              <p className="mt-4 text-destructive" role="alert">
+                {t.projectUpdate.noSheets}
+              </p>
+            )}
+            {sheets && sheets.length > 0 && (
+              <div className="mx-auto mt-5 max-w-md space-y-3 text-left">
+                <p className="text-muted-foreground">{t.projectUpdate.sheetHint}</p>
+                <div className="space-y-2">
+                  <Label htmlFor="project-import-sheet">{t.projectUpdate.sheetLabel}</Label>
+                  <Select
+                    items={sheets.map((candidate) => ({
+                      value: candidate.sheetName,
+                      label: interpolate(t.projectUpdate.sheetOption, {
+                        name: candidate.sheetName,
+                        state: t.projectUpdate.sheetStates[candidate.state],
+                        rows: candidate.rowCount,
+                        columns: candidate.columnCount,
+                      }),
+                    }))}
+                    value={selectedSheetName}
+                    onValueChange={(value) => setSelectedSheetName(value ?? "")}
+                  >
+                    <SelectTrigger id="project-import-sheet" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sheets.map((candidate) => (
+                        <SelectItem key={candidate.sheetName} value={candidate.sheetName}>
+                          {interpolate(t.projectUpdate.sheetOption, {
+                            name: candidate.sheetName,
+                            state: t.projectUpdate.sheetStates[candidate.state],
+                            rows: candidate.rowCount,
+                            columns: candidate.columnCount,
+                          })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {selectedSheet && (
+                  <div className="rounded-md border bg-background p-3">
+                    <p className="font-medium">
+                      {selectedSheet.knownSCurve
+                        ? t.projectUpdate.knownSCurve
+                        : t.projectUpdate.otherLayout}
+                    </p>
+                    <p className="mt-1 text-muted-foreground">
+                      {selectedSheet.actualSnapshotCount > 0 &&
+                      selectedSheet.latestActualPercent !== null
+                        ? interpolate(t.projectUpdate.sheetActuals, {
+                            count: selectedSheet.actualSnapshotCount,
+                            percent: selectedSheet.latestActualPercent.toFixed(2),
+                            period: selectedSheet.latestActualPeriodIndex ?? "-",
+                          })
+                        : t.projectUpdate.noSheetActuals}
+                    </p>
+                  </div>
+                )}
+                <Button
+                  type="button"
+                  className="w-full"
+                  disabled={busy || !file || !selectedSheetName}
+                  onClick={() => {
+                    if (file && selectedSheetName) void analyze(file, selectedSheetName);
+                  }}
+                >
+                  {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
+                  {t.projectUpdate.analyzeAction}
+                </Button>
+              </div>
+            )}
             {busy && (
               <div className="mx-auto mt-5 max-w-sm text-left">
                 <StepRunner
@@ -1326,18 +1502,18 @@ export default function ProjectWorkbookImportDialog({
             {reviewing ? (
               reviewStale ? (
                 <Button disabled={busy} onClick={() => void reviewPlan()}>
-                  {busy && <Loader2 className="animate-spin" />}
+                  {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
                   {t.projectImport.revalidateAction}
                 </Button>
               ) : (
                 <Button disabled={busy} onClick={() => void createProject()}>
-                  {busy && <Loader2 className="animate-spin" />}
+                  {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
                   {t.projectImport.createAction}
                 </Button>
               )
             ) : (
               <Button disabled={busy} onClick={() => void nextQuestion()}>
-                {busy && <Loader2 className="animate-spin" />}
+                {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
                 {t.common.continue}
               </Button>
             )}
