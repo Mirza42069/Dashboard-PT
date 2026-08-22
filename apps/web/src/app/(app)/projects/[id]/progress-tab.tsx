@@ -59,19 +59,29 @@ import {
 import { toggleFold, type MonthFoldState } from "@/lib/month-fold";
 import { buildMatrixColumns, buildPeriodHeader, lastPeriodOf } from "@/lib/period-header";
 import { useFormat } from "@/lib/use-format";
+import { useMatrixKeyboard } from "@/lib/use-matrix-keyboard";
 import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
 import DelayContributors from "./delay-contributors";
+import { decimalOnly } from "./matrix-input";
 import PeriodSummaryTable from "./period-summary-table";
 import ReportingWorkflow from "./reporting-workflow";
 import SCurveChart from "./s-curve-chart";
 
 /** Ties the chart to the table that carries its figures for assistive tech. */
 const SUMMARY_TABLE_ID = "period-summary";
-const ESTIMATED_ROW_HEIGHT = 52;
+/** Tracks the row padding below. The virtualiser scrolls by this. */
+const ESTIMATED_ROW_HEIGHT = 60;
 const ESTIMATED_HEADER_HEIGHT = 96;
-const LEADING_WIDTH = 320;
+/**
+ * The line-name block, and every pixel of it comes out of the cells — fitMatrix
+ * divides whatever is left of the container between the period columns. It was
+ * 320px; the 48px trimmed off goes straight to the columns, and helps lift them
+ * over COMPACT_CELL_WIDTH, which is what gates the roomier padding and text.
+ * The column truncates and carries its full text on `title`, so nothing is hidden.
+ */
+const LEADING_WIDTH = 272;
 /** The checkbox column, carved out of the leading block rather than added to it. */
 const SELECT_WIDTH = 40;
 
@@ -165,6 +175,12 @@ export default function ProgressTab({
     dataDate: fitAnchorDate,
   });
   const allMatrixColumns = buildMatrixColumns(matrixPeriods, fit.collapsed);
+  const matrixKeyboard = useMatrixKeyboard({
+    scrollRef: matrixWindow.scrollRef,
+    rowCount: matrixRows.length,
+    columnCount: allMatrixColumns.length,
+    rowHeight: ESTIMATED_ROW_HEIGHT,
+  });
 
   function toggleMonth(monthKey: string) {
     // What the press means depends on what is on screen, not on what is
@@ -616,6 +632,10 @@ export default function ProgressTab({
                       "aria-label": t.progress.matrixTitle,
                       tabIndex: 0,
                       onScroll: matrixWindow.onScroll,
+                      // One handler for every cell in the grid — see
+                      // lib/use-matrix-keyboard.ts. Keys it does not act on keep
+                      // their default, so Tab still leaves the grid.
+                      onKeyDown: matrixKeyboard.onKeyDown,
                     }}
                     scrollX={scrollsSideways}
                     containerClassName={`max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
@@ -660,7 +680,7 @@ export default function ProgressTab({
                       gridId="progress-matrix-table"
                     />
                     <TableRow>
-                      <TableHead className="sticky left-0 z-10 h-auto bg-card px-2 py-2">
+                      <TableHead className="sticky left-0 z-10 h-auto bg-card px-2 py-2.5">
                         {canActOnSelection && (
                           <Checkbox
                             aria-label={t.progress.selectAllLines}
@@ -670,7 +690,7 @@ export default function ProgressTab({
                           />
                         )}
                       </TableHead>
-                      <TableHead className="sticky left-10 z-10 h-auto bg-card px-2 py-2">
+                      <TableHead className="sticky left-10 z-10 h-auto bg-card px-2 py-2.5">
                         <span className="sr-only">{t.schedule.line}</span>
                       </TableHead>
                       {visibleHeader.columns.map((view, index) => {
@@ -781,7 +801,7 @@ export default function ProgressTab({
                             below is what the windowing scrolls by. */}
                         <th
                           scope="row"
-                          className="sticky left-10 z-10 max-w-64 truncate bg-card px-2 py-1.5 text-left align-middle font-normal"
+                          className="sticky left-10 z-10 max-w-52 truncate bg-card px-2 py-2 text-left align-middle font-normal"
                           title={`${row.section} - ${row.leaf.description}`}
                         >
                           <span className="font-mono text-xs text-muted-foreground">
@@ -817,33 +837,41 @@ export default function ProgressTab({
                             <TableCell
                               key={column.key}
                               aria-colindex={index + 3}
-                              className="px-1 py-1"
+                              className={`py-2 ${compact ? "px-1" : "px-1.5"}`}
                             >
                               {editable ? (
                                 <Input
-                                  type="number"
-                                  min={0}
-                                  step="any"
+                                  // Not type="number", deliberately — see the
+                                  // note on decimalOnly in ./matrix-input.ts.
+                                  type="text"
+                                  inputMode="decimal"
                                   value={cellValue(row.leaf.id, period.id)}
                                   aria-label={`${row.leaf.code} - ${accessibleName}`}
+                                  {...matrixKeyboard.cellProps(rowIndex, index)}
                                   // px-1 once the column is compact. The Input
                                   // primitive spends 22px on its own padding and
                                   // borders before a digit is drawn, which at the
                                   // editable floor would leave under two
                                   // characters of typable interior.
-                                  className={`h-8 text-right tabular-nums ${
-                                    compact ? "px-1" : ""
+                                  //
+                                  // md:h-9 and md:text-sm have to name the
+                                  // breakpoint: the primitive is `h-9 … md:h-8`
+                                  // and `text-base … md:text-xs`, so a bare
+                                  // utility here loses from `md` up, which is
+                                  // every screen this grid is used on.
+                                  className={`h-9 text-right tabular-nums md:h-9 ${
+                                    compact ? "px-1" : "md:text-sm"
                                   } ${drafts.has(key) ? "border-[var(--chart-1)]" : ""}`}
                                   onChange={(e) =>
                                     setDrafts((current) =>
-                                      new Map(current).set(key, e.target.value),
+                                      new Map(current).set(key, decimalOnly(e.target.value)),
                                     )
                                   }
                                 />
                               ) : (
                                 <span
                                   className={`block py-1 text-right tabular-nums text-muted-foreground ${
-                                    compact ? "px-1" : "px-2"
+                                    compact ? "px-1" : "px-2 text-sm"
                                   }`}
                                   title={
                                     column.kind === "month" ? accessibleName : undefined

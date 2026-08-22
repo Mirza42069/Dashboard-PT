@@ -60,5 +60,8 @@ scripts/seed-boq-baseline.ts
 tmp
 temp
 
+# Local product documentation
+/PRD.md
+
 .vercel
 .env*

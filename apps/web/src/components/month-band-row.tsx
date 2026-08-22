@@ -50,7 +50,7 @@ export function MonthBandRow<P extends PeriodLike>({
       <th
         scope="col"
         colSpan={leadingColSpan}
-        className="sticky left-0 z-10 bg-card px-4 py-1 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground"
+        className="sticky left-0 z-10 bg-card px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground"
       >
         <span className="sr-only">{leadingLabel}</span>
       </th>
@@ -93,7 +93,7 @@ export function MonthBandCell({
       colSpan={month.span}
       // Centred over its run and ruled off from the next month, which is
       // what makes the grouping readable without a background per month.
-      className="border-l px-2 py-1 text-center text-xs font-medium uppercase tracking-wide text-muted-foreground first:border-l-0"
+      className="border-l px-2 py-1.5 text-center text-xs font-medium uppercase tracking-wide text-muted-foreground first:border-l-0"
     >
       {interactive ? (
         <button

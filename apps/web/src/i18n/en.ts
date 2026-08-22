@@ -567,11 +567,11 @@ export const en = {
     selectedCount: "{count} selected",
     spreadSelected: "Spread evenly",
     spreadDone: "Plan applied to {count} lines",
+    useAsCopySource: "Use as copy source",
     copyFrom: "Copy plan from",
     copyDone: "Plan copied to {count} lines",
     clearSelected: "Clear plan",
     clearDone: "Plan cleared on {count} lines",
-    fillRight: "Fill right",
     fillRightHint: "Repeats the start period’s value across the rest of the window.",
     fillRightSelected: "Fill right on selected",
     fillRightDone: "Filled right on {count} lines",
@@ -826,6 +826,8 @@ export const en = {
     staleHint: "No reading for more than two weeks",
     unreported: "Never reported",
     openIssues: "Open actions",
+    /** The denominator on a filter card. Replaced a bar that never stated it. */
+    ofLiveProjects: "of {count} projects",
     variance: "Variance",
     dataDate: "Data date",
     /**

@@ -2,7 +2,7 @@
 
 import { cn } from "@DashboardV2/ui/lib/utils";
 
-import { progressFill } from "@/lib/progress-tone";
+import { progressRampColor } from "@/lib/progress-tone";
 
 /**
  * How many pills the track is drawn from.
@@ -16,10 +16,11 @@ const TICKS = 20;
 /**
  * Two kinds of tone, and the distinction matters.
  *
- * "progress" is the default and reads its colour off the value — see
- * lib/progress-tone.ts. Everything else is a *category*: the dashboard's filter
- * cards use these bars to draw counts of projects in a state, and the colour
- * there says which state, not how many. A category tone must never start
+ * "progress" is the default and paints each pill its own step of the red →
+ * amber → green ramp — see lib/progress-tone.ts. Everything else is a
+ * *category*: the dashboard's filter cards use these bars to draw counts of
+ * projects in a state, and the colour there says which state, not how many. A
+ * category tone is one flat colour across the whole fill and must never start
  * tracking the number, which is why they are not steps of one scale.
  */
 export type TickTone = "progress" | "late" | "waiting" | "settled" | "neutral";
@@ -74,7 +75,6 @@ export function TickBar({
   // and rounding it away is the one error this bar must not make.
   const share = max > 0 && value > 0 ? value / max : 0;
   const filled = share <= 0 ? 0 : Math.min(TICKS, Math.max(1, Math.round(share * TICKS)));
-  const fill = tone === "progress" ? progressFill(value, max) : FILL[tone];
 
   return (
     // One height *and* one width everywhere: the pills are a fixed size and the
@@ -84,16 +84,30 @@ export function TickBar({
     // header and 2px slivers in a list row, so one component drew three
     // different-looking bars. Shrinking is still allowed, so a container
     // narrower than the bar thins the pills instead of overflowing.
-    <span className={cn("inline-flex h-4 w-fit items-stretch gap-0.5", className)} aria-hidden>
-      {Array.from({ length: TICKS }, (_, index) => (
-        <span
-          key={index}
-          className={cn(
-            "w-1.5 rounded-full",
-            index < filled ? fill : "bg-muted-foreground/20",
-          )}
-        />
-      ))}
+    <span className={cn("inline-flex h-5 w-fit items-stretch gap-0.5", className)} aria-hidden>
+      {Array.from({ length: TICKS }, (_, index) => {
+        const lit = index < filled;
+
+        return (
+          <span
+            key={index}
+            className={cn(
+              "w-2 rounded-full",
+              !lit && "bg-muted-foreground/20",
+              lit && tone !== "progress" && FILL[tone],
+            )}
+            // Sampled by the pill's place on the *track*, not by its place in
+            // the fill. Either produces the same tip colour, but this way a
+            // pill never changes colour as the value moves — it only lights up,
+            // so a bar creeping forward does not repaint everything behind it.
+            style={
+              lit && tone === "progress"
+                ? { backgroundColor: progressRampColor(index / (TICKS - 1)) }
+                : undefined
+            }
+          />
+        );
+      })}
     </span>
   );
 }

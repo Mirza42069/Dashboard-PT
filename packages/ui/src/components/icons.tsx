@@ -36,6 +36,7 @@ import {
   ArrowLeft01Icon as HiArrowLeft01,
   ArrowRight01Icon as HiArrowRight01,
   ArrowUp01Icon as HiArrowUp01,
+  ArrowUpRight01Icon as HiArrowUpRight01,
   Building03Icon as HiBuilding03,
   Calendar03Icon as HiCalendar03,
   Cancel01Icon as HiCancel01,
@@ -138,6 +139,7 @@ export const Accessibility = icon(HiAccessibility, "Accessibility");
 export const AiFile = icon(HiAiFile, "AiFile");
 export const ArrowDownIcon = icon(HiArrowDown01, "ArrowDownIcon");
 export const ArrowLeft = icon(HiArrowLeft01, "ArrowLeft");
+export const ArrowUpRight = icon(HiArrowUpRight01, "ArrowUpRight");
 export const Building2 = icon(HiBuilding03, "Building2");
 export const CalendarRange = icon(HiCalendar03, "CalendarRange");
 export const Check = icon(HiTick02, "Check");

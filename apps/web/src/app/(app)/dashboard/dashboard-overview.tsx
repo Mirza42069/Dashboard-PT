@@ -81,6 +81,9 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
         onSelect={setFilter}
         canReview={canReview}
         pending={exceptions.isPending}
+        portfolioValue={summary.data?.portfolioValue}
+        completionPercent={summary.data?.valueCompletionPercent}
+        summaryPending={summary.isPending}
       />
 
       <AttentionList
@@ -88,9 +91,6 @@ export default function DashboardOverview({ canReview }: { canReview: boolean })
         total={firstPage?.total ?? 0}
         filter={filter}
         onFilterChange={setFilter}
-        portfolioValue={summary.data?.portfolioValue}
-        completionPercent={summary.data?.valueCompletionPercent}
-        summaryPending={summary.isPending}
         pending={exceptions.isPending}
         error={exceptionsError ? exceptions.error : null}
         onRetry={() => void exceptions.refetch()}

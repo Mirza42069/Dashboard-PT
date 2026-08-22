@@ -342,7 +342,7 @@ export function WindowedMonthBandRow<P extends PeriodLike>({
       <th
         scope="col"
         colSpan={leadingColSpan}
-        className="sticky left-0 z-10 bg-card px-4 py-1 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground"
+        className="sticky left-0 z-10 bg-card px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground"
       >
         <span className="sr-only">{leadingLabel}</span>
       </th>

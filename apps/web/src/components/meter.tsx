@@ -3,15 +3,15 @@
 import { cn } from "@DashboardV2/ui/lib/utils";
 
 import { useT } from "@/i18n/provider";
-import { progressFill } from "@/lib/progress-tone";
+import { progressRampColor } from "@/lib/progress-tone";
 
 /**
  * A horizontal magnitude meter for one value against one maximum.
  *
- * Colour comes from the value by default — the progress bands in
- * lib/progress-tone.ts, shared with TickBar so the app's two bar idioms agree.
- * It used to be one fixed step of the chart ramp, which meant every meter in
- * the product was the same blue whatever it said.
+ * Colour comes from position along the track by default — the red → amber →
+ * green ramp in lib/progress-tone.ts, shared with TickBar so the app's two bar
+ * idioms agree. It used to be one fixed step of the chart ramp, which meant
+ * every meter in the product was the same blue whatever it said.
  *
  * The "magnitude" tone opts back out of that, for meters whose value is not
  * progress towards something good. Share-of-delay is the case that forced it:
@@ -58,6 +58,8 @@ export function Meter({
   // Clamped so an over-limit bar fills the track rather than overflowing it —
   // the overflow is communicated by the colour change and the label instead.
   const filled = Math.min(Math.max(ratio, 0), 1) * segments;
+  // The default tone has no one colour — it walks the progress ramp across the
+  // segments, so each one carries its own and there is nothing to name here.
   const fill =
     isOver || tone === "destructive"
       ? "bg-destructive"
@@ -65,7 +67,7 @@ export function Meter({
         ? "bg-success"
         : tone === "magnitude"
           ? "bg-[var(--chart-2)]"
-          : progressFill(value, max);
+          : null;
 
   return (
     <div className={cn("space-y-1.5", className)}>
@@ -79,7 +81,7 @@ export function Meter({
         // reports, so nothing inside here is exposed separately — a screen
         // reader announcing ten cells would be ten times the noise for the same
         // one number.
-        className="flex h-2 w-full gap-[2px]"
+        className="flex h-3 w-full gap-[2px]"
       >
         {Array.from({ length: segments }, (_, index) => (
           <div key={index} aria-hidden className="h-full flex-1 overflow-hidden bg-muted">
@@ -93,7 +95,15 @@ export function Meter({
              */}
             <div
               className={cn("h-full transition-[width] duration-300", fill)}
-              style={{ width: `${Math.min(Math.max(filled - index, 0), 1) * 100}%` }}
+              style={{
+                width: `${Math.min(Math.max(filled - index, 0), 1) * 100}%`,
+                // Only when no tone named a colour above. Sampled by the
+                // segment's place on the track, so a segment keeps its colour
+                // as the value moves and only its width changes.
+                ...(fill === null
+                  ? { backgroundColor: progressRampColor(index / (segments - 1)) }
+                  : {}),
+              }}
             />
           </div>
         ))}

@@ -58,11 +58,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@DashboardV2/ui/components/popover";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@DashboardV2/ui/components/tooltip";
 
 import { Hint } from "@/components/hint";
 import { useLocale, useT } from "@/i18n/provider";
@@ -76,10 +71,13 @@ import {
   fitMatrix,
 } from "@/lib/matrix-fit";
 import { toggleFold, type MonthFoldState } from "@/lib/month-fold";
+import { useMatrixKeyboard } from "@/lib/use-matrix-keyboard";
 import { useRowSelection } from "@/lib/use-row-selection";
 import { buildMatrixColumns, buildPeriodHeader, lastPeriodOf } from "@/lib/period-header";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
+
+import { decimalOnly } from "./matrix-input";
 
 /** A row is "complete" when its cells total 100, within rounding. */
 const ROW_TOLERANCE = 0.5;
@@ -96,17 +94,40 @@ const ROW_TOLERANCE = 0.5;
  * Declared as widths and summed, rather than as a total restated beside the
  * <colgroup>: the fit arithmetic depends on the two agreeing, and they used to
  * be kept in step by hand.
+ *
+ * And every pixel of it comes out of the cells. fitMatrix divides whatever is
+ * left of the container between the period columns, so these blocks are not
+ * neutral chrome — they are the reason a cell was 56px wide. They were
+ * [40, 256] and [88, 80]; the 64px trimmed off goes straight to the columns,
+ * enough to lift several of them over COMPACT_CELL_WIDTH, which is what gates
+ * the roomier padding and the second header line. The description column
+ * truncates and carries its full text on `title`, so a narrower one hides
+ * nothing.
  */
-const LEADING_COL_WIDTHS = [40, 256] as const;
-/** Columns after it: row total and the row menu. */
-const TRAILING_COL_WIDTHS = [88, 80] as const;
+const LEADING_COL_WIDTHS = [40, 208] as const;
+/**
+ * Columns after it: row total, and the one button left on a row.
+ *
+ * The actions column was 72px holding three 28px buttons — 108px of content
+ * once the cell's padding is counted. The table is `table-fixed`, so the column
+ * could not grow; the row is `justify-end`, so the overflow went left; and a
+ * table cell does not clip, so it painted over the total beside it. A row read
+ * "100.(" with a sliders icon on top of the rest of it.
+ *
+ * Fill-right and copy-from went rather than the column growing: ticking a row
+ * raises the bulk bar, which offers both already. What is left is the plan
+ * popover — 28px inside 16px of padding — and the 24px saved goes to the
+ * period columns like everything else trimmed here.
+ */
+const TRAILING_COL_WIDTHS = [80, 48] as const;
 const sumWidths = (widths: readonly number[]) => widths.reduce((total, w) => total + w, 0);
 
 const LEADING_COLUMNS = LEADING_COL_WIDTHS.length;
 const TRAILING_COLUMNS = TRAILING_COL_WIDTHS.length;
 const LEADING_WIDTH = sumWidths(LEADING_COL_WIDTHS);
 const TRAILING_WIDTH = sumWidths(TRAILING_COL_WIDTHS);
-const ESTIMATED_ROW_HEIGHT = 44;
+/** Tracks the row padding below. The virtualiser scrolls by this. */
+const ESTIMATED_ROW_HEIGHT = 52;
 const ESTIMATED_HEADER_HEIGHT = 72;
 const STICKY_LEADING_WIDTH = 40;
 
@@ -188,6 +209,12 @@ export default function ScheduleTab({
     dataDate: reportQuery.data?.project.dataDate ?? null,
   });
   const allMatrixColumns = buildMatrixColumns(matrixPeriods, fit.collapsed);
+  const matrixKeyboard = useMatrixKeyboard({
+    scrollRef: matrixWindow.scrollRef,
+    rowCount: matrixRows.length,
+    columnCount: allMatrixColumns.length,
+    rowHeight: ESTIMATED_ROW_HEIGHT,
+  });
 
   function toggleMonth(monthKey: string) {
     // Against what is rendered, not what is stored: a month the fitter folded
@@ -450,6 +477,18 @@ export default function ScheduleTab({
   const allComplete = rows.every((row) => Math.abs(rowTotal(row.leaf.id) - 100) <= ROW_TOLERANCE);
   const selectedRows = selection.selectedRows;
   const sourceRow = rows.find((row) => row.leaf.id === copySource);
+  /**
+   * Picking the source is a per-row act, so the bar only offers it when the
+   * selection *is* one row. It replaces a button that sat on every row and
+   * overflowed the actions column onto the row total.
+   */
+  const lone = selectedRows.length === 1 ? selectedRows[0] : undefined;
+  /**
+   * Never the source itself. The old per-row picker could not put the source in
+   * the selection without also making it a target, and copying a row's plan
+   * onto itself did nothing but report a line it had not changed.
+   */
+  const copyTargets = selectedRows.filter((row) => row.leaf.id !== copySource);
 
   return (
     <div className="space-y-3">
@@ -503,7 +542,26 @@ export default function ScheduleTab({
               {t.schedule.spreadSelected}
             </Button>
 
-            {sourceRow && (
+            {/* Marking the row you want to copy *from*. This was an icon on
+                every row; here it costs one tick, and the row it marks is the
+                one the bar is already naming. */}
+            {lone && (
+              <Button
+                variant={copySource === lone.leaf.id ? "secondary" : "outline"}
+                size="sm"
+                aria-pressed={copySource === lone.leaf.id}
+                onClick={() =>
+                  setCopySource((current) =>
+                    current === lone.leaf.id ? null : lone.leaf.id,
+                  )
+                }
+              >
+                <Copy />
+                {t.schedule.useAsCopySource}
+              </Button>
+            )}
+
+            {sourceRow && copyTargets.length > 0 && (
               <Button
                 variant="outline"
                 size="sm"
@@ -513,7 +571,7 @@ export default function ScheduleTab({
                     const result = await copyPlan.mutateAsync({
                       versionId,
                       sourceItemId: sourceRow.leaf.id,
-                      targetItemIds: selectedRows.map((row) => row.leaf.id),
+                      targetItemIds: copyTargets.map((row) => row.leaf.id),
                     });
                     await refresh();
                     toast.success(interpolate(t.schedule.copyDone, { count: result.copied }));
@@ -549,10 +607,14 @@ export default function ScheduleTab({
             </Button>
             {/* Fill-right was already a per-row action; over a selection it is
                 the same pure draft edit repeated, so it costs nothing on the
-                server and saves the most tedious pass over a wide grid. */}
+                server and saves the most tedious pass over a wide grid.
+
+                It carries the hint the per-row button used to show in a
+                tooltip — this is the only fill-right there is now. */}
             <Button
               variant="outline"
               size="sm"
+              title={t.schedule.fillRightHint}
               onClick={() => {
                 for (const row of selectedRows) fillRight(row.leaf);
                 toast.success(
@@ -642,6 +704,10 @@ export default function ScheduleTab({
                   "aria-label": t.schedule.title,
                   tabIndex: 0,
                   onScroll: matrixWindow.onScroll,
+                  // One handler for every cell in the grid — see
+                  // lib/use-matrix-keyboard.ts. Keys it does not act on keep
+                  // their default, so Tab still leaves the grid.
+                  onKeyDown: matrixKeyboard.onKeyDown,
                 }}
                 scrollX={scrollsSideways}
                 containerClassName={`max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
@@ -688,7 +754,7 @@ export default function ScheduleTab({
                   />
                   <TableRow>
                     <TableHead
-                      className="sticky left-0 z-10 h-auto bg-card px-2 py-2"
+                      className="sticky left-0 z-10 h-auto bg-card px-2 py-2.5"
                     >
                       {editable && (
                         <Checkbox
@@ -703,7 +769,7 @@ export default function ScheduleTab({
                         more columns here. They are in the row's plan popover
                         now; the width they cost every row is what the period
                         columns are spending instead. */}
-                    <TableHead scope="col" className="sticky left-10 z-10 h-auto bg-card px-2 py-2">
+                    <TableHead scope="col" className="sticky left-10 z-10 h-auto bg-card px-2 py-2.5">
                       {t.schedule.line}
                     </TableHead>
                     {visibleHeader.columns.map((view, index) => (
@@ -749,16 +815,18 @@ export default function ScheduleTab({
                     <TableHead
                       scope="col"
                       aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 1}
-                      className="h-auto px-3 py-2 text-right"
-                      style={{ width: 88 }}
+                      // No width here: the <colgroup> owns it under
+                      // table-fixed, and the 88 and 80 that used to sit on these
+                      // two never applied — they only disagreed with
+                      // TRAILING_COL_WIDTHS.
+                      className="h-auto px-3 py-2.5 text-right"
                     >
                       {t.schedule.rowTotal}
                     </TableHead>
                     <TableHead
                       scope="col"
                       aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 2}
-                      className="h-auto px-2 py-2"
-                      style={{ width: 80 }}
+                      className="h-auto px-2 py-2.5"
                     >
                       <span className="sr-only">{t.common.actions}</span>
                     </TableHead>
@@ -825,7 +893,7 @@ export default function ScheduleTab({
                             scrolls by, so the padding here is load-bearing. */}
                         <th
                           scope="row"
-                          className="sticky left-10 z-10 max-w-64 truncate bg-card px-2 py-1.5 text-left align-middle font-normal"
+                          className="sticky left-10 z-10 max-w-52 truncate bg-card px-2 py-2 text-left align-middle font-normal"
                           title={`${row.section} - ${row.leaf.description}`}
                         >
                           <span className="font-mono text-xs text-muted-foreground">
@@ -860,30 +928,39 @@ export default function ScheduleTab({
                               aria-colindex={
                                 LEADING_COLUMNS + index + 1
                               }
-                              className="px-1 py-1"
+                              className={`py-2 ${compact ? "px-1" : "px-1.5"}`}
                             >
                               {editable && !folded ? (
                                 <Input
-                                  type="number"
-                                  min={0}
-                                  max={100}
-                                  step="any"
+                                  // Not type="number", deliberately — see the
+                                  // note on decimalOnly in ./matrix-input.ts.
+                                  type="text"
+                                  inputMode="decimal"
                                   value={drafts.get(key) ?? (value === 0 ? "" : String(value))}
                                   aria-label={`${row.leaf.code} - ${accessibleName}`}
+                                  {...matrixKeyboard.cellProps(rowIndex, index)}
                                   // px-1 once the column is compact: the Input
                                   // primitive spends 22px on padding and borders
                                   // before a digit is drawn.
-                                  className={`h-8 text-right tabular-nums ${
-                                    compact ? "px-1" : ""
+                                  //
+                                  // md:h-9 and md:text-sm have to name the
+                                  // breakpoint: the primitive is `h-9 … md:h-8`
+                                  // and `text-base … md:text-xs`, so a bare
+                                  // utility here loses from `md` up, which is
+                                  // every screen this grid is used on.
+                                  className={`h-9 text-right tabular-nums md:h-9 ${
+                                    compact ? "px-1" : "md:text-sm"
                                   } ${drafts.has(key) ? "border-[var(--chart-1)]" : ""}`}
                                   onChange={(e) =>
-                                    setDrafts((current) => new Map(current).set(key, e.target.value))
+                                    setDrafts((current) =>
+                                      new Map(current).set(key, decimalOnly(e.target.value)),
+                                    )
                                   }
                                 />
                               ) : (
                                 <span
                                   className={`block py-1 text-right tabular-nums text-muted-foreground ${
-                                    compact ? "px-1" : "px-2"
+                                    compact ? "px-1" : "px-2 text-sm"
                                   }`}
                                   title={folded ? accessibleName : undefined}
                                 >
@@ -915,13 +992,18 @@ export default function ScheduleTab({
                           aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 2}
                           className="px-2 py-1"
                         >
-                          <div className="flex justify-end gap-1">
-                              {/* The plan window, which used to be four columns
-                                  on every row. A popover rather than a dialog:
-                                  it is a two-field edit that commits on blur,
-                                  and the grid behind it is the context for what
-                                  is being set. */}
-                              <Popover>
+                          <div className="flex justify-end">
+                            {/* The plan window, which used to be four columns on
+                                every row. A popover rather than a dialog: it is
+                                a two-field edit that commits on blur, and the
+                                grid behind it is the context for what is being
+                                set.
+
+                                The only button on a row now. Fill-right and
+                                copy-from stood beside it and overflowed the
+                                column onto the total; both are in the bulk bar,
+                                one tick away. */}
+                            <Popover>
                                 <PopoverTrigger
                                   render={
                                     <Button
@@ -1011,41 +1093,7 @@ export default function ScheduleTab({
                                     {t.schedule.planHint}
                                   </p>
                                 </PopoverContent>
-                              </Popover>
-                              {editable && (
-                              <>
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <Button
-                                      variant="ghost"
-                                      size="icon-sm"
-                                      aria-label={`${t.schedule.fillRight} — ${row.leaf.code}`}
-                                      onClick={() => fillRight(row.leaf)}
-                                    />
-                                  }
-                                >
-                                  <ChevronRight />
-                                </TooltipTrigger>
-                                <TooltipContent className="max-w-xs">
-                                  {t.schedule.fillRightHint}
-                                </TooltipContent>
-                              </Tooltip>
-                              <Button
-                                variant={copySource === row.leaf.id ? "secondary" : "ghost"}
-                                size="icon-sm"
-                                aria-label={`${t.schedule.copyFrom} ${row.leaf.code}`}
-                                aria-pressed={copySource === row.leaf.id}
-                                onClick={() =>
-                                  setCopySource((current) =>
-                                    current === row.leaf.id ? null : row.leaf.id,
-                                  )
-                                }
-                              >
-                                <Copy />
-                              </Button>
-                              </>
-                              )}
+                            </Popover>
                           </div>
                         </TableCell>
                       </TableRow>

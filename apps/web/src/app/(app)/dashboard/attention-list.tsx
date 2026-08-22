@@ -1,7 +1,7 @@
 "use client";
 
-import { Button, buttonVariants } from "@DashboardV2/ui/components/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@DashboardV2/ui/components/card";
+import { Button } from "@DashboardV2/ui/components/button";
+import { Card, CardContent } from "@DashboardV2/ui/components/card";
 import {
   Empty,
   EmptyContent,
@@ -25,7 +25,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@DashboardV2/ui/components/tooltip";
-import { isBehindDeviation } from "@DashboardV2/api/lib/deviation";
 import { cn } from "@DashboardV2/ui/lib/utils";
 import type { Route } from "next";
 import Link from "next/link";
@@ -100,8 +99,8 @@ const SIGNAL_TONE: Record<SeverityLevel, string> = {
  * explanation do not want one.
  */
 const COL = {
-  // 20 ticks at 6px with 2px gaps is 158px, plus the percent beside it.
-  progress: "hidden w-52 shrink-0 xl:block",
+  // 20 ticks at 8px with 2px gaps is 198px, plus the percent beside it.
+  progress: "hidden w-64 shrink-0 xl:block",
   deviation: "w-24 shrink-0 text-right sm:w-32",
   dataDate: "hidden w-24 shrink-0 text-right xl:block",
 };
@@ -114,9 +113,6 @@ export function AttentionList({
   total,
   filter,
   onFilterChange,
-  portfolioValue,
-  completionPercent,
-  summaryPending,
   pending,
   error,
   onRetry,
@@ -130,9 +126,6 @@ export function AttentionList({
   filter: AttentionFilter;
   /** Only used to clear the filter from the empty state. */
   onFilterChange: (filter: AttentionFilter) => void;
-  portfolioValue: number | undefined;
-  completionPercent: number | null | undefined;
-  summaryPending: boolean;
   pending: boolean;
   error: unknown;
   onRetry: () => void;
@@ -142,7 +135,7 @@ export function AttentionList({
   onLoadMore: () => void;
 }) {
   const t = useT();
-  const { formatDate, moneyCompact, percent } = useFormat();
+  const { formatDate, percent } = useFormat();
   const coarse = useCoarsePointer();
 
   /**
@@ -319,43 +312,23 @@ export function AttentionList({
   }
 
   return (
-    <Card id="needs-attention" aria-busy={pending} className="scroll-mt-4 overflow-hidden">
-      <CardHeader className="border-b">
-        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-          <CardTitle>{t.exceptions.title}</CardTitle>
-
-          {/* The portfolio figures live here now. They are context for the list
-              rather than something to act on, so they sit beside its title
-              instead of taking two of the four cards above. */}
-          {/* w-full on a phone so it takes its own line: inline beside the
-              title there is not room for the figures and the bar, and a
-              shrink-0 span was running off the card rather than truncating. */}
-          <div className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 sm:w-auto sm:flex-1 sm:flex-nowrap">
-            {summaryPending ? (
-              <Skeleton className="h-4 w-40" />
-            ) : (
-              <>
-                <span className="truncate text-sm text-muted-foreground tabular-nums">
-                  {portfolioValue === undefined ? "—" : moneyCompact(portfolioValue)}
-                  {completionPercent !== null && completionPercent !== undefined && (
-                    <> · {percent(completionPercent)} {t.dashboard.workCompleted.toLowerCase()}</>
-                  )}
-                </span>
-                {/* Its own line on a phone, via the wrap on the row above:
-                    squeezed in beside the figures it ran past the card edge.
-                    No width of its own — the bar is one fixed size wherever it
-                    appears, so it never reads as a differently-scaled meter. */}
-                <TickBar value={completionPercent ?? 0} max={100} />
-              </>
-            )}
-          </div>
-
-          <Link href="/projects" className={buttonVariants({ variant: "outline", size: "sm" })}>
-            {t.projects.allProjects}
-            <ChevronRight className="text-foreground" />
-          </Link>
-        </div>
-      </CardHeader>
+    // pt-0 because there is no header to pad away from: Card's own top padding
+    // would leave a bare strip of card above the column names, which reads as a
+    // header that failed to render rather than as one that was never there. The
+    // sr-only heading is absolutely positioned, so it is not a flex item and
+    // adds no gap of its own.
+    <Card
+      id="needs-attention"
+      aria-busy={pending}
+      className="scroll-mt-4 overflow-hidden pt-0"
+    >
+      {/* The heading is gone from the page, not from the accessibility tree.
+          The portfolio figures it used to sit beside are a card in the row
+          above now, and the "All projects" button is that card's arrow — what
+          was left was a title over a list whose first row already says what it
+          is. A list of projects with no name at all is still a regression, so
+          the words stay for a reader who cannot see the rows. */}
+      <h2 className="sr-only">{t.exceptions.title}</h2>
 
       <CardContent className="px-0">
         {pending && <Skeleton className="mx-5 my-5 h-72 w-[calc(100%-2.5rem)]" />}
@@ -456,17 +429,13 @@ export function AttentionList({
                                 aria-valuenow={row.progress}
                                 aria-valuetext={percent(row.progress)}
                               >
-                                {/* Behind schedule overrides the progress
-                                    band. How far along a project is and
-                                    whether it is where it promised to be are
-                                    different questions, and the second one
-                                    wins: a project at 80% that should be at
-                                    95% is not a green bar. */}
-                                <TickBar
-                                  value={row.progress}
-                                  max={100}
-                                  tone={isBehindDeviation(row.deviation) ? "late" : "progress"}
-                                />
+                                {/* Behind schedule is not on the bar. It used
+                                    to override the fill to red, which stopped
+                                    working the moment red also meant "barely
+                                    started" — and the deviation column right
+                                    beside this one says it in a number, which
+                                    a colour never could. */}
+                                <TickBar value={row.progress} max={100} />
                                 <span
                                   className="text-xs text-muted-foreground tabular-nums"
                                   aria-hidden

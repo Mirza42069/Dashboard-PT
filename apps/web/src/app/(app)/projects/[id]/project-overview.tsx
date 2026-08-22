@@ -15,7 +15,7 @@ import { deviationPosition } from "@DashboardV2/api/lib/deviation";
 
 import { DeviationBadge } from "@/components/deviation-badge";
 import { QueryError } from "@/components/query-error";
-import { TickBar, type TickTone } from "@/components/tick-bar";
+import { TickBar } from "@/components/tick-bar";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { useFormat } from "@/lib/use-format";
@@ -65,12 +65,10 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
       : progressPosition === "on_track" || progressPosition === "ahead"
         ? "success"
         : "default";
-  // The bar answers "how far along", the number above it answers "against
-  // plan" — so only the bad case crosses over. Behind schedule overrides to
-  // red; everything else falls through to the progress band, because an
-  // on-track project at 30% and one at 95% should not be the same colour.
-  // That is what "settled" used to make them.
-  const progressBarTone: TickTone = progressTone === "destructive" ? "late" : "progress";
+  // The bar answers "how far along" and nothing else. Behind schedule used to
+  // cross over and paint it red, which stopped working once red became the
+  // bottom of the progress ramp — the number above and the deviation badge
+  // below both already say it, in words this bar could not.
   const cadence = {
     weekly: t.projects.periodWeekly,
     biweekly: t.projects.periodBiweekly,
@@ -139,7 +137,7 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
             aria-valuetext={percent(complete)}
             className="block"
           >
-            <TickBar value={complete} max={100} tone={progressBarTone} />
+            <TickBar value={complete} max={100} />
           </span>
           {project.progressSource === "boq" && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-3">

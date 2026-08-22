@@ -42,6 +42,26 @@
    * what the brand looks like is this file.
    */
   --brand: #5e17eb;
+  /*
+   * What goes *on* the brand, and the brand one step up for a hover.
+   *
+   * White here and near-black under .dark, which is not a stylistic choice: the
+   * light --brand is a deep purple (oklch 0.482) where white reads 7.5:1, and
+   * the dark one is a light violet (oklch 0.720) where white collapses to
+   * 2.7:1 and near-black rises to 7.3:1. A single foreground cannot serve both,
+   * so this follows the --success-foreground / --warning-foreground pattern.
+   *
+   * The logo tile draws its glyphs in black on this purple, which is ~2.5:1.
+   * That passes as artwork at logo size and fails as a 14px icon, so the chip
+   * does not copy it.
+   *
+   * --brand-hover is +0.06 L, holding as much chroma as sRGB allows at the new
+   * lightness. Lightening via bg-brand/90 was the obvious alternative and is
+   * wrong: blending toward the card lightens on a light theme and darkens on a
+   * dark one, so the same class would mean opposite things in the two themes.
+   */
+  --brand-foreground: oklch(1 0 0);
+  --brand-hover: oklch(0.5423 0.2665 285);
 
   --border: oklch(0.9013 0.0156 257.2001);
   --input: oklch(0.9013 0.0156 257.2001);
@@ -78,38 +98,46 @@
   --chart-4: oklch(0.6500 0.1400 75);
   --chart-5: oklch(0.8300 0.0800 85);
   /*
-   * Progress bands. A bar's fill is chosen from these by percentage complete,
-   * so a column of bars at different completions reads as a spread of colour
-   * rather than one repeated blue — which is what it was, because both bar
-   * primitives hardcoded a single step of the ramp above and almost every call
-   * site took that default.
+   * The progress ramp: three stops, red through amber to green.
+   *
+   * A bar samples this along its own length rather than picking one colour for
+   * the whole fill, so the *tip* of the bar states how far along it is — barely
+   * started ends red, a third of the way ends amber, finished ends green. See
+   * progressRampColor() in apps/web/src/lib/progress-tone.ts, which mixes
+   * between whichever two of these bracket a position.
+   *
+   * This replaced five discrete bands running amber → cyan → teal → green. The
+   * bands were defensible — they refused to make two projects four points apart
+   * look different — but they read as an arbitrary sequence of hues rather than
+   * as a scale, and nobody could say which of two teals meant "further along".
+   * Red-to-green is a scale everyone already knows how to read.
    *
    * Separate from --chart-* on purpose. The chart ramp encodes magnitude for a
-   * data series; these encode how far along one bar is, and the two want
-   * different things — a chart step must sit legibly beside four other chart
-   * steps, a progress band must be told apart from the band either side of it.
+   * data series and its steps must sit legibly beside each other; this one is a
+   * continuum and only its endpoints have to be told apart.
    *
-   * Amber for barely-started, teal through the middle, green at the top. The
-   * jump from amber to teal is the one deliberate discontinuity: it marks "has
-   * this actually got going". Behind-schedule bars ignore this ramp entirely
-   * and take --destructive, so red keeps meaning trouble rather than magnitude.
+   * The light midpoint is a gold rather than a lemon yellow, and that is a
+   * constraint rather than a preference: these bars are graphical objects
+   * carrying information, so they owe 3:1 against the card behind them (WCAG
+   * 1.4.11, non-text contrast), and yellow only clears that on white at about
+   * L 0.64 — which is amber. Dark mode has the headroom and goes properly
+   * yellow.
    *
-   * Neighbours are separated on *two* axes, hue and lightness, not one. A first
-   * pass moved hue alone and the middle of the scale collapsed: bands 2 and 3
-   * came out as two teals and 4 and 5 as two greens, which is the same failure
-   * as the blue it replaced, just further along. Alternating light and dark —
-   * light cyan, deep teal, bright green, deep green — is what makes adjacent
-   * bands tell apart at a glance.
+   * Red no longer means only "behind schedule". A late project's bar used to
+   * override to --destructive; it now draws this ramp like any other, and the
+   * deviation badge beside it is what says it is late. Colour was a poor place
+   * for that: it cannot say *how far* behind, and the badge already does.
    *
-   * Lightness is capped around 0.64 so every band clears 3:1 against the card
-   * it is drawn on (WCAG 1.4.11, non-text contrast) — the bands are graphical
-   * objects carrying information, so that is the bar they have to clear.
+   * Chroma here is held down by sRGB rather than by taste. The ramp passes
+   * through hue ~90 at L~0.60, where sRGB runs out at about C 0.123 — a first
+   * pass at C 0.15 put thirteen of the twenty pills outside the gamut, and
+   * clipped pills collapse onto each other and flatten the middle of the scale
+   * into one colour. The red end has far more headroom (C 0.237 is available at
+   * h27) and keeps more of it.
    */
-  --progress-1: oklch(0.6400 0.1400 62);
-  --progress-2: oklch(0.6200 0.1100 212);
-  --progress-3: oklch(0.5000 0.1000 182);
-  --progress-4: oklch(0.5900 0.1500 145);
-  --progress-5: oklch(0.4200 0.1300 158);
+  --progress-low: oklch(0.5800 0.1800 27);
+  --progress-mid: oklch(0.6400 0.1200 75);
+  --progress-high: oklch(0.5800 0.1300 148);
   --radius: 0.375rem;
   --sidebar: oklch(0.9601 0.0103 261.7889);
   --sidebar-foreground: oklch(0.1443 0.0191 261.1564);
@@ -174,8 +202,18 @@
   --warning: oklch(0.7800 0.1400 75);
   --warning-foreground: oklch(0.2494 0.0304 256.8623);
   /* Lifted well above the mark's own purple: #5e17eb on a dark card is nearly
-     invisible, and this is used for icons that have to be seen. */
-  --brand: oklch(0.7200 0.1800 288);
+     invisible, and this is used for icons that have to be seen.
+
+     Chroma was 0.18, which is outside sRGB at this lightness — 0.155 is the
+     ceiling at L 0.72 / h 288, so a browser was gamut-mapping it to something
+     nobody chose. Corrected rather than left, since the two tokens below were
+     picked against this value and would inherit the same fault.
+
+     Near-black foreground, not white: at this lightness white is 2.7:1 and the
+     near-black is 7.3:1. See the note in :root. */
+  --brand: oklch(0.7200 0.1500 288);
+  --brand-foreground: oklch(0.1800 0.0200 288);
+  --brand-hover: oklch(0.7800 0.1150 288);
 
   --border: oklch(0.3299 0.0322 257.6775);
   --input: oklch(0.3205 0.0336 253.9373);
@@ -203,13 +241,13 @@
   --chart-3: oklch(0.7200 0.1300 165);
   --chart-4: oklch(0.7600 0.1400 75);
   --chart-5: oklch(0.5200 0.1000 195);
-  /* The progress bands, lifted for a dark card. Same unreachable-for-now note
-     as the ramp above. */
-  --progress-1: oklch(0.7600 0.1400 65);
-  --progress-2: oklch(0.7800 0.1000 212);
-  --progress-3: oklch(0.6400 0.1100 182);
-  --progress-4: oklch(0.7600 0.1500 145);
-  --progress-5: oklch(0.6200 0.1400 158);
+  /* The progress ramp, lifted for a dark card. Same unreachable-for-now note as
+     the ramp above. The midpoint can be a real yellow here: 3:1 against a dark
+     card wants a *lighter* colour, which is the direction yellow already wants
+     to go, so the compromise the light theme makes does not apply. */
+  --progress-low: oklch(0.6800 0.1900 27);
+  --progress-mid: oklch(0.8000 0.1500 85);
+  --progress-high: oklch(0.7200 0.1600 148);
   --sidebar: oklch(0.2452 0.0305 256.8649);
   --sidebar-foreground: oklch(0.9392 0.0101 238.5151);
   --sidebar-primary: oklch(0.4887 0.2427 263.9688);
@@ -257,11 +295,6 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
-  --color-progress-5: var(--progress-5);
-  --color-progress-4: var(--progress-4);
-  --color-progress-3: var(--progress-3);
-  --color-progress-2: var(--progress-2);
-  --color-progress-1: var(--progress-1);
   --color-chart-5: var(--chart-5);
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
@@ -323,6 +356,8 @@
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-hover: var(--brand-hover);
 }
 
 @layer base {
