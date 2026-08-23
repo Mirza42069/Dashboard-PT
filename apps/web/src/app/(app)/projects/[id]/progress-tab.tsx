@@ -34,6 +34,7 @@ import {
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { Hint } from "@/components/hint";
+import { MatrixScrollAffordance } from "@/components/matrix-scroll-affordance";
 import { QueryError } from "@/components/query-error";
 import { statusLabel } from "@/components/status-badge";
 import { interpolate, plural } from "@/i18n";
@@ -616,14 +617,24 @@ export default function ProgressTab({
                 </div>
               )}
 
-              {/* The shared Table shell, not a hand-rolled one. The window
-                  hook needs a handle on the scroll container — it measures it,
-                  observes its <thead> and reads its offsets — which is what
-                  containerRef and containerProps are for. overflow-y-auto
-                  rather than overflow-auto: the primitive already sets
-                  overflow-x-auto, and setting the shorthand alongside it is a
-                  conflict that resolves by stylesheet order rather than by
-                  intent. */}
+              {/* The positioning context the scroll affordance hangs off.
+                  It wraps the Table rather than living inside it, because
+                  the container is the thing that scrolls and a cue inside
+                  it scrolls away.
+
+                  It repeats the container's own max-w so the two edges
+                  coincide: past 120rem the container stops growing, and a
+                  right-hand cue measured from the card instead would float
+                  off it. */}
+              <div className="relative max-w-[120rem]">
+                  {/* The shared Table shell, not a hand-rolled one. The window
+                      hook needs a handle on the scroll container — it measures it,
+                      observes its <thead> and reads its offsets — which is what
+                      containerRef and containerProps are for. overflow-y-auto
+                      rather than overflow-auto: the primitive already sets
+                      overflow-x-auto, and setting the shorthand alongside it is a
+                      conflict that resolves by stylesheet order rather than by
+                      intent. */}
                   <Table
                     id="progress-matrix-table"
                     containerRef={matrixWindow.scrollRef}
@@ -638,6 +649,9 @@ export default function ProgressTab({
                       onKeyDown: matrixKeyboard.onKeyDown,
                     }}
                     scrollX={scrollsSideways}
+                    // This grid draws its own fade and page buttons instead —
+                    // see components/matrix-scroll-affordance.tsx.
+                    scrollShadows={false}
                     containerClassName={`max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
                       showFullMatrix ? "" : "[overflow-anchor:none]"
                     } ${scrollsSideways ? "" : "overflow-x-clip"}`}
@@ -905,6 +919,15 @@ export default function ProgressTab({
                     />
                     </TableBody>
                   </Table>
+                  {scrollsSideways && (
+                    <MatrixScrollAffordance
+                      scrollRef={matrixWindow.scrollRef}
+                      edges={matrixWindow.edges}
+                      leadingWidth={LEADING_WIDTH}
+                      controls="progress-matrix-table"
+                    />
+                  )}
+              </div>
             </CardContent>
           </Card>
         )}

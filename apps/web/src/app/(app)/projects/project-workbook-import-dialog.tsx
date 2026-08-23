@@ -27,13 +27,19 @@ import { upload } from "@vercel/blob/client";
 import { useRef, useState } from "react";
 
 import { StepRunner } from "@/components/step-runner";
+import {
+  CUSTOM_PERIOD_MAX_DAYS,
+  CUSTOM_PERIOD_MIN_DAYS,
+} from "@DashboardV2/api/lib/periods";
+import { PERIOD_TYPES, type PeriodType } from "@DashboardV2/db/schema";
+
 import { interpolate, plural } from "@/i18n";
 import { useLocale, useT } from "@/i18n/provider";
 import { getServerUrl } from "@/lib/server-url";
 import { useDebounced } from "@/lib/use-debounced";
+import { cadenceLabel } from "@/lib/cadence";
 import { trpc } from "@/utils/trpc";
 
-type PeriodType = "weekly" | "biweekly" | "monthly";
 type MappingField =
   | "description"
   | "unit"
@@ -70,6 +76,7 @@ type Plan = {
   suggestedScheduleStartDate: string | null;
   suggestedEndDate: string | null;
   periodType: PeriodType;
+  periodLengthDays: number | null;
   periodCount: number;
   confidence: "high" | "medium" | "low";
   warnings: string[];
@@ -129,6 +136,8 @@ type Answers = {
   scheduleStart: string;
   endDate: string;
   periodType: PeriodType;
+  /** A string because an empty field is a state someone types through. */
+  periodLengthDays: string;
 };
 
 const EMPTY: Answers = {
@@ -140,7 +149,30 @@ const EMPTY: Answers = {
   scheduleStart: "",
   endDate: "",
   periodType: "weekly",
+  periodLengthDays: "",
 };
+/**
+ * The cycle length an answer set implies, or null when it does not need one.
+ *
+ * Returns null for a custom cadence whose length is missing or out of range
+ * too — the period helpers throw on that, and every caller here is already
+ * inside a try or is choosing not to compute.
+ */
+function cycleLength(answers: Answers): number | null {
+  if (answers.periodType !== "custom") return null;
+  const days = Number(answers.periodLengthDays);
+  return Number.isInteger(days) &&
+    days >= CUSTOM_PERIOD_MIN_DAYS &&
+    days <= CUSTOM_PERIOD_MAX_DAYS
+    ? days
+    : null;
+}
+
+/** Whether the cadence half of the answers is complete enough to submit. */
+function cadenceReady(answers: Answers): boolean {
+  return answers.periodType !== "custom" || cycleLength(answers) !== null;
+}
+
 const QUESTIONS = [
   "name",
   "code",
@@ -198,6 +230,7 @@ function getPeriodCountIssue(
       answers.scheduleStart,
       answers.endDate,
       answers.periodType,
+      cycleLength(answers),
     ).length;
     if (confirmedPeriodCount === plan.periodCount) return null;
     return {
@@ -208,6 +241,7 @@ function getPeriodCountIssue(
         answers.scheduleStart,
         plan.periodCount,
         answers.periodType,
+        cycleLength(answers),
       ),
     };
   } catch {
@@ -219,6 +253,7 @@ function getPeriodCountIssue(
           answers.scheduleStart,
           plan.periodCount,
           answers.periodType,
+          cycleLength(answers),
         ),
       };
     } catch {
@@ -548,6 +583,8 @@ export default function ProjectWorkbookImportDialog({
           body.plan.suggestedScheduleStartDate ?? body.plan.suggestedStartDate ?? "",
         endDate: body.plan.suggestedEndDate ?? "",
         periodType: body.plan.periodType,
+        periodLengthDays:
+          body.plan.periodLengthDays === null ? "" : String(body.plan.periodLengthDays),
       });
       setQuestionIndex(0);
       setEndDateInferred(false);
@@ -627,6 +664,7 @@ export default function ProjectWorkbookImportDialog({
           current.scheduleStart,
           analysis.plan.periodCount,
           current.periodType,
+          cycleLength(current),
         ),
       }));
     }
@@ -783,6 +821,7 @@ export default function ProjectWorkbookImportDialog({
             current.scheduleStart,
             body.plan.periodCount,
             current.periodType,
+            cycleLength(current),
           ),
         }));
       }
@@ -847,6 +886,7 @@ export default function ProjectWorkbookImportDialog({
             scheduleStart: answers.scheduleStart,
             endDate: answers.endDate,
             periodType: answers.periodType,
+            periodLengthDays: cycleLength(answers),
           },
         },
       });
@@ -964,6 +1004,13 @@ export default function ProjectWorkbookImportDialog({
             scheduleStart: scheduleIssue.suggestedScheduleStartDate,
             endDate: scheduleIssue.suggestedEndDate,
             periodType: analysis.plan.periodType,
+            // The plan's cadence comes with its own length (always null today,
+            // since no analysis proposes a custom one). Taking the type without
+            // it would leave a stale length beside a calendar cadence.
+            periodLengthDays:
+              analysis.plan.periodLengthDays === null
+                ? ""
+                : String(analysis.plan.periodLengthDays),
           },
     );
   }
@@ -1188,6 +1235,7 @@ export default function ProjectWorkbookImportDialog({
                 {questionLabels[question]}
               </Label>
               {question === "periodType" ? (
+                <>
                 <select
                   id="project-import-answer"
                   className="mt-3 h-9 w-full rounded-md border border-input bg-background px-3 text-base md:text-xs"
@@ -1196,18 +1244,24 @@ export default function ProjectWorkbookImportDialog({
                     setServerScheduleIssue(null);
                     setAnswers((current) => {
                       const periodType = event.target.value as PeriodType;
+                      const next = { ...current, periodType };
+                      const cycle = cycleLength(next);
                       return {
-                        ...current,
-                        periodType,
+                        ...next,
+                        // Recomputed only when the cadence is complete. A
+                        // custom one with no length yet has no end date to
+                        // infer, and asking for one would throw.
                         endDate:
                           endDateInferred &&
                           current.scheduleStart &&
                           analysis &&
-                          analysis.plan.periodCount > 0
+                          analysis.plan.periodCount > 0 &&
+                          cadenceReady(next)
                             ? endDateForPeriodCount(
                                 current.scheduleStart,
                                 analysis.plan.periodCount,
                                 periodType,
+                                cycle,
                               )
                             : current.endDate,
                       };
@@ -1215,10 +1269,63 @@ export default function ProjectWorkbookImportDialog({
                   }}
                   autoFocus
                 >
-                  <option value="weekly">{t.projects.periodWeekly}</option>
-                  <option value="biweekly">{t.projects.periodBiweekly}</option>
-                  <option value="monthly">{t.projects.periodMonthly}</option>
+                  {/* From the schema's own list, so a cadence added there
+                      cannot go missing here. */}
+                  {PERIOD_TYPES.map((value) => (
+                    <option key={value} value={value}>
+                      {cadenceLabel(t, value)}
+                    </option>
+                  ))}
                 </select>
+                {/* Only a custom cadence has a length to ask about; the rest
+                    take theirs from the calendar. */}
+                {answers.periodType === "custom" && (
+                  <div className="mt-3 space-y-1.5">
+                    <Label htmlFor="project-import-cycle" className="text-sm font-medium">
+                      {t.projects.periodLengthDays}
+                    </Label>
+                    <Input
+                      id="project-import-cycle"
+                      type="text"
+                      inputMode="numeric"
+                      value={answers.periodLengthDays}
+                      aria-describedby="project-import-cycle-hint"
+                      aria-invalid={
+                        answers.periodLengthDays !== "" && cycleLength(answers) === null
+                      }
+                      onChange={(event) => {
+                        setServerScheduleIssue(null);
+                        const periodLengthDays = event.target.value
+                          .replace(/[^0-9]/g, "")
+                          .slice(0, 2);
+                        setAnswers((current) => {
+                          const next = { ...current, periodLengthDays };
+                          const cycle = cycleLength(next);
+                          return {
+                            ...next,
+                            endDate:
+                              endDateInferred &&
+                              current.scheduleStart &&
+                              analysis &&
+                              analysis.plan.periodCount > 0 &&
+                              cycle !== null
+                                ? endDateForPeriodCount(
+                                    current.scheduleStart,
+                                    analysis.plan.periodCount,
+                                    next.periodType,
+                                    cycle,
+                                  )
+                                : current.endDate,
+                          };
+                        });
+                      }}
+                    />
+                    <p id="project-import-cycle-hint" className="text-xs text-muted-foreground">
+                      {t.projects.periodLengthHint}
+                    </p>
+                  </div>
+                )}
+                </>
               ) : (
                 <Input
                   id="project-import-answer"
@@ -1506,13 +1613,16 @@ export default function ProjectWorkbookImportDialog({
                   {t.projectImport.revalidateAction}
                 </Button>
               ) : (
-                <Button disabled={busy} onClick={() => void createProject()}>
+                <Button disabled={busy || !cadenceReady(answers)} onClick={() => void createProject()}>
                   {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
                   {t.projectImport.createAction}
                 </Button>
               )
             ) : (
-              <Button disabled={busy} onClick={() => void nextQuestion()}>
+              <Button
+                disabled={busy || (question === "periodType" && !cadenceReady(answers))}
+                onClick={() => void nextQuestion()}
+              >
                 {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
                 {t.common.continue}
               </Button>

@@ -86,6 +86,7 @@ export default async function ProjectDetailPage({
         <ProjectDetail
           projectId={id}
           currentUserId={session.user.id}
+          canArchive={hasPermission(role, "project:delete")}
           canUpdateProject={hasPermission(role, "project:update")}
           canWrite={hasPermission(role, "project:write")}
           canManageMembers={canManageMembers}

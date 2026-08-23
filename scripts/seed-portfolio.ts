@@ -659,7 +659,9 @@ const BLUEPRINTS: Blueprint[] = [
     client: "PT Ritel Melati Nusantara",
     location: "Surabaya",
     status: "active",
-    periodType: "weekly",
+    // Semi-monthly, so the demo portfolio exercises a cadence whose buckets are
+    // not a fixed number of days.
+    periodType: "semimonthly",
     start: -170,
     end: 45,
     reportedThrough: 1,
@@ -674,7 +676,9 @@ const BLUEPRINTS: Blueprint[] = [
     client: "PT Energi Transmisi Nasional",
     location: "Karawang",
     status: "active",
-    periodType: "monthly",
+    // The longest run in the portfolio (-120 to +420), and the one quarterly
+    // was added for.
+    periodType: "quarterly",
     start: -120,
     end: 420,
     reportedThrough: 0.9,

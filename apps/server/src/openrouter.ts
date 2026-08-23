@@ -26,7 +26,14 @@ const interpretationSchema = z.object({
   finishColumn: optionalColumn,
   sectionRows: z.array(z.number().int().positive()).max(200),
   excludedRows: z.array(z.number().int().positive()).max(500),
-  periodType: z.enum(["weekly", "biweekly", "monthly"]),
+  /**
+   * Calendar cadences only — "custom" is deliberately absent.
+   *
+   * A custom cadence carries a cycle length, and this schema has no field to
+   * report one in. Letting the model pick "custom" would mean inventing that
+   * number, so the wizard offers it as a manual override instead.
+   */
+  periodType: z.enum(["daily", "weekly", "biweekly", "semimonthly", "monthly", "quarterly"]),
   confidence: z.enum(["high", "medium", "low"]),
   warnings: z.array(z.string().max(300)).max(10),
 });
@@ -57,7 +64,7 @@ const jsonSchema = {
     finishColumn: { type: ["integer", "null"], minimum: 1 },
     sectionRows: { type: "array", items: { type: "integer", minimum: 1 }, maxItems: 200 },
     excludedRows: { type: "array", items: { type: "integer", minimum: 1 }, maxItems: 500 },
-    periodType: { type: "string", enum: ["weekly", "biweekly", "monthly"] },
+    periodType: { type: "string", enum: ["daily", "weekly", "biweekly", "semimonthly", "monthly", "quarterly"] },
     confidence: { type: "string", enum: ["high", "medium", "low"] },
     warnings: { type: "array", items: { type: "string", maxLength: 300 }, maxItems: 10 },
   },

@@ -1,6 +1,11 @@
 "use client";
 
 import { planDuration, weightPerPeriod } from "@DashboardV2/api/lib/schedule-plan";
+import {
+  CUSTOM_PERIOD_MAX_DAYS,
+  CUSTOM_PERIOD_MIN_DAYS,
+} from "@DashboardV2/api/lib/periods";
+import { PERIOD_TYPES, type PeriodType } from "@DashboardV2/db/schema";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Badge } from "@DashboardV2/ui/components/badge";
 import {
@@ -51,6 +56,7 @@ import {
   useMatrixWindow,
   WindowedMonthBandRow,
 } from "@/components/matrix-window";
+import { MatrixScrollAffordance } from "@/components/matrix-scroll-affordance";
 import { QueryError } from "@/components/query-error";
 import { interpolate, plural } from "@/i18n";
 import {
@@ -59,6 +65,7 @@ import {
   PopoverTrigger,
 } from "@DashboardV2/ui/components/popover";
 
+import { cadenceLabel } from "@/lib/cadence";
 import { Hint } from "@/components/hint";
 import { useLocale, useT } from "@/i18n/provider";
 import { computePlannedCurve, distributionMap, scheduleRows } from "@/lib/boq/curves";
@@ -258,13 +265,14 @@ export default function ScheduleTab({
   const editable = canEdit && isDraft && (version.status === "draft" || version.status === "active");
   const settings = setupMode ? (
     <ScheduleSettings
-      key={`${report?.project.startDate}-${report?.project.endDate}-${report?.project.scheduleStart}-${report?.project.periodType}`}
+      key={`${report?.project.startDate}-${report?.project.endDate}-${report?.project.scheduleStart}-${report?.project.periodType}-${report?.project.periodLengthDays}`}
       projectId={projectId}
       versionId={versionId}
       startDate={report?.project.startDate ?? ""}
       endDate={report?.project.endDate ?? ""}
       scheduleStart={report?.project.scheduleStart ?? ""}
       periodType={report?.project.periodType ?? "weekly"}
+      periodLengthDays={report?.project.periodLengthDays ?? null}
       editable={editable && version.sourceVersionId === null}
       periodsExist={periods.length > 0}
     />
@@ -693,9 +701,18 @@ export default function ScheduleTab({
                 : ""}
           </p>
 
-          {/* The shared Table shell — see the matching note in progress-tab.tsx
-              for why the window hook needs containerRef, and why this asks for
-              overflow-y-auto rather than the overflow-auto shorthand. */}
+          {/* The positioning context the scroll affordance hangs off. It wraps
+              the Table rather than living inside it, because the container is
+              the thing that scrolls and a cue inside it scrolls away.
+
+              It repeats the container's own max-w so the two edges coincide:
+              past 120rem the container stops growing, and a right-hand cue
+              measured from the card instead would float off it. */}
+          <div className="relative max-w-[120rem]">
+              {/* The shared Table shell — see the matching note in
+                  progress-tab.tsx for why the window hook needs containerRef,
+                  and why this asks for overflow-y-auto rather than the
+                  overflow-auto shorthand. */}
               <Table
                 id="schedule-matrix-table"
                 containerRef={matrixWindow.scrollRef}
@@ -710,6 +727,9 @@ export default function ScheduleTab({
                   onKeyDown: matrixKeyboard.onKeyDown,
                 }}
                 scrollX={scrollsSideways}
+                // This grid draws its own fade and page buttons instead — see
+                // components/matrix-scroll-affordance.tsx.
+                scrollShadows={false}
                 containerClassName={`max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
                   showFullMatrix ? "" : "[overflow-anchor:none]"
                 } ${scrollsSideways ? "" : "overflow-x-clip"}`}
@@ -1159,6 +1179,15 @@ export default function ScheduleTab({
                   </TableRow>
                 </TableFooter>
               </Table>
+              {scrollsSideways && (
+                <MatrixScrollAffordance
+                  scrollRef={matrixWindow.scrollRef}
+                  edges={matrixWindow.edges}
+                  leadingWidth={LEADING_WIDTH}
+                  controls="schedule-matrix-table"
+                />
+              )}
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -1250,6 +1279,7 @@ function ScheduleSettings({
   scheduleStart: initialScheduleStart,
   periodType: initialPeriodType,
   editable,
+  periodLengthDays: initialPeriodLengthDays,
   periodsExist,
 }: {
   projectId: string;
@@ -1257,7 +1287,8 @@ function ScheduleSettings({
   startDate: string;
   endDate: string;
   scheduleStart: string;
-  periodType: "weekly" | "biweekly" | "monthly";
+  periodType: PeriodType;
+  periodLengthDays: number | null;
   editable: boolean;
   periodsExist: boolean;
 }) {
@@ -1269,17 +1300,32 @@ function ScheduleSettings({
   const [endDate, setEndDate] = useState(initialEndDate);
   const [scheduleStart, setScheduleStart] = useState(initialScheduleStart);
   const [periodType, setPeriodType] = useState(initialPeriodType);
+  // A string, not a number: an empty field is a real state while someone is
+  // typing, and `NaN` is not a way to say so.
+  const [periodLengthDays, setPeriodLengthDays] = useState(
+    initialPeriodLengthDays === null ? "" : String(initialPeriodLengthDays),
+  );
   const updateSettings = useMutation(trpc.schedule.updateSettings.mutationOptions());
   const generatePeriods = useMutation(trpc.schedule.generatePeriods.mutationOptions());
-  const periodTypeOptions = [
-    { value: "weekly", label: t.projects.periodWeekly },
-    { value: "biweekly", label: t.projects.periodBiweekly },
-    { value: "monthly", label: t.projects.periodMonthly },
-  ];
+  // Built from the schema's own list, so a cadence added there cannot be
+  // missing here.
+  const periodTypeOptions = PERIOD_TYPES.map((value) => ({
+    value,
+    label: cadenceLabel(t, value),
+  }));
+  const customLength = Number(periodLengthDays);
+  const customLengthValid =
+    Number.isInteger(customLength) &&
+    customLength >= CUSTOM_PERIOD_MIN_DAYS &&
+    customLength <= CUSTOM_PERIOD_MAX_DAYS;
 
   async function saveAndGenerate() {
     if (!startDate || !endDate) {
       toast.error(t.schedule.needsDates);
+      return;
+    }
+    if (periodType === "custom" && !customLengthValid) {
+      toast.error(t.projects.periodLengthRequired);
       return;
     }
     try {
@@ -1290,6 +1336,9 @@ function ScheduleSettings({
         endDate,
         scheduleStart: scheduleStart || null,
         periodType,
+        // The router nulls this for every calendar cadence anyway; sending it
+        // only for custom keeps the two ends saying the same thing.
+        periodLengthDays: periodType === "custom" ? customLength : null,
       });
       const result = await generatePeriods.mutateAsync({ projectId });
       await queryClient.invalidateQueries(trpc.progress.pathFilter());
@@ -1359,9 +1408,7 @@ function ScheduleSettings({
             items={periodTypeOptions}
             value={periodType}
             disabled={!editable}
-            onValueChange={(value) =>
-              setPeriodType((value ?? "weekly") as "weekly" | "biweekly" | "monthly")
-            }
+            onValueChange={(value) => setPeriodType((value ?? "weekly") as PeriodType)}
           >
             <SelectTrigger id="baseline-cadence" className="w-full">
               <SelectValue />
@@ -1375,6 +1422,28 @@ function ScheduleSettings({
             </SelectContent>
           </Select>
         </div>
+        {/* Only a custom cadence has a length to ask about; every other one
+            derives it from the calendar. */}
+        {periodType === "custom" && (
+          <div className="space-y-2">
+            <Label htmlFor="baseline-cycle">{t.projects.periodLengthDays}</Label>
+            <Input
+              id="baseline-cycle"
+              type="text"
+              inputMode="numeric"
+              value={periodLengthDays}
+              disabled={!editable}
+              aria-describedby="baseline-cycle-hint"
+              aria-invalid={periodLengthDays !== "" && !customLengthValid}
+              onChange={(event) =>
+                setPeriodLengthDays(event.target.value.replace(/[^0-9]/g, "").slice(0, 2))
+              }
+            />
+            <p id="baseline-cycle-hint" className="text-xs text-muted-foreground">
+              {t.projects.periodLengthHint}
+            </p>
+          </div>
+        )}
         {editable && (
           <div className="sm:col-span-2 lg:col-span-4">
             <Button

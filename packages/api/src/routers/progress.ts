@@ -29,7 +29,7 @@ import {
   requiresComment,
   stampFor,
 } from "../lib/progress-workflow";
-import { assertProjectAccess, type ProjectScopeCtx } from "../lib/scope";
+import { assertProjectAccess, assertProjectWritable, type ProjectScopeCtx } from "../lib/scope";
 import { aggregateWorkStages } from "../lib/work-stages";
 
 /**
@@ -82,7 +82,7 @@ async function findPeriod(ctx: ProjectScopeCtx, periodId: string) {
  */
 async function requireEditablePeriod(ctx: ProjectScopeCtx, periodId: string) {
   const period = await findPeriod(ctx, periodId);
-  await assertProjectAccess(ctx, period.projectId);
+  await assertProjectWritable(ctx, period.projectId);
 
   if (!isEditable(period.status)) {
     throw new TRPCError({
@@ -288,6 +288,7 @@ export const progressRouter = router({
         .select({
           dataDate: project.dataDate,
           periodType: project.periodType,
+          periodLengthDays: project.periodLengthDays,
           startDate: project.startDate,
           scheduleStart: project.scheduleStart,
           endDate: project.endDate,
@@ -846,7 +847,7 @@ export const progressRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const period = await findPeriod(ctx, input.periodId);
-      await assertProjectAccess(ctx, period.projectId);
+      await assertProjectWritable(ctx, period.projectId);
 
       const from = period.status;
       if (!canTransition(from, input.to)) {

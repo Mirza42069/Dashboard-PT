@@ -7,6 +7,7 @@ import {
   getVariableItemOffset,
   getVariableWindowRange,
   getWindowRange,
+  scrollEdges,
 } from "./matrix-window";
 
 describe("matrix window ranges", () => {
@@ -172,5 +173,42 @@ describe("matrix window ranges", () => {
 
     expect(window.rows).toEqual({ start: 0, end: 0, beforeSize: 0, afterSize: 0 });
     expect(window.columns).toEqual({ start: 0, end: 0, beforeSize: 0, afterSize: 0 });
+  });
+});
+
+describe("scrollEdges", () => {
+  test("a container that fits its content can scroll neither way", () => {
+    expect(scrollEdges({ scrollLeft: 0, scrollWidth: 800, clientWidth: 800 })).toEqual({
+      canScrollLeft: false,
+      canScrollRight: false,
+    });
+  });
+
+  test("at the start, only the right side is hidden", () => {
+    expect(scrollEdges({ scrollLeft: 0, scrollWidth: 2000, clientWidth: 800 })).toEqual({
+      canScrollLeft: false,
+      canScrollRight: true,
+    });
+  });
+
+  test("mid-scroll, both sides are", () => {
+    expect(scrollEdges({ scrollLeft: 600, scrollWidth: 2000, clientWidth: 800 })).toEqual({
+      canScrollLeft: true,
+      canScrollRight: true,
+    });
+  });
+
+  test("at the end, only the left side is", () => {
+    expect(scrollEdges({ scrollLeft: 1200, scrollWidth: 2000, clientWidth: 800 })).toEqual({
+      canScrollLeft: true,
+      canScrollRight: false,
+    });
+  });
+
+  test("a sub-pixel remainder is not content worth pointing at", () => {
+    expect(scrollEdges({ scrollLeft: 0.5, scrollWidth: 800.75, clientWidth: 800 })).toEqual({
+      canScrollLeft: false,
+      canScrollRight: false,
+    });
   });
 });

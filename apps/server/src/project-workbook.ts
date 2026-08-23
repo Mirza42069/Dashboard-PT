@@ -1,11 +1,14 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import {
+  CUSTOM_PERIOD_MAX_DAYS,
+  CUSTOM_PERIOD_MIN_DAYS,
   endDateForPeriodCount,
   generatePeriods,
   MAX_PERIODS,
   PeriodRangeError,
 } from "@DashboardV2/api/lib/periods";
+import { PERIOD_TYPES } from "@DashboardV2/db/schema";
 import { z } from "zod";
 
 import {
@@ -77,7 +80,15 @@ export const workbookPlanSchema = z
     suggestedStartDate: z.iso.date().nullable(),
     suggestedScheduleStartDate: z.iso.date().nullable(),
     suggestedEndDate: z.iso.date().nullable(),
-    periodType: z.enum(["weekly", "biweekly", "monthly"]),
+    periodType: z.enum(PERIOD_TYPES),
+    /** Set only alongside a "custom" periodType; null for every other. */
+    periodLengthDays: z
+      .number()
+      .int()
+      .min(CUSTOM_PERIOD_MIN_DAYS)
+      .max(CUSTOM_PERIOD_MAX_DAYS)
+      .nullable()
+      .default(null),
     periodCount: z.number().int().min(0).max(600),
     confidence: z.enum(["high", "medium", "low"]),
     warnings: z.array(z.string().max(300)).max(20),
@@ -270,7 +281,18 @@ export const projectWorkbookCommitSchema = z.object({
       startDate: z.iso.date(),
       scheduleStart: z.iso.date().nullable(),
       endDate: z.iso.date(),
-      periodType: z.enum(["weekly", "biweekly", "monthly"]),
+      periodType: z.enum(PERIOD_TYPES),
+      periodLengthDays: z
+        .number()
+        .int()
+        .min(CUSTOM_PERIOD_MIN_DAYS)
+        .max(CUSTOM_PERIOD_MAX_DAYS)
+        .nullable()
+        .default(null),
+    })
+    .refine((value) => value.periodType !== "custom" || value.periodLengthDays !== null, {
+      message: "A custom reporting cadence needs a cycle length in days.",
+      path: ["periodLengthDays"],
     })
     .refine((value) => value.endDate >= value.startDate, {
       message: "The target completion date must not precede the start date.",
@@ -542,6 +564,7 @@ function referencePlan(
       suggestedScheduleStartDate: bounds.scheduleStartDate,
       suggestedEndDate: bounds.endDate,
       periodType: "weekly",
+      periodLengthDays: null,
       periodCount,
       confidence: "high",
       warnings: [
@@ -868,6 +891,10 @@ export async function analyzeProjectWorkbook(
       suggestedScheduleStartDate: interpreted?.startDate ?? null,
       suggestedEndDate: interpreted?.endDate ?? null,
       periodType: interpreted?.periodType ?? "weekly",
+      // The model never proposes "custom" (see openrouter.ts), so an AI plan
+      // never arrives with a cycle length. The wizard sets both if the reader
+      // overrides the cadence.
+      periodLengthDays: null,
       periodCount,
       confidence: interpreted?.confidence ?? "low",
       warnings: interpreted?.warnings ?? ["AI interpretation is unavailable. Review every mapping before importing."],
@@ -1131,6 +1158,7 @@ export async function validateWorkbookCalendar(
       project.scheduleStart ?? project.startDate,
       project.endDate,
       project.periodType,
+      project.periodLengthDays,
     );
   } catch (error) {
     if (error instanceof PeriodRangeError) {
@@ -1145,6 +1173,7 @@ export async function validateWorkbookCalendar(
             project.scheduleStart ?? project.startDate,
             plan.periodCount,
             project.periodType,
+            project.periodLengthDays,
           ),
         },
       );
@@ -1156,6 +1185,7 @@ export async function validateWorkbookCalendar(
       project.scheduleStart ?? project.startDate,
       plan.periodCount,
       project.periodType,
+      project.periodLengthDays,
     );
     throw new ProjectWorkbookError(
       `Your dates create ${generated.length} ${project.periodType} periods, but workbook items are scheduled through period ${plan.periodCount}.`,

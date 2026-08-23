@@ -28,6 +28,7 @@ import { CheckCircle2, Inbox, Loader2, SearchX, Send } from "@DashboardV2/ui/com
 import { useEffect, useRef, useState } from "react";
 
 import { QueryError } from "@/components/query-error";
+import { SupportTranscript } from "@/components/support-transcript";
 import { interpolate } from "@/i18n";
 import {
   Empty,
@@ -45,6 +46,7 @@ import { trpc } from "@/utils/trpc";
 
 const PAGE_SIZE = 25;
 const POLL_INTERVAL_MS = 30_000;
+const THREAD_POLL_MS = 10_000;
 const STATUSES = ["new", "accepted", "answered", "closed"] as const;
 type SupportStatus = (typeof STATUSES)[number];
 type SupportRequest = inferOutput<typeof trpc.support.list>["requests"][number];
@@ -328,6 +330,14 @@ function RequestSheet({
     refetchInterval: POLL_INTERVAL_MS,
     refetchIntervalInBackground: false,
   });
+  // Faster than the list behind it: an open thread is the one place somebody is
+  // waiting for a message to appear.
+  const thread = useQuery({
+    ...trpc.support.thread.queryOptions({ id: selectedId ?? "" }),
+    enabled: Boolean(selectedId),
+    refetchInterval: THREAD_POLL_MS,
+    refetchIntervalInBackground: false,
+  });
   const accept = useMutation(trpc.support.accept.mutationOptions());
   const sendReply = useMutation(trpc.support.reply.mutationOptions());
   const close = useMutation(trpc.support.close.mutationOptions());
@@ -336,7 +346,6 @@ function RequestSheet({
 
   useEffect(() => {
     if (request?.status === "accepted") replyRef.current?.focus();
-    else if (request?.status === "answered") closeButtonRef.current?.focus();
     else if (request?.status === "closed") statusFocusRef.current?.focus();
   }, [request?.status]);
 
@@ -445,10 +454,19 @@ function RequestSheet({
                 <dd className="text-foreground">{formatDateTime(request.createdAt)}</dd>
               </dl>
 
+              {/* The whole exchange, not just the opening and one reply. Each
+                  message carries its own author and time, so the "replied by"
+                  and "final reply" captions this replaced are now redundant. */}
               <div className="px-4 py-6">
-                <p className="whitespace-pre-wrap text-sm/relaxed text-foreground">
-                  {request.message}
-                </p>
+                <SupportTranscript
+                  opening={{
+                    body: request.message,
+                    authorName: request.requesterName,
+                    createdAt: request.createdAt,
+                  }}
+                  messages={thread.data ?? []}
+                  mine="support"
+                />
               </div>
 
               {request.acceptedAt && (
@@ -457,23 +475,6 @@ function RequestSheet({
                     actor: request.acceptedByName ?? t.support.supportTeam,
                     date: formatDateTime(request.acceptedAt),
                   })}
-                </div>
-              )}
-
-              {request.finalReply && (
-                <div className="mx-4 mb-4 rounded-lg border bg-card p-4">
-                  <p className="mb-2 font-medium text-foreground">{t.support.finalReply}</p>
-                  <p className="whitespace-pre-wrap text-sm/relaxed text-foreground">
-                    {request.finalReply}
-                  </p>
-                  {request.repliedAt && (
-                    <p className="mt-3 text-xs text-muted-foreground">
-                      {interpolate(t.support.repliedBy, {
-                        actor: request.repliedByName ?? t.support.supportTeam,
-                        date: formatDateTime(request.repliedAt),
-                      })}
-                    </p>
-                  )}
                 </div>
               )}
 
@@ -486,7 +487,7 @@ function RequestSheet({
                 </div>
               )}
 
-              {request.status === "accepted" && (
+              {request.status !== "new" && request.status !== "closed" && (
                 <form
                   className="space-y-3 border-t px-4 py-4"
                   onSubmit={handleReply}

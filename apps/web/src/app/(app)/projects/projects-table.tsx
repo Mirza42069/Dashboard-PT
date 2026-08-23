@@ -33,10 +33,9 @@ import {
 } from "@DashboardV2/ui/components/table";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  Archive,
   ChevronDown,
   Download,
-  Kanban,
-  ListView,
   Loader2,
   Plus,
   Trash2,
@@ -62,7 +61,6 @@ import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
 import { EMPTY_PROJECT, PROJECT_STATUSES } from "./project-form-values";
-import { ProjectsBoard } from "./projects-board";
 
 const ProjectFormDialog = dynamic(() => import("./project-form-dialog"));
 const ProjectCreateSourceDialog = dynamic(() => import("./project-create-source-dialog"));
@@ -71,18 +69,15 @@ const ProjectWorkbookImportDialog = dynamic(() => import("./project-workbook-imp
 const PAGE_SIZE = 25;
 const ALL = "all";
 type ProjectStatus = (typeof PROJECT_STATUSES)[number];
-type ProjectsView = "list" | "board";
 
 export default function ProjectsTable({
   canCreate,
-  canUpdate,
   canDelete,
   canManageMembers,
   currentUserId,
   trialAiCredits,
 }: {
   canCreate: boolean;
-  canUpdate: boolean;
   canDelete: boolean;
   canManageMembers: boolean;
   currentUserId: string;
@@ -102,12 +97,9 @@ export default function ProjectsTable({
 
   const [search, setSearch] = useState("");
   const searchParams = useSearchParams();
-  const view: ProjectsView = searchParams.get("view") === "board" ? "board" : "list";
   const requestedStatus = searchParams.get("status");
   const status =
-    view === "list" &&
-    requestedStatus &&
-    (PROJECT_STATUSES as readonly string[]).includes(requestedStatus)
+    requestedStatus && (PROJECT_STATUSES as readonly string[]).includes(requestedStatus)
       ? requestedStatus
       : ALL;
   const [formOpen, setFormOpen] = useState(false);
@@ -136,14 +128,12 @@ export default function ProjectsTable({
         status: status === ALL ? undefined : (status as ProjectStatus),
         limit: PAGE_SIZE,
       },
-      {
-        enabled: view === "list",
-        getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-      },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
     ),
   );
 
   const deleteMany = useMutation(trpc.project.deleteMany.mutationOptions());
+  const setArchived = useMutation(trpc.project.setArchived.mutationOptions());
 
   const projects = projectsQuery.data?.pages.flatMap((page) => page.projects) ?? [];
   const total = projectsQuery.data?.pages[0]?.total ?? 0;
@@ -154,25 +144,37 @@ export default function ProjectsTable({
     resetKey: `${debouncedSearch}\u0000${status}`,
   });
 
-  function replaceProjectParams(nextView: ProjectsView, nextStatus: string) {
+  function replaceProjectParams(nextStatus: string) {
     const params = new URLSearchParams(searchParams.toString());
-    if (nextView === "board") params.set("view", "board");
-    else params.delete("view");
     if (nextStatus === ALL) params.delete("status");
     else params.set("status", nextStatus);
     const query = params.toString();
     window.history.replaceState(null, "", query ? `/projects?${query}` : "/projects");
   }
 
-  function selectView(nextView: ProjectsView) {
-    if (nextView === view) return;
-    selection.clear();
-    replaceProjectParams(nextView, nextView === "board" ? ALL : status);
-  }
-
   function selectStatus(nextStatus: string) {
     if (nextStatus === status) return;
-    replaceProjectParams(view, nextStatus);
+    replaceProjectParams(nextStatus);
+  }
+
+  /**
+   * File the selection away.
+   *
+   * Deliberately not behind a confirmation: archiving takes nothing away and
+   * the Archive page restores it in one click, so a modal here would be a
+   * prompt about something reversible. Deletion, which is not, keeps its.
+   */
+  async function archiveSelected() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    try {
+      const result = await setArchived.mutateAsync({ ids, archived: true });
+      selection.clear();
+      await queryClient.invalidateQueries(trpc.project.pathFilter());
+      toast.success(plural(t.projects.archivedToast, result.count));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.projects.archiveFailed);
+    }
   }
 
   function openCreate() {
@@ -216,7 +218,7 @@ export default function ProjectsTable({
   return (
     <>
       <p role="status" aria-live="polite" className="sr-only">
-        {view === "list" && projectsQuery.isPending ? t.common.loading : ""}
+        {projectsQuery.isPending ? t.common.loading : ""}
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Input
@@ -228,35 +230,7 @@ export default function ProjectsTable({
           className="w-full sm:max-w-xs"
           aria-label={t.common.search}
         />
-        <div
-          className="inline-flex rounded-md bg-muted p-0.5"
-          role="group"
-          aria-label={t.projects.viewLabel}
-        >
-          {([
-            ["list", t.projects.listView, ListView],
-            ["board", t.projects.boardView, Kanban],
-          ] as const).map(([value, label, Icon]) => (
-            <Tooltip key={value}>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant={view === value ? "secondary" : "ghost"}
-                    size="icon-sm"
-                    aria-label={label}
-                    aria-pressed={view === value}
-                    onClick={() => selectView(value)}
-                  />
-                }
-              >
-                <Icon />
-              </TooltipTrigger>
-              <TooltipContent side="bottom">{label}</TooltipContent>
-            </Tooltip>
-          ))}
-        </div>
-
-        {view === "list" && selection.selectedCount > 0 && (
+        {selection.selectedCount > 0 && (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -275,7 +249,33 @@ export default function ProjectsTable({
           </Tooltip>
         )}
 
-        {view === "list" && canDelete && selection.selectedCount > 0 && (
+        {canDelete && selection.selectedCount > 0 && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label={plural(t.projects.archiveSelectedLabel, selection.selectedCount)}
+                  onClick={() => {
+                    if (selection.selectedCount > 100) {
+                      toast.error(t.projects.bulkDeleteLimit);
+                      return;
+                    }
+                    void archiveSelected();
+                  }}
+                />
+              }
+            >
+              <Archive />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {plural(t.projects.archiveSelectedLabel, selection.selectedCount)}
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {canDelete && selection.selectedCount > 0 && (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -309,136 +309,128 @@ export default function ProjectsTable({
         )}
       </div>
 
-      {view === "list" ? (
-        <Card aria-busy={projectsQuery.isPending || projectsQuery.isFetchingNextPage}>
-          <CardContent className="px-0">
-            <Table className="min-w-[44rem] table-fixed">
-            <TableHeader>
-              <TableRow>
-                {canDelete && (
-                  <TableHead className="w-10 pl-4">
-                    <Checkbox
-                      checked={selection.allSelected}
-                      indeterminate={selection.someSelected}
-                      onCheckedChange={selection.toggleAll}
-                      aria-label={t.common.selectAll}
-                    />
-                  </TableHead>
-                )}
-                <TableHead className={canDelete ? "w-[40%]" : "w-[45%] pl-4"}>
-                  {t.projects.project}
+      <Card aria-busy={projectsQuery.isPending || projectsQuery.isFetchingNextPage}>
+        <CardContent className="px-0">
+          <Table className="min-w-[44rem] table-fixed">
+          <TableHeader>
+            <TableRow>
+              {canDelete && (
+                <TableHead className="w-10 pl-4">
+                  <Checkbox
+                    checked={selection.allSelected}
+                    indeterminate={selection.someSelected}
+                    onCheckedChange={selection.toggleAll}
+                    aria-label={t.common.selectAll}
+                  />
                 </TableHead>
-                <TableHead className="w-40">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      render={<Button variant="ghost" size="xs" className="-ml-2" />}
-                      aria-label={interpolate(t.projects.statusFilterLabel, {
-                        status:
-                          statusOptions.find((option) => option.value === status)?.label ??
-                          t.common.all,
-                      })}
-                    >
-                      {t.projects.statusLabel}
-                      <ChevronDown />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-48 bg-card">
-                      <DropdownMenuRadioGroup value={status} onValueChange={selectStatus}>
-                        {statusOptions.map((option) => (
-                          <DropdownMenuRadioItem key={option.value} value={option.value}>
-                            {option.label}
-                          </DropdownMenuRadioItem>
-                        ))}
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableHead>
-                <TableHead className="w-[25%]">{t.projects.client}</TableHead>
-                <TableHead className="w-32 pr-4">{t.projects.dueColumn}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {projectsQuery.isPending &&
-                Array.from({ length: PAGE_SIZE }, (_, index) => (
-                  <TableRow key={index}>
-                    <TableCell colSpan={COLUMNS} className="pl-4">
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
-
-              {initialError && (
-                <TableRow>
-                  <TableCell colSpan={COLUMNS} className="p-4">
-                    <QueryError
-                      error={projectsQuery.error}
-                      onRetry={() => void projectsQuery.refetch()}
-                      className="border-0"
-                    />
-                  </TableCell>
-                </TableRow>
               )}
-
-              {!projectsQuery.isPending && !initialError && projects.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={COLUMNS} className="p-0">
-                    <TableEmptyState
-                      filtered={filtered}
-                      onClearFilters={clearFilters}
-                      title={filtered ? t.projects.noMatch : t.projects.empty}
-                      description={filtered ? t.projects.noMatchHint : t.projects.emptyHint}
-                    />
-                  </TableCell>
-                </TableRow>
-              )}
-
-              {projects.map((row) => (
-                <TableRow
-                  key={row.id}
-                  className="relative cursor-pointer"
-                  data-state={selection.isSelected(row.id) ? "selected" : undefined}
-                >
-                  {canDelete && (
-                    <TableCell className="relative z-10 pl-4">
-                      <Checkbox
-                        checked={selection.isSelected(row.id)}
-                        onCheckedChange={() => selection.toggle(row.id)}
-                        aria-label={interpolate(t.common.selectRow, { name: row.name })}
-                      />
-                    </TableCell>
-                  )}
-                  <TableCell className={canDelete ? "min-w-0" : "min-w-0 pl-4"}>
-                    <Link
-                      href={`/projects/${row.id}`}
-                      className="block truncate font-medium outline-none after:absolute after:inset-0 after:content-[''] hover:underline focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
-                    >
-                      {row.name}
-                    </Link>
-                    <p className="truncate font-mono text-muted-foreground">{row.code}</p>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge kind="project" value={row.status} />
-                  </TableCell>
-                  <TableCell className="truncate text-muted-foreground">
-                    {row.client ?? "—"}
-                  </TableCell>
-                  <TableCell className="pr-4 whitespace-nowrap text-muted-foreground">
-                    {formatDate(row.endDate)}
+              <TableHead className={canDelete ? "w-[40%]" : "w-[45%] pl-4"}>
+                {t.projects.project}
+              </TableHead>
+              <TableHead className="w-40">
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={<Button variant="ghost" size="xs" className="-ml-2" />}
+                    aria-label={interpolate(t.projects.statusFilterLabel, {
+                      status:
+                        statusOptions.find((option) => option.value === status)?.label ??
+                        t.common.all,
+                    })}
+                  >
+                    {t.projects.statusLabel}
+                    <ChevronDown />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-48 bg-card">
+                    <DropdownMenuRadioGroup value={status} onValueChange={selectStatus}>
+                      {statusOptions.map((option) => (
+                        <DropdownMenuRadioItem key={option.value} value={option.value}>
+                          {option.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </TableHead>
+              <TableHead className="w-[25%]">{t.projects.client}</TableHead>
+              <TableHead className="w-32 pr-4">{t.projects.dueColumn}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {projectsQuery.isPending &&
+              Array.from({ length: PAGE_SIZE }, (_, index) => (
+                <TableRow key={index}>
+                  <TableCell colSpan={COLUMNS} className="pl-4">
+                    <Skeleton className="h-5 w-full" />
                   </TableCell>
                 </TableRow>
               ))}
-            </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      ) : (
-        <ProjectsBoard
-          search={debouncedSearch}
-          status={status === ALL ? ALL : (status as ProjectStatus)}
-          canUpdate={canUpdate}
-        />
-      )}
 
-      {view === "list" && !initialError && (
+            {initialError && (
+              <TableRow>
+                <TableCell colSpan={COLUMNS} className="p-4">
+                  <QueryError
+                    error={projectsQuery.error}
+                    onRetry={() => void projectsQuery.refetch()}
+                    className="border-0"
+                  />
+                </TableCell>
+              </TableRow>
+            )}
+
+            {!projectsQuery.isPending && !initialError && projects.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={COLUMNS} className="p-0">
+                  <TableEmptyState
+                    filtered={filtered}
+                    onClearFilters={clearFilters}
+                    title={filtered ? t.projects.noMatch : t.projects.empty}
+                    description={filtered ? t.projects.noMatchHint : t.projects.emptyHint}
+                  />
+                </TableCell>
+              </TableRow>
+            )}
+
+            {projects.map((row) => (
+              <TableRow
+                key={row.id}
+                className="relative cursor-pointer"
+                data-state={selection.isSelected(row.id) ? "selected" : undefined}
+              >
+                {canDelete && (
+                  <TableCell className="relative z-10 pl-4">
+                    <Checkbox
+                      checked={selection.isSelected(row.id)}
+                      onCheckedChange={() => selection.toggle(row.id)}
+                      aria-label={interpolate(t.common.selectRow, { name: row.name })}
+                    />
+                  </TableCell>
+                )}
+                <TableCell className={canDelete ? "min-w-0" : "min-w-0 pl-4"}>
+                  <Link
+                    href={`/projects/${row.id}`}
+                    className="block truncate font-medium outline-none after:absolute after:inset-0 after:content-[''] hover:underline focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
+                  >
+                    {row.name}
+                  </Link>
+                  <p className="truncate font-mono text-muted-foreground">{row.code}</p>
+                </TableCell>
+                <TableCell>
+                  <StatusBadge kind="project" value={row.status} />
+                </TableCell>
+                <TableCell className="truncate text-muted-foreground">
+                  {row.client ?? "—"}
+                </TableCell>
+                <TableCell className="pr-4 whitespace-nowrap text-muted-foreground">
+                  {formatDate(row.endDate)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {!initialError && (
         <InfiniteLoadMore
           hasNextPage={projectsQuery.hasNextPage}
           isFetchingNextPage={projectsQuery.isFetchingNextPage}

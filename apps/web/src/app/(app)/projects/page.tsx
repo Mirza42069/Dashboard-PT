@@ -17,7 +17,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function ProjectsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string | string[]; view?: string | string[] }>;
+  searchParams: Promise<{ status?: string | string[] }>;
 }) {
   const session = await requireSession();
   const dict = getDictionary(await getLocale());
@@ -26,31 +26,15 @@ export default async function ProjectsPage({
   const requestedStatus = params.status;
   const statusValue = Array.isArray(requestedStatus) ? requestedStatus[0] : requestedStatus;
   const status = PROJECT_STATUSES.find((value) => value === statusValue);
-  const requestedView = Array.isArray(params.view) ? params.view[0] : params.view;
-  const view = requestedView === "board" ? "board" : "list";
   const queryClient = getQueryClient();
   const trpc = getTRPC();
 
-  const initialStatuses = view === "board" ? PROJECT_STATUSES : status ? [status] : PROJECT_STATUSES;
-  if (view === "board") {
-    await Promise.all(
-      initialStatuses.map((columnStatus) =>
-        queryClient.prefetchInfiniteQuery(
-          trpc.project.list.infiniteQueryOptions(
-            { search: "", status: columnStatus, limit: 10 },
-            { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
-          ),
-        ),
-      ),
-    );
-  } else {
-    await queryClient.prefetchInfiniteQuery(
-      trpc.project.list.infiniteQueryOptions(
-        { search: "", status, limit: 25 },
-        { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
-      ),
-    );
-  }
+  await queryClient.prefetchInfiniteQuery(
+    trpc.project.list.infiniteQueryOptions(
+      { search: "", status, limit: 25 },
+      { getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined },
+    ),
+  );
 
   return (
     <HydrateClient>
@@ -59,7 +43,6 @@ export default async function ProjectsPage({
 
         <ProjectsTable
           canCreate={hasPermission(role, "project:create")}
-          canUpdate={hasPermission(role, "project:update")}
           canDelete={hasPermission(role, "project:delete")}
           canManageMembers={hasPermission(role, "member:manage")}
           currentUserId={session.user.id}

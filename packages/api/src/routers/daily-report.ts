@@ -29,7 +29,12 @@ import {
 } from "../lib/daily-report-workflow";
 import { toAmount } from "../lib/money";
 import { hasPermission, roleOf } from "../lib/permissions";
-import { assertProjectAccess, type ProjectScopeCtx } from "../lib/scope";
+import {
+  assertNotArchived,
+  assertProjectAccess,
+  assertProjectWritable,
+  type ProjectScopeCtx,
+} from "../lib/scope";
 
 const reviewerAlias = aliasedTable(user, "report_reviewer");
 const approverAlias = aliasedTable(user, "report_approver");
@@ -90,6 +95,7 @@ async function findReport(ctx: ProjectScopeCtx, reportId: string) {
       report: dailyReport,
       projectCode: project.code,
       projectName: project.name,
+      archivedAt: project.archivedAt,
     })
     .from(dailyReport)
     .innerJoin(project, eq(project.id, dailyReport.projectId))
@@ -102,8 +108,15 @@ async function findReport(ctx: ProjectScopeCtx, reportId: string) {
   return row;
 }
 
-async function requireEditable(ctx: ProjectScopeCtx, reportId: string) {
+/** `findReport` plus the archived gate. See `assertProjectWritable` in lib/scope.ts. */
+async function findReportForWrite(ctx: ProjectScopeCtx, reportId: string) {
   const row = await findReport(ctx, reportId);
+  assertNotArchived(row.archivedAt);
+  return row;
+}
+
+async function requireEditable(ctx: ProjectScopeCtx, reportId: string) {
+  const row = await findReportForWrite(ctx, reportId);
   if (!isEditable(row.report.status)) {
     throw new TRPCError({
       code: "CONFLICT",
@@ -339,7 +352,7 @@ export const dailyReportRouter = router({
   open: companyPermissionProcedure("project:write")
     .input(z.object({ projectId: z.string().min(1), reportDate: z.iso.date() }))
     .mutation(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+      await assertProjectWritable(ctx, input.projectId);
 
       const [existing] = await db
         .select({ id: dailyReport.id })
@@ -522,7 +535,7 @@ export const dailyReportRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { report, projectCode, projectName } = await findReport(ctx, input.id);
+      const { report, projectCode, projectName } = await findReportForWrite(ctx, input.id);
       const from = report.status as DailyReportStatus;
 
       if (!canTransition(from, input.to)) {
@@ -638,7 +651,7 @@ export const dailyReportRouter = router({
     .mutation(async ({ ctx, input }) => {
       // Only a draft may be deleted. Once submitted the report is part of the
       // record — the way to undo it is to return it, which leaves a trace.
-      const { report } = await findReport(ctx, input.id);
+      const { report } = await findReportForWrite(ctx, input.id);
       if (report.status !== "draft") {
         throw new TRPCError({
           code: "CONFLICT",
@@ -686,7 +699,7 @@ export const dailyReportRouter = router({
       }
 
       for (const projectId of new Set(rows.map((row) => row.report.projectId))) {
-        await assertProjectAccess(ctx, projectId);
+        await assertProjectWritable(ctx, projectId);
       }
 
       const deleted = await db

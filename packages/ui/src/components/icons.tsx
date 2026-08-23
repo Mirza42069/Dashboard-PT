@@ -30,6 +30,9 @@ import {
   AccessibilityIcon as HiAccessibility,
   Add01Icon as HiAdd01,
   AiFileIcon as HiAiFile,
+  ArchiveIcon as HiArchive,
+  ArchiveOff03Icon as HiArchiveOff03,
+  ArchiveRestoreIcon as HiArchiveRestore,
   Alert02Icon as HiAlert02,
   AlertCircleIcon as HiAlertCircle,
   ArrowDown01Icon as HiArrowDown01,
@@ -38,6 +41,7 @@ import {
   ArrowUp01Icon as HiArrowUp01,
   ArrowUpRight01Icon as HiArrowUpRight01,
   Building03Icon as HiBuilding03,
+  Cabinet01Icon as HiCabinet01,
   Calendar03Icon as HiCalendar03,
   Cancel01Icon as HiCancel01,
   ChartUpIcon as HiChartUp,
@@ -71,6 +75,7 @@ import {
   Menu01Icon as HiMenu01,
   Moon02Icon as HiMoon02,
   MoreHorizontalIcon as HiMoreHorizontal,
+  Notification03Icon as HiNotification03,
   OctagonXIcon as HiOctagonX,
   PaintBoardIcon as HiPaintBoard,
   PauseCircleIcon as HiPauseCircle,
@@ -137,10 +142,15 @@ function icon(glyph: Glyph, name: string) {
 
 export const Accessibility = icon(HiAccessibility, "Accessibility");
 export const AiFile = icon(HiAiFile, "AiFile");
+export const Archive = icon(HiArchive, "Archive");
+export const ArchiveOff = icon(HiArchiveOff03, "ArchiveOff");
+export const ArchiveRestore = icon(HiArchiveRestore, "ArchiveRestore");
 export const ArrowDownIcon = icon(HiArrowDown01, "ArrowDownIcon");
 export const ArrowLeft = icon(HiArrowLeft01, "ArrowLeft");
 export const ArrowUpRight = icon(HiArrowUpRight01, "ArrowUpRight");
+export const Bell = icon(HiNotification03, "Bell");
 export const Building2 = icon(HiBuilding03, "Building2");
+export const Cabinet = icon(HiCabinet01, "Cabinet");
 export const CalendarRange = icon(HiCalendar03, "CalendarRange");
 export const Check = icon(HiTick02, "Check");
 export const CheckCircle2 = icon(HiCheckmarkCircle02, "CheckCircle2");

@@ -23,13 +23,11 @@ export default function Header({
   collapsed,
   initialTextScale,
   onToggleSidebar,
-  onContactSupport,
 }: {
   user: ShellUser;
   collapsed: boolean;
   initialTextScale: TextScale;
   onToggleSidebar: () => void;
-  onContactSupport: () => void;
 }) {
   const t = useT();
   const role = roleOf(user);
@@ -39,7 +37,7 @@ export default function Header({
   return (
     <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b bg-card px-3 md:px-4">
       <div className="flex items-center gap-1">
-        <MobileNav role={role} onContactSupport={onContactSupport} />
+        <MobileNav role={role} />
         {/* Desktop only — on mobile the Sheet is the navigation. */}
         <Tooltip>
           <TooltipTrigger

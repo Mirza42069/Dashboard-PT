@@ -242,3 +242,31 @@ export function getMatrixWindow(options: MatrixWindowOptions): MatrixWindow {
     }),
   };
 }
+
+/** Whether a scroll container still has content hidden off either side. */
+export type ScrollEdges = { canScrollLeft: boolean; canScrollRight: boolean };
+
+/**
+ * The two flags a horizontal scroll affordance is drawn from.
+ *
+ * Split out of the hook the way `matrix-fit` and `matrix-keyboard` are: this is
+ * the part worth testing, and the measuring lives in the hook that calls it.
+ *
+ * The 1px deadband is the same one `useMatrixWindow` applies to the container
+ * width, and for the same reason — sub-pixel layout noise here would flicker a
+ * fade and a button in and out at the end of a scroll.
+ */
+export function scrollEdges({
+  scrollLeft,
+  scrollWidth,
+  clientWidth,
+}: {
+  scrollLeft: number;
+  scrollWidth: number;
+  clientWidth: number;
+}): ScrollEdges {
+  return {
+    canScrollLeft: scrollLeft > 1,
+    canScrollRight: scrollWidth - clientWidth - scrollLeft > 1,
+  };
+}

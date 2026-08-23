@@ -10,6 +10,7 @@ function Table({
   containerClassName,
   containerProps,
   scrollX = true,
+  scrollShadows = true,
   ...props
 }: React.ComponentProps<"table"> & {
   /**
@@ -37,6 +38,19 @@ function Table({
    * tailwind-merge has nothing to override it with.
    */
   scrollX?: boolean
+  /**
+   * Whether the container paints `table-scroll-shadows`. On by default.
+   *
+   * Off only for a table that draws a better affordance of its own — the entry
+   * grids do, because these shadows sit on the container's background and never
+   * surface from under their opaque sticky columns. See
+   * apps/web/src/components/matrix-scroll-affordance.tsx.
+   *
+   * A prop rather than something `containerClassName` cancels, for the same
+   * reason `scrollX` is one: the shadows are a component class, so
+   * tailwind-merge has nothing to override them with.
+   */
+  scrollShadows?: boolean
 }) {
   return (
     <div
@@ -47,7 +61,8 @@ function Table({
       // gives on a narrow screen.
       className={cn(
         "relative w-full",
-        scrollX && "overflow-x-auto table-scroll-shadows",
+        scrollX && "overflow-x-auto",
+        scrollX && scrollShadows && "table-scroll-shadows",
         containerClassName
       )}
       {...containerProps}

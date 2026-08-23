@@ -7,8 +7,9 @@ import {
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, eq, exists, sql } from "drizzle-orm";
+import { and, asc, eq, exists, isNull, sql } from "drizzle-orm";
 
+import { assertNotArchived } from "./archived";
 import { roleOf } from "./permissions";
 
 /**
@@ -100,13 +101,27 @@ export type ProjectScopeCtx = {
 };
 
 /**
+ * Live projects only. `and()` this into any list that should not show the archive.
+ *
+ * Deliberately separate from `projectAccessFilter` rather than folded into it.
+ * That function answers "may this person see this project"; whether a project
+ * has been filed away is a different question with a different answer — and
+ * `project.get` needs the first without the second, or the Archive list would
+ * link to a 404.
+ */
+export const liveProjectsOnly = isNull(project.archivedAt);
+
+/** Re-exported so callers have one import for the project guards. */
+export { assertNotArchived };
+
+/**
  * Company check for every role, plus a project_member check for role=user —
  * a User only ever sees the projects an admin assigned them to. NOT_FOUND
  * either way; a non-member must not learn the project exists.
  */
 export async function assertProjectAccess(ctx: ProjectScopeCtx, projectId: string) {
   const [row] = await db
-    .select({ companyId: project.companyId })
+    .select({ companyId: project.companyId, archivedAt: project.archivedAt })
     .from(project)
     .where(eq(project.id, projectId));
   if (!row || row.companyId !== ctx.companyId) {
@@ -115,6 +130,21 @@ export async function assertProjectAccess(ctx: ProjectScopeCtx, projectId: strin
   if (roleOf(ctx.session.user) === "user") {
     await assertMember(projectId, ctx.session.user.id, "Project not found");
   }
+  return row;
+}
+
+/**
+ * `assertProjectAccess` plus "and it is not archived". For mutations.
+ *
+ * A separately named function rather than a `{ write: true }` argument on the
+ * one above, because the whole read-only rule rests on ~30 call sites choosing
+ * correctly: a wrong *name* is visible in a diff, a missing argument is not.
+ * Queries keep the read variant — an archived project must stay readable.
+ */
+export async function assertProjectWritable(ctx: ProjectScopeCtx, projectId: string) {
+  const row = await assertProjectAccess(ctx, projectId);
+  assertNotArchived(row.archivedAt);
+  return row;
 }
 
 /**
@@ -160,7 +190,11 @@ export function projectAccessFilter(ctx: ProjectScopeCtx) {
 /** Notes carry no company of their own — scope comes from the parent project. */
 export async function assertNoteAccess(ctx: ProjectScopeCtx, noteId: string) {
   const [row] = await db
-    .select({ companyId: project.companyId, projectId: project.id })
+    .select({
+      companyId: project.companyId,
+      projectId: project.id,
+      archivedAt: project.archivedAt,
+    })
     .from(projectNote)
     .innerJoin(project, eq(projectNote.projectId, project.id))
     .where(eq(projectNote.id, noteId));
@@ -170,6 +204,14 @@ export async function assertNoteAccess(ctx: ProjectScopeCtx, noteId: string) {
   if (roleOf(ctx.session.user) === "user") {
     await assertMember(row.projectId, ctx.session.user.id, "Note not found");
   }
+  return row;
+}
+
+/** `assertNoteAccess` plus the archived gate. See `assertProjectWritable`. */
+export async function assertNoteWritable(ctx: ProjectScopeCtx, noteId: string) {
+  const row = await assertNoteAccess(ctx, noteId);
+  assertNotArchived(row.archivedAt);
+  return row;
 }
 
 /**

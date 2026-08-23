@@ -115,6 +115,7 @@ test("the reference workbook produces a high-confidence guided import proposal",
     suggestedScheduleStartDate: "2026-05-03",
     suggestedEndDate: "2026-08-29",
     periodType: "weekly",
+    periodLengthDays: null,
     periodCount: 17,
     confidence: "high",
   });
@@ -158,6 +159,7 @@ test("a confirmed plan cannot reference data rows above its header", () => {
     suggestedScheduleStartDate: null,
     suggestedEndDate: null,
     periodType: "weekly",
+    periodLengthDays: null,
     periodCount: 0,
     confidence: "low",
     warnings: [],
@@ -191,6 +193,7 @@ test("a row cannot be both a section and excluded", () => {
     suggestedScheduleStartDate: null,
     suggestedEndDate: null,
     periodType: "weekly",
+    periodLengthDays: null,
     periodCount: 0,
     confidence: "low",
     warnings: [],
@@ -213,6 +216,7 @@ test("confirmation regenerates and validates the complete weekly schedule", asyn
       scheduleStart: "2026-05-03",
       endDate: "2026-08-29",
       periodType: "weekly",
+      periodLengthDays: null,
     },
   });
 
@@ -241,6 +245,7 @@ test("reference actuals cannot be attached to a shifted reporting calendar", asy
         scheduleStart: "2026-05-10",
         endDate: "2026-09-05",
         periodType: "weekly",
+        periodLengthDays: null,
       },
     }),
   ).rejects.toThrow("do not match the calendar");
@@ -263,6 +268,7 @@ test("a short confirmed calendar reports the period mismatch and suggested end d
         scheduleStart: "2026-05-03",
         endDate: "2026-05-30",
         periodType: "weekly",
+        periodLengthDays: null,
       },
     });
   } catch (error) {
@@ -296,6 +302,7 @@ test("an excessive confirmed calendar still returns the workbook recovery date",
         scheduleStart: "2026-05-03",
         endDate: "2040-12-31",
         periodType: "weekly",
+        periodLengthDays: null,
       },
     });
   } catch (error) {
@@ -355,6 +362,7 @@ test("a user can explicitly exclude a priced row from the draft", async () => {
       scheduleStart: "2026-05-03",
       endDate: "2026-08-29",
       periodType: "weekly",
+      periodLengthDays: null,
     },
   });
   expect(prepared.rows).toHaveLength(21);
@@ -414,6 +422,7 @@ test("confirmation recomputes a tampered period count from the workbook", async 
     suggestedScheduleStartDate: null,
     suggestedEndDate: null,
     periodType: "weekly",
+    periodLengthDays: null,
     periodCount: 1,
     confidence: "low",
     warnings: [],
@@ -432,6 +441,7 @@ test("confirmation recomputes a tampered period count from the workbook", async 
         scheduleStart: "2026-01-01",
         endDate: "2026-01-07",
         periodType: "weekly",
+        periodLengthDays: null,
       },
     });
   } catch (error) {
@@ -502,6 +512,7 @@ test("generic review includes trailing priced rows even when their description i
     suggestedScheduleStartDate: null,
     suggestedEndDate: null,
     periodType: "weekly",
+    periodLengthDays: null,
     periodCount: 1,
     confidence: "low",
     warnings: [],

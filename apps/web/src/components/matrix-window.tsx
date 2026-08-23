@@ -10,7 +10,9 @@ import {
   getMatrixWindow,
   getVariableAnchor,
   getVariableItemOffset,
+  scrollEdges,
   type MatrixWindow,
+  type ScrollEdges,
 } from "@/lib/matrix-window";
 
 export const MATRIX_ROW_LIMIT = 24;
@@ -129,6 +131,22 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
    */
   const [containerWidth, setContainerWidth] = useState(0);
 
+  /**
+   * Whether the container still hides columns off either side.
+   *
+   * Measured here rather than by a scroll listener of the affordance's own, for
+   * the same reason `containerWidth` is: `update` already runs on every scroll
+   * and on every resize this hook observes, and a second listener on one node
+   * is a second chance to disagree with the first.
+   *
+   * Both false until the first measurement, which is also the honest answer for
+   * a grid that has not been laid out yet.
+   */
+  const [edges, setEdges] = useState<ScrollEdges>({
+    canScrollLeft: false,
+    canScrollRight: false,
+  });
+
   const [state, setState] = useState<{
     window: MatrixWindow;
     rowCount: number;
@@ -148,6 +166,16 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
       // the observer sees — the loop this whole measurement has to avoid.
       const width = Math.floor(element.clientWidth);
       setContainerWidth((current) => (Math.abs(current - width) > 1 ? width : current));
+
+      // Not `next`: the window calculation below already owns that name in the
+      // enclosing scope, and shadowing it here reads as the same value.
+      const nextEdges = scrollEdges(element);
+      setEdges((current) =>
+        current.canScrollLeft === nextEdges.canScrollLeft &&
+        current.canScrollRight === nextEdges.canScrollRight
+          ? current
+          : nextEdges,
+      );
     }
 
     const next = calculateWindow(
@@ -285,6 +313,7 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
     rowWindow: window.rows,
     columnWindow: window.columns,
     containerWidth,
+    edges,
     onScroll: (event: UIEvent<HTMLDivElement>) => update(event.currentTarget),
   };
 }

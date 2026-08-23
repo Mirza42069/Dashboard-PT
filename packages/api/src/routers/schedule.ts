@@ -1,5 +1,6 @@
 import { db } from "@DashboardV2/db";
 import {
+  PERIOD_TYPES,
   boqItem,
   boqItemDistribution,
   boqVersion,
@@ -17,9 +18,14 @@ import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { databaseErrorIncludes } from "../lib/database-error";
-import { getVersion, leafPredicate } from "../lib/boq";
-import { assertProjectAccess, type ProjectScopeCtx } from "../lib/scope";
-import { PeriodRangeError, generatePeriods } from "../lib/periods";
+import { getVersion, getWritableVersion, leafPredicate } from "../lib/boq";
+import { assertProjectAccess, assertProjectWritable, type ProjectScopeCtx } from "../lib/scope";
+import {
+  CUSTOM_PERIOD_MAX_DAYS,
+  CUSTOM_PERIOD_MIN_DAYS,
+  PeriodRangeError,
+  generatePeriods,
+} from "../lib/periods";
 import { toAmount } from "../lib/money";
 import { planCells, validatePlanWindow } from "../lib/schedule-plan";
 
@@ -37,7 +43,7 @@ const toPctString = (value: number) => value.toFixed(6);
 const MAX_PLAN_CELLS = 20_000;
 
 async function requireScheduleDraft(ctx: ProjectScopeCtx, versionId: string) {
-  const version = await getVersion(ctx, versionId);
+  const version = await getWritableVersion(ctx, versionId);
   const editable =
     version.scheduleStatus === "draft" &&
     (version.status === "draft" || version.status === "active");
@@ -164,11 +170,18 @@ export const scheduleRouter = router({
         startDate: z.iso.date(),
         endDate: z.iso.date(),
         scheduleStart: z.iso.date().nullish(),
-        periodType: z.enum(["weekly", "biweekly", "monthly"]),
+        periodType: z.enum(PERIOD_TYPES),
+        /** Required by "custom" and ignored by every other cadence. */
+        periodLengthDays: z
+          .number()
+          .int()
+          .min(CUSTOM_PERIOD_MIN_DAYS)
+          .max(CUSTOM_PERIOD_MAX_DAYS)
+          .nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+      await assertProjectWritable(ctx, input.projectId);
       const version = await requireScheduleDraft(ctx, input.versionId);
       if (version.projectId !== input.projectId) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Baseline does not belong to this project." });
@@ -178,6 +191,12 @@ export const scheduleRouter = router({
       }
       if (input.scheduleStart && input.scheduleStart < input.startDate) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Reporting cannot start before the project." });
+      }
+      if (input.periodType === "custom" && !input.periodLengthDays) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `A custom cadence needs a cycle of ${CUSTOM_PERIOD_MIN_DAYS} to ${CUSTOM_PERIOD_MAX_DAYS} days.`,
+        });
       }
 
       const [[recorded], [activeSchedule]] = await Promise.all([
@@ -211,6 +230,10 @@ export const scheduleRouter = router({
           endDate: input.endDate,
           scheduleStart: input.scheduleStart ?? null,
           periodType: input.periodType,
+          // Nulled for every calendar cadence, so a length left over from an
+          // earlier custom setting cannot outlive the switch away from it.
+          periodLengthDays:
+            input.periodType === "custom" ? (input.periodLengthDays ?? null) : null,
         }).where(eq(project.id, input.projectId)),
       ]);
       return { success: true };
@@ -226,7 +249,7 @@ export const scheduleRouter = router({
   generatePeriods: companyPermissionProcedure("project:write")
     .input(z.object({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+      await assertProjectWritable(ctx, input.projectId);
       const [target] = await db.select().from(project).where(eq(project.id, input.projectId));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
@@ -294,7 +317,7 @@ export const scheduleRouter = router({
 
       let periods;
       try {
-        periods = generatePeriods(start, finish, target.periodType);
+        periods = generatePeriods(start, finish, target.periodType, target.periodLengthDays);
       } catch (error) {
         if (error instanceof PeriodRangeError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: error.message });

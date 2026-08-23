@@ -27,9 +27,12 @@ type Errors = { subject?: string; message?: string };
 export default function ContactSupportDialog({
   open,
   onOpenChange,
+  onSubmitted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Receives the new request's id, so the caller can open the thread on it. */
+  onSubmitted?: (id: string) => void;
 }) {
   const t = useT();
   const pathname = usePathname();
@@ -82,13 +85,14 @@ export default function ContactSupportDialog({
     }
 
     try {
-      await submit.mutateAsync({
+      const created = await submit.mutateAsync({
         subject: cleanSubject,
         message: `${cleanMessage}${pageSuffix}`,
       });
       reset();
       onOpenChange(false);
       toast.success(t.support.requestSent);
+      onSubmitted?.(created.id);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : t.support.submitFailed);
     }

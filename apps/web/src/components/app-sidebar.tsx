@@ -8,11 +8,9 @@ import SupportNavItem from "./support-nav-item";
 export default function AppSidebar({
   role,
   collapsed,
-  onContactSupport,
 }: {
   role: Role;
   collapsed: boolean;
-  onContactSupport: () => void;
 }) {
   return (
     <aside
@@ -58,11 +56,7 @@ export default function AppSidebar({
         <AppNav role={role} collapsed={collapsed} />
       </div>
       <div className="shrink-0 border-t px-3 py-3">
-        <SupportNavItem
-          role={role}
-          collapsed={collapsed}
-          onContactSupport={onContactSupport}
-        />
+        <SupportNavItem role={role} collapsed={collapsed} />
       </div>
     </aside>
   );

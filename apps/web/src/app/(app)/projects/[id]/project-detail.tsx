@@ -10,13 +10,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@DashboardV2/ui/components/alert-dialog";
+import { Alert, AlertAction, AlertDescription } from "@DashboardV2/ui/components/alert";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent } from "@DashboardV2/ui/components/card";
 import { Empty, EmptyHeader, EmptyTitle } from "@DashboardV2/ui/components/empty";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
-import { useQuery } from "@tanstack/react-query";
-import { AiFile, ArrowLeft, Pencil } from "@DashboardV2/ui/components/icons";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AiFile, Archive, ArrowLeft, Pencil } from "@DashboardV2/ui/components/icons";
 import type { Route } from "next";
 import dynamic from "next/dynamic";
 import Link from "next/link";
@@ -26,7 +27,10 @@ import { useState } from "react";
 import { QueryError } from "@/components/query-error";
 import ProjectBuildingScene from "@/components/project-building-scene";
 import { StatusBadge } from "@/components/status-badge";
+import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { toast } from "@/lib/toast";
+import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import ProjectOverview from "./project-overview";
@@ -66,6 +70,7 @@ const ProjectWorkbookUpdateDialog = dynamic(() => import("./project-workbook-upd
 export default function ProjectDetail({
   projectId,
   currentUserId,
+  canArchive,
   canUpdateProject,
   canWrite,
   canManageMembers,
@@ -74,6 +79,7 @@ export default function ProjectDetail({
 }: {
   projectId: string;
   currentUserId: string;
+  canArchive: boolean;
   canUpdateProject: boolean;
   canWrite: boolean;
   canManageMembers: boolean;
@@ -81,6 +87,7 @@ export default function ProjectDetail({
   canLock: boolean;
 }) {
   const t = useT();
+  const { formatDateTime } = useFormat();
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -114,7 +121,9 @@ export default function ProjectDetail({
     applyTab(value);
   }
 
+  const queryClient = useQueryClient();
   const projectQuery = useQuery(trpc.project.get.queryOptions({ id: projectId }));
+  const setArchived = useMutation(trpc.project.setArchived.mutationOptions());
 
   const project = projectQuery.data;
 
@@ -141,6 +150,28 @@ export default function ProjectDetail({
     );
   }
 
+  /**
+   * An archived project is readable but frozen.
+   *
+   * The four capability flags below are what every tab is already handed, so
+   * clearing them here is what makes all nine read-only at once. This is the
+   * courtesy half — the procedures refuse the write either way (see
+   * assertProjectWritable in packages/api/src/lib/scope.ts). Doing both means
+   * nobody is offered a control that would only fail.
+   */
+  const archived = project.archivedAt !== null;
+  const writable = canWrite && !archived;
+
+  async function restore() {
+    try {
+      await setArchived.mutateAsync({ ids: [projectId], archived: false });
+      await queryClient.invalidateQueries(trpc.project.pathFilter());
+      toast.success(plural(t.projects.restoredToast, 1));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.projects.archiveFailed);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -152,13 +183,13 @@ export default function ProjectDetail({
           {t.projects.allProjects}
         </Link>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {canUpdateProject && canWrite && (
+          {canUpdateProject && writable && (
             <Button variant="outline" size="sm" onClick={() => setUpdateOpen(true)}>
               <AiFile />
               {t.projectUpdate.trigger}
             </Button>
           )}
-          {canUpdateProject && (
+          {canUpdateProject && !archived && (
             <Button
               variant="outline"
               size="sm"
@@ -193,6 +224,24 @@ export default function ProjectDetail({
         </CardContent>
       </Card>
 
+      {archived && (
+        <Alert>
+          <Archive />
+          <AlertDescription>
+            {interpolate(t.projects.archivedBanner, {
+              date: formatDateTime(project.archivedAt),
+            })}
+          </AlertDescription>
+          {canArchive && (
+            <AlertAction>
+              <Button variant="outline" size="sm" onClick={() => void restore()}>
+                {t.projects.restore}
+              </Button>
+            </AlertAction>
+          )}
+        </Alert>
+      )}
+
       <Tabs value={activeTab} onValueChange={selectTab}>
         <div className="-mx-1 overflow-x-auto px-1 pb-1">
           <TabsList variant="line" className="min-w-max">
@@ -217,7 +266,7 @@ export default function ProjectDetail({
             {activeTab === value && (
               <BaselineTab
                 projectId={projectId}
-                canEdit={canWrite}
+                canEdit={writable}
                 step={BASELINE_STEP_TABS[value]}
                 onStepChange={(next) =>
                   selectTab(next === "review" ? "baseline" : next)
@@ -231,9 +280,9 @@ export default function ProjectDetail({
           {activeTab === "progress" && (
             <ProgressTab
               projectId={projectId}
-              canEdit={canWrite}
-              canReview={canReview}
-              canLock={canLock}
+              canEdit={writable}
+              canReview={canReview && !archived}
+              canLock={canLock && !archived}
             />
           )}
         </TabsContent>
@@ -246,16 +295,16 @@ export default function ProjectDetail({
           {activeTab === "daily" && (
             <DailyReportsTab
               projectId={projectId}
-              canEdit={canWrite}
-              canReview={canReview}
-              canLock={canLock}
+              canEdit={writable}
+              canReview={canReview && !archived}
+              canLock={canLock && !archived}
               onDirtyChange={setDailyDirty}
             />
           )}
         </TabsContent>
 
         <TabsContent value="notes">
-          {activeTab === "notes" && <NotesTab projectId={projectId} canEdit={canWrite} />}
+          {activeTab === "notes" && <NotesTab projectId={projectId} canEdit={writable} />}
         </TabsContent>
 
         {canManageMembers && (
@@ -281,7 +330,7 @@ export default function ProjectDetail({
         />
       )}
 
-      {canUpdateProject && canWrite && updateOpen && (
+      {canUpdateProject && writable && updateOpen && (
         <ProjectWorkbookUpdateDialog
           open
           projectId={projectId}

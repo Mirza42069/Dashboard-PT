@@ -17,6 +17,83 @@ const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 8
 /** Guards against a typo in the contract dates spawning thousands of columns. */
 export const MAX_PERIODS = 600;
 
+/**
+ * Bounds on a custom cadence's cycle length, in days.
+ *
+ * One is the shortest cycle there is (and is what `daily` already covers, so a
+ * custom 1 is merely redundant rather than wrong). Ninety is roughly where
+ * `quarterly` takes over and is also the point past which a "period" stops
+ * being a reporting rhythm and becomes a phase.
+ */
+export const CUSTOM_PERIOD_MIN_DAYS = 1;
+export const CUSTOM_PERIOD_MAX_DAYS = 90;
+
+/** The single-letter prefix each cadence numbers its periods with. */
+const LABEL_PREFIX: Record<PeriodType, string> = {
+  daily: "D",
+  weekly: "W",
+  biweekly: "P",
+  semimonthly: "S",
+  monthly: "M",
+  quarterly: "Q",
+  custom: "C",
+};
+
+/**
+ * The inclusive end date of the period starting at `cursor`.
+ *
+ * The one place the cadences are defined. `generatePeriods` and
+ * `endDateForPeriodCount` used to carry a copy each, which was survivable with
+ * three cadences and would be seven chances to disagree with seven — and the
+ * two disagreeing is exactly the bug nobody notices until a schedule has been
+ * baselined against one and validated against the other.
+ *
+ * A short first bucket is deliberate for every calendar cadence: starting on
+ * the 8th of a month gives a semi-monthly axis an 8-15 bucket and whole halves
+ * after it, the same way the monthly rule already gives a short first month.
+ * The axis then lines up with the calendar rather than drifting off it.
+ */
+function periodEnd(cursor: Date, type: PeriodType, lengthDays: number | null): Date {
+  const year = cursor.getUTCFullYear();
+  const month = cursor.getUTCMonth();
+
+  switch (type) {
+    case "daily":
+      return cursor;
+    case "weekly":
+      return addDays(cursor, 6);
+    case "biweekly":
+      return addDays(cursor, 13);
+    case "semimonthly":
+      // Day 0 of the next month is the last day of this one, the same trick the
+      // monthly arm uses.
+      return cursor.getUTCDate() <= 15
+        ? new Date(Date.UTC(year, month, 15))
+        : new Date(Date.UTC(year, month + 1, 0));
+    case "monthly":
+      return new Date(Date.UTC(year, month + 1, 0));
+    case "quarterly":
+      return new Date(Date.UTC(year, Math.floor(month / 3) * 3 + 3, 0));
+    case "custom": {
+      // Loud rather than defaulting. A caller that forgets to pass the length
+      // would otherwise silently generate a whole time axis at the wrong
+      // cadence — and nothing downstream would notice until the S-curve was
+      // already wrong.
+      if (
+        !Number.isInteger(lengthDays) ||
+        lengthDays === null ||
+        lengthDays < CUSTOM_PERIOD_MIN_DAYS ||
+        lengthDays > CUSTOM_PERIOD_MAX_DAYS
+      ) {
+        throw new PeriodRangeError(
+          `A custom cadence needs a cycle of ${CUSTOM_PERIOD_MIN_DAYS} to ${CUSTOM_PERIOD_MAX_DAYS} days.`,
+        );
+      }
+      return addDays(cursor, lengthDays - 1);
+    }
+  }
+}
+
 export type GeneratedPeriod = {
   periodIndex: number;
   label: string;
@@ -26,21 +103,34 @@ export type GeneratedPeriod = {
 
 export class PeriodRangeError extends Error {}
 
-/** The inclusive end date of an exact number of reporting periods. */
-export function endDateForPeriodCount(start: string, count: number, type: PeriodType): string {
+/**
+ * The inclusive end date of an exact number of reporting periods.
+ *
+ * Walks the same `periodEnd` steps `generatePeriods` walks, so the two agree by
+ * construction rather than by two implementations happening to match.
+ *
+ * `lengthDays` is required for a custom cadence and ignored for every other —
+ * see the note on the column in the schema for why a stale value must not bend
+ * a calendar axis.
+ */
+export function endDateForPeriodCount(
+  start: string,
+  count: number,
+  type: PeriodType,
+  lengthDays: number | null = null,
+): string {
   if (!Number.isInteger(count) || count < 1 || count > MAX_PERIODS) {
     throw new PeriodRangeError(`The schedule must contain between 1 and ${MAX_PERIODS} periods.`);
   }
-  let end = parse(start);
-  if (Number.isNaN(end.getTime())) throw new PeriodRangeError("Choose a valid schedule start date.");
+  let cursor = parse(start);
+  if (Number.isNaN(cursor.getTime())) {
+    throw new PeriodRangeError("Choose a valid schedule start date.");
+  }
 
+  let end = cursor;
   for (let index = 0; index < count; index++) {
-    if (type === "monthly") {
-      end = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0));
-    } else {
-      end = addDays(end, (type === "biweekly" ? 14 : 7) - 1);
-    }
-    if (index < count - 1) end = addDays(end, 1);
+    end = periodEnd(cursor, type, lengthDays);
+    cursor = addDays(end, 1);
   }
   return iso(end);
 }
@@ -55,6 +145,7 @@ export function generatePeriods(
   start: string,
   finish: string,
   type: PeriodType,
+  lengthDays: number | null = null,
 ): GeneratedPeriod[] {
   const from = parse(start);
   const to = parse(finish);
@@ -70,18 +161,8 @@ export function generatePeriods(
     if (index > MAX_PERIODS) {
       throw new PeriodRangeError("That date range needs too many periods — check the contract dates.");
     }
-    let end: Date;
-    let label: string;
-
-    if (type === "monthly") {
-      // Day 0 of next month is the last day of this one. A mid-month start
-      // therefore gives a short first bucket and whole months after it.
-      end = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0));
-      label = `M${index}`;
-    } else {
-      end = addDays(cursor, (type === "biweekly" ? 14 : 7) - 1);
-      label = `${type === "biweekly" ? "P" : "W"}${index}`;
-    }
+    let end = periodEnd(cursor, type, lengthDays);
+    const label = `${LABEL_PREFIX[type]}${index}`;
 
     if (end > to) end = to;
 

@@ -21,7 +21,7 @@ import { runBatch } from "../lib/batch";
 import { databaseErrorIncludes } from "../lib/database-error";
 import {
   WEIGHT_TOLERANCE,
-  getVersion,
+  getWritableVersion,
   leafPredicate,
   leafWeightTotal,
   recalcWeights,
@@ -32,7 +32,7 @@ import {
   serializeItem,
   serializeVersion,
 } from "../lib/boq";
-import { assertProjectAccess } from "../lib/scope";
+import { assertProjectAccess, assertProjectWritable } from "../lib/scope";
 
 const itemSchema = z.object({
   code: z.string().trim().min(1, "Code is required").max(32),
@@ -188,7 +188,7 @@ export const boqRouter = router({
   getOrCreateDraft: companyPermissionProcedure("project:write")
     .input(z.object({ projectId: z.string().min(1), title: z.string().trim().max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+      await assertProjectWritable(ctx, input.projectId);
       const label = await projectLabel(ctx.companyId, input.projectId);
 
       const [existing] = await db
@@ -327,7 +327,7 @@ export const boqRouter = router({
       }
 
       await runBatch(statements);
-      const created = await getVersion(ctx, versionId);
+      const created = await getWritableVersion(ctx, versionId);
 
       await recordActivity(ctx, {
         action: "created",
@@ -349,7 +349,7 @@ export const boqRouter = router({
         db.execute(recalcWeightsStatement(input.versionId)),
         db.execute(refreshTotalValueStatement(input.versionId)),
       ]);
-      const version = await getVersion(ctx, input.versionId);
+      const version = await getWritableVersion(ctx, input.versionId);
       return { version: serializeVersion(version), weightTotal: await leafWeightTotal(input.versionId) };
     }),
 
@@ -362,7 +362,7 @@ export const boqRouter = router({
   activate: companyPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const draft = await getVersion(ctx, input.versionId);
+      const draft = await getWritableVersion(ctx, input.versionId);
       const activatable =
         draft.scheduleStatus === "draft" &&
         (draft.status === "draft" || draft.status === "active");
@@ -534,7 +534,7 @@ export const boqRouter = router({
         }
         throw error;
       }
-      const activated = await getVersion(ctx, input.versionId);
+      const activated = await getWritableVersion(ctx, input.versionId);
 
       await recordActivity(ctx, {
         action: "baselined",
@@ -648,7 +648,7 @@ export const boqRouter = router({
     .input(itemSchema.partial().extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const current = await requireDraftForItem(ctx, input.id);
-      const version = await getVersion(ctx, current.boqVersionId);
+      const version = await getWritableVersion(ctx, current.boqVersionId);
       const { id, code, quantity, unitRate, weight, ...rest } = input;
 
       if (code && code !== current.code) {
@@ -688,7 +688,7 @@ export const boqRouter = router({
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const item = await requireDraftForItem(ctx, input.id);
-      const version = await getVersion(ctx, item.boqVersionId);
+      const version = await getWritableVersion(ctx, item.boqVersionId);
 
       try {
         await db.batch([

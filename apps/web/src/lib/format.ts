@@ -51,6 +51,23 @@ function createFormatters(intlLocale: string) {
   /** "Mei" / "May" — the month band above a schedule grid. */
   const monthOnly = new Intl.DateTimeFormat(intlLocale, { month: "long", timeZone: "UTC" });
 
+  /**
+   * "23 Agu 2026, 21.22" / "Aug 23, 2026, 9:22 PM". No `timeZone` on purpose:
+   * unlike the date-only formatters above, these are real instants and belong in
+   * whatever zone the reader is sitting in.
+   *
+   * `hour: "numeric"`, not "2-digit": the padded form is right on Indonesian's
+   * 24-hour clock but renders "09:22 PM" on English's 12-hour one, and a padded
+   * 12-hour time is wrong in a way a reader notices.
+   */
+  const dateTime = new Intl.DateTimeFormat(intlLocale, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
   /** Keeps the minus outside the symbol: -Rp50.000, not Rp-50.000. */
   const withPrefix = (value: number, format: Intl.NumberFormat) =>
     `${value < 0 ? "-" : ""}${CURRENCY_PREFIX}${format.format(Math.abs(value))}`;
@@ -112,16 +129,20 @@ function createFormatters(intlLocale: string) {
       return Number.isNaN(date.getTime()) ? monthKey : monthOnly.format(date);
     },
 
-    /** Timestamps (createdAt etc.) are full ISO strings; local time is correct. */
+    /**
+     * Timestamps (createdAt etc.) are full ISO strings; local time is correct.
+     *
+     * Carries the time of day, which is the whole reason to reach for this over
+     * formatDate — an audit line that says only "23 Agu 2026" cannot tell you
+     * which of the day's four approvals it refers to. It renders through an
+     * Intl.DateTimeFormat rather than toLocaleDateString, which ignores `hour`
+     * and `minute` outright.
+     */
     formatDateTime(value: string | Date | null | undefined) {
       if (!value) return "—";
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return "—";
-      return date.toLocaleDateString(intlLocale, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
+      return dateTime.format(date);
     },
   };
 }

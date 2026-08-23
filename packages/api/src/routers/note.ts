@@ -6,7 +6,11 @@ import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
-import { assertNoteAccess, assertProjectAccess } from "../lib/scope";
+import {
+  assertNoteWritable,
+  assertProjectAccess,
+  assertProjectWritable,
+} from "../lib/scope";
 
 export const noteRouter = router({
   listByProject: companyPermissionProcedure("project:read")
@@ -59,7 +63,7 @@ export const noteRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+      await assertProjectWritable(ctx, input.projectId);
       const [target] = await db
         .select({ id: project.id, code: project.code, name: project.name })
         .from(project)
@@ -106,7 +110,7 @@ export const noteRouter = router({
       if (!photo) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Photo not found" });
       }
-      await assertNoteAccess(ctx, photo.noteId);
+      await assertNoteWritable(ctx, photo.noteId);
 
       await db.delete(notePhoto).where(eq(notePhoto.id, input.id));
       return { success: true };
@@ -115,7 +119,7 @@ export const noteRouter = router({
   delete: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await assertNoteAccess(ctx, input.id);
+      await assertNoteWritable(ctx, input.id);
       // Bytes live in note_photo rows, so the cascade removes them too.
       await db.delete(projectNote).where(eq(projectNote.id, input.id));
       return { success: true };

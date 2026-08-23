@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@DashboardV2/ui/components/button";
-import { Inbox } from "@DashboardV2/ui/components/icons";
+import { Bell } from "@DashboardV2/ui/components/icons";
 import {
   Popover,
   PopoverContent,
@@ -67,7 +67,7 @@ export default function ActivityPopover() {
             size="icon-sm"
             aria-label={t.activity.title}
           >
-            <Inbox />
+            <Bell />
           </Button>
         }
       />

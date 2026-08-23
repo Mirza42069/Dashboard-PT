@@ -19,13 +19,7 @@ import AppNav from "./app-nav";
 import { BrandMark } from "./brand";
 import SupportNavItem from "./support-nav-item";
 
-export default function MobileNav({
-  role,
-  onContactSupport,
-}: {
-  role: Role;
-  onContactSupport: () => void;
-}) {
+export default function MobileNav({ role }: { role: Role }) {
   const t = useT();
   const [open, setOpen] = useState(false);
 
@@ -47,14 +41,7 @@ export default function MobileNav({
         <div className="flex min-h-0 flex-1 flex-col px-3 pb-4">
           <AppNav role={role} onNavigate={() => setOpen(false)} />
           <div className="mt-auto border-t pt-3">
-            <SupportNavItem
-              role={role}
-              onNavigate={() => setOpen(false)}
-              onContactSupport={() => {
-                setOpen(false);
-                requestAnimationFrame(onContactSupport);
-              }}
-            />
+            <SupportNavItem role={role} onNavigate={() => setOpen(false)} />
           </div>
         </div>
       </SheetContent>

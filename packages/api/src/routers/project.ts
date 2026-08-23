@@ -9,7 +9,7 @@ import {
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, ilike, inArray, notInArray, or, sql, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNotNull, notInArray, or, sql, sum } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, companyProcedure, router } from "../index";
@@ -25,7 +25,13 @@ import { type BoqMetrics, boqMetricsByProject, projectExceptions } from "../lib/
 import { percentOf, toAmount } from "../lib/money";
 import { hasPermission, roleOf } from "../lib/permissions";
 import { canAssignProjectManager, projectMembershipIds } from "../lib/project-manager";
-import { assertProjectAccess, assertUserAssignable, projectAccessFilter } from "../lib/scope";
+import {
+  assertProjectAccess,
+  assertProjectWritable,
+  assertUserAssignable,
+  liveProjectsOnly,
+  projectAccessFilter,
+} from "../lib/scope";
 
 const statusSchema = z.enum(PROJECT_STATUSES);
 
@@ -71,6 +77,15 @@ const upsertSchema = z.object({
   startDate: z.iso.date().nullish(),
   endDate: z.iso.date().nullish(),
   progress: z.number().int().min(0).max(100).optional(),
+  /**
+   * `periodLengthDays` is deliberately NOT writable here.
+   *
+   * A custom cadence is a pair — the type and its cycle length — and letting
+   * two routers set the halves independently is how the pair ends up
+   * inconsistent. `schedule.updateSettings` owns both together and nulls the
+   * length whenever the cadence is not custom; the create and update mutations
+   * below refuse "custom" and point at it.
+   */
   periodType: z.enum(PERIOD_TYPES).optional(),
   scheduleStart: z.iso.date().nullish(),
   managerId: z.string().min(1).nullish(),
@@ -78,6 +93,16 @@ const upsertSchema = z.object({
 });
 
 const createSchema = upsertSchema.omit({ status: true, progress: true });
+
+/**
+ * A custom cadence carries a cycle length this router has no field for, so it
+ * can only be set where both halves are set together.
+ */
+const customCadenceElsewhere = () =>
+  new TRPCError({
+    code: "BAD_REQUEST",
+    message: "Set a custom reporting cadence from the schedule's baseline timing.",
+  });
 
 /** Tickets remain open until somebody explicitly closes them. */
 async function openTicketsByProject(projectIds: string[]) {
@@ -133,6 +158,8 @@ export const projectRouter = router({
       z.object({
         search: z.string().trim().max(200).default(""),
         status: statusSchema.optional(),
+        /** The Archive page. Everything else wants live projects only. */
+        archived: z.boolean().default(false),
         limit: z.number().int().min(1).max(100).default(25),
         cursor: createdAtCursorSchema.optional(),
       }),
@@ -140,6 +167,7 @@ export const projectRouter = router({
     .query(async ({ ctx, input }) => {
       const filters = [
         projectAccessFilter(ctx),
+        input.archived ? isNotNull(project.archivedAt) : liveProjectsOnly,
         input.search
           ? or(
               ilike(project.name, `%${input.search}%`),
@@ -200,7 +228,7 @@ export const projectRouter = router({
     return db
       .select({ id: project.id, code: project.code, name: project.name, status: project.status })
       .from(project)
-      .where(projectAccessFilter(ctx))
+      .where(and(projectAccessFilter(ctx), liveProjectsOnly))
       .orderBy(asc(project.code));
   }),
 
@@ -280,7 +308,7 @@ export const projectRouter = router({
       const rows = await db
         .select({ id: project.id, code: project.code, name: project.name, client: project.client })
         .from(project)
-        .where(projectAccessFilter(ctx));
+        .where(and(projectAccessFilter(ctx), liveProjectsOnly));
 
       const metrics = await boqMetricsByProject(rows.map((row) => row.id));
 
@@ -323,7 +351,7 @@ export const projectRouter = router({
         limit: input?.limit ?? 25,
         offset: input?.offset ?? 0,
       };
-      const rows = await projectExceptions(projectAccessFilter(ctx));
+      const rows = await projectExceptions(and(projectAccessFilter(ctx), liveProjectsOnly));
       const canReview = hasPermission(roleOf(ctx.session.user), "progress:review");
 
       // Cancelled and completed projects are not exceptions — nobody is going to
@@ -407,7 +435,9 @@ export const projectRouter = router({
 
   /** Everything the dashboard needs, in one round trip. */
   summary: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
-    const inCompany = projectAccessFilter(ctx);
+    // Archived projects are out of the portfolio for counting purposes — the
+    // dashboard answers "what am I running", not "what have I ever run".
+    const inCompany = and(projectAccessFilter(ctx), liveProjectsOnly);
     const [projectRows, [baselineTotal], [openTicketRow]] = await Promise.all([
       db
         .select({ id: project.id, status: project.status })
@@ -498,6 +528,7 @@ export const projectRouter = router({
       if (input.startDate && input.endDate && input.endDate < input.startDate) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date" });
       }
+      if (input.periodType === "custom") throw customCadenceElsewhere();
       const manager = input.managerId
         ? { id: input.managerId, ...(await assertUserAssignable(ctx.companyId, input.managerId)) }
         : null;
@@ -555,7 +586,7 @@ export const projectRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id: projectId, code, ...rest } = input;
 
-      await assertProjectAccess(ctx, projectId);
+      await assertProjectWritable(ctx, projectId);
       const [current] = await db.select().from(project).where(eq(project.id, projectId));
       if (!current) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
@@ -569,6 +600,7 @@ export const projectRouter = router({
       if (startDate && endDate && endDate < startDate) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date" });
       }
+      if (rest.periodType === "custom") throw customCadenceElsewhere();
       // Only a *change* of manager is checked. The edit form resubmits whatever
       // is stored, so a project left over from when super admins were assignable
       // could not be saved at all: changing only its name re-sent the legacy
@@ -686,6 +718,54 @@ export const projectRouter = router({
    * Bulk counterpart of delete. Scoping shares the where clause with the id
    * filter so a cross-tenant id is simply not matched.
    */
+  /**
+   * File a project away, or bring it back.
+   *
+   * Bulk because the list it is driven from is a bulk-selection table, and one
+   * statement for thirty projects rather than thirty round trips.
+   *
+   * Gated on `project:delete` rather than `project:write`: archiving is what
+   * someone reaches for *instead of* deleting, so the two belong to the same
+   * person. It writes only `archivedAt` — the project's status, dates and every
+   * figure it recorded are left exactly as they were, which is the whole reason
+   * this is a timestamp and not a sixth status.
+   */
+  setArchived: companyPermissionProcedure("project:delete")
+    .input(
+      z.object({
+        ids: z.array(z.string().min(1)).min(1).max(100),
+        archived: z.boolean(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Scoped in the same statement as the id filter, like deleteMany: an id
+      // from another company is simply not matched, never reported as refused.
+      const targets = await db
+        .select({ id: project.id, code: project.code, name: project.name })
+        .from(project)
+        .where(and(inArray(project.id, input.ids), eq(project.companyId, ctx.companyId)));
+      if (targets.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "No projects found" });
+      }
+
+      const ids = targets.map((row) => row.id);
+      await db
+        .update(project)
+        .set({ archivedAt: input.archived ? new Date() : null })
+        .where(inArray(project.id, ids));
+
+      for (const target of targets) {
+        await recordActivity(ctx, {
+          action: input.archived ? "archived" : "restored",
+          entityType: "project",
+          entityId: target.id,
+          entityLabel: `${target.code} - ${target.name}`,
+        });
+      }
+
+      return { success: true, count: targets.length };
+    }),
+
   deleteMany: companyPermissionProcedure("project:delete")
     .input(
       z.object({
@@ -766,7 +846,7 @@ export const projectRouter = router({
   setMembers: companyPermissionProcedure("member:manage")
     .input(z.object({ projectId: z.string().min(1), userIds: z.array(z.string().min(1)).max(200) }))
     .mutation(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+      await assertProjectWritable(ctx, input.projectId);
 
       const [managedProject] = await db
         .select({

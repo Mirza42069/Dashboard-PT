@@ -12,12 +12,14 @@ import { cn } from "@DashboardV2/ui/lib/utils";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { deviationPosition } from "@DashboardV2/api/lib/deviation";
+import type { PeriodType } from "@DashboardV2/db/schema";
 
 import { DeviationBadge } from "@/components/deviation-badge";
 import { QueryError } from "@/components/query-error";
 import { TickBar } from "@/components/tick-bar";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { cadenceLabel } from "@/lib/cadence";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
@@ -28,7 +30,8 @@ type OverviewProject = {
   startDate: string | null;
   endDate: string | null;
   scheduleStart: string | null;
-  periodType: "weekly" | "biweekly" | "monthly";
+  periodType: PeriodType;
+  periodLengthDays: number | null;
   notes: string | null;
   manager: { name: string; email: string } | null;
   contractValue: number | null;
@@ -69,11 +72,7 @@ export default function ProjectOverview({ project }: { project: OverviewProject 
   // cross over and paint it red, which stopped working once red became the
   // bottom of the progress ramp — the number above and the deviation badge
   // below both already say it, in words this bar could not.
-  const cadence = {
-    weekly: t.projects.periodWeekly,
-    biweekly: t.projects.periodBiweekly,
-    monthly: t.projects.periodMonthly,
-  }[project.periodType];
+  const cadence = cadenceLabel(t, project.periodType, project.periodLengthDays);
 
   return (
     <div className="grid gap-3 xl:grid-cols-[16rem_minmax(0,1fr)_19rem]">

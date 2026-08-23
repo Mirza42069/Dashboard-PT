@@ -5,7 +5,7 @@ import { eq, sql } from "drizzle-orm";
 
 import { toAmount } from "./money";
 import { roleOf } from "./permissions";
-import { assertMember, type ProjectScopeCtx } from "./scope";
+import { assertMember, assertNotArchived, type ProjectScopeCtx } from "./scope";
 
 /**
  * Shared BoQ machinery.
@@ -59,8 +59,30 @@ export function leafPredicate(alias: string) {
  * a "forbidden" would confirm to one tenant that another tenant's row exists.
  */
 export async function getVersion(ctx: ProjectScopeCtx, versionId: string) {
+  return (await getVersionRow(ctx, versionId)).version;
+}
+
+/**
+ * `getVersion` plus the archived gate, for mutations.
+ *
+ * Named rather than flagged, for the reason spelled out on
+ * `assertProjectWritable` in lib/scope.ts.
+ */
+export async function getWritableVersion(ctx: ProjectScopeCtx, versionId: string) {
+  const row = await getVersionRow(ctx, versionId);
+  assertNotArchived(row.archivedAt);
+  return row.version;
+}
+
+/** The lookup both of the above share, so neither can drift from the other. */
+async function getVersionRow(ctx: ProjectScopeCtx, versionId: string) {
   const [row] = await db
-    .select({ version: boqVersion, companyId: project.companyId, projectId: project.id })
+    .select({
+      version: boqVersion,
+      companyId: project.companyId,
+      projectId: project.id,
+      archivedAt: project.archivedAt,
+    })
     .from(boqVersion)
     .innerJoin(project, eq(project.id, boqVersion.projectId))
     .where(eq(boqVersion.id, versionId));
@@ -71,7 +93,7 @@ export async function getVersion(ctx: ProjectScopeCtx, versionId: string) {
   if (roleOf(ctx.session.user) === "user") {
     await assertMember(row.projectId, ctx.session.user.id, "BoQ version not found");
   }
-  return row.version;
+  return row;
 }
 
 /**
@@ -80,7 +102,8 @@ export async function getVersion(ctx: ProjectScopeCtx, versionId: string) {
  * silently rewrite every deviation already reported.
  */
 export async function requireDraft(ctx: ProjectScopeCtx, versionId: string) {
-  const version = await getVersion(ctx, versionId);
+  // The writable variant: every caller of this is about to edit.
+  const version = await getWritableVersion(ctx, versionId);
   if (version.status !== "draft") {
     throw new TRPCError({
       code: "CONFLICT",
@@ -98,6 +121,7 @@ export async function requireDraftForItem(ctx: ProjectScopeCtx, itemId: string) 
       versionStatus: boqVersion.status,
       companyId: project.companyId,
       projectId: project.id,
+      archivedAt: project.archivedAt,
     })
     .from(boqItem)
     .innerJoin(boqVersion, eq(boqVersion.id, boqItem.boqVersionId))
@@ -110,6 +134,7 @@ export async function requireDraftForItem(ctx: ProjectScopeCtx, itemId: string) 
   if (roleOf(ctx.session.user) === "user") {
     await assertMember(row.projectId, ctx.session.user.id, "BoQ item not found");
   }
+  assertNotArchived(row.archivedAt);
   if (row.versionStatus !== "draft") {
     throw new TRPCError({
       code: "CONFLICT",

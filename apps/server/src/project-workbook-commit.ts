@@ -106,6 +106,7 @@ export async function commitProjectWorkbook(input: {
       scheduleStart: confirmed.project.scheduleStart ?? confirmed.project.startDate,
       dataDate,
       periodType: confirmed.project.periodType,
+      periodLengthDays: confirmed.project.periodLengthDays,
       status: "planning",
       progress: 0,
     }),

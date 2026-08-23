@@ -31,7 +31,9 @@ import { pageWithFocus } from "../lib/focused-page";
 import { roleOf } from "../lib/permissions";
 import {
   assertMember,
+  assertNotArchived,
   assertProjectAccess,
+  assertProjectWritable,
   assertUserAssignable,
   type ProjectScopeCtx,
 } from "../lib/scope";
@@ -121,7 +123,13 @@ async function audienceFor(ticketId: string, assigneeId: string | null, actorId:
 
 async function ticketInScope(ctx: ProjectScopeCtx, ticketId: string) {
   const [row] = await db
-    .select({ ticket, projectId: project.id, projectCode: project.code, projectName: project.name })
+    .select({
+      ticket,
+      projectId: project.id,
+      projectCode: project.code,
+      projectName: project.name,
+      archivedAt: project.archivedAt,
+    })
     .from(ticket)
     .innerJoin(project, eq(ticket.projectId, project.id))
     .where(and(eq(ticket.id, ticketId), eq(project.companyId, ctx.companyId)));
@@ -147,7 +155,13 @@ async function ticketInScope(ctx: ProjectScopeCtx, ticketId: string) {
  */
 async function ticketsInScope(ctx: ProjectScopeCtx, ticketIds: string[]) {
   const rows = await db
-    .select({ ticket, projectId: project.id, projectCode: project.code, projectName: project.name })
+    .select({
+      ticket,
+      projectId: project.id,
+      projectCode: project.code,
+      projectName: project.name,
+      archivedAt: project.archivedAt,
+    })
     .from(ticket)
     .innerJoin(project, eq(ticket.projectId, project.id))
     .where(and(inArray(ticket.id, ticketIds), eq(project.companyId, ctx.companyId)));
@@ -162,6 +176,26 @@ async function ticketsInScope(ctx: ProjectScopeCtx, ticketIds: string[]) {
       await assertMember(projectId, ctx.session.user.id, "Ticket not found");
     }
   }
+  return rows;
+}
+
+/** `ticketInScope` plus the archived gate. See `assertProjectWritable`. */
+async function ticketInScopeForWrite(ctx: ProjectScopeCtx, ticketId: string) {
+  const row = await ticketInScope(ctx, ticketId);
+  assertNotArchived(row.archivedAt);
+  return row;
+}
+
+/**
+ * The bulk writable variant.
+ *
+ * Checks every row rather than the first: a selection can span projects, and
+ * one archived project in it must stop the whole batch rather than let the
+ * others through and leave the caller guessing which applied.
+ */
+async function ticketsInScopeForWrite(ctx: ProjectScopeCtx, ticketIds: string[]) {
+  const rows = await ticketsInScope(ctx, ticketIds);
+  for (const row of rows) assertNotArchived(row.archivedAt);
   return rows;
 }
 
@@ -315,7 +349,7 @@ export const ticketRouter = router({
   create: companyPermissionProcedure("project:write")
     .input(fieldsSchema.extend({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+      await assertProjectWritable(ctx, input.projectId);
       await assertReferencesInProject(input.projectId, input.boqItemId, input.periodId);
       if (input.assigneeId) await assertUserAssignable(ctx.companyId, input.assigneeId);
       const [target] = await db
@@ -364,7 +398,7 @@ export const ticketRouter = router({
     .input(fieldsSchema.extend({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const { id, ...fields } = input;
-      const current = await ticketInScope(ctx, id);
+      const current = await ticketInScopeForWrite(ctx, id);
       await assertReferencesInProject(current.projectId, fields.boqItemId, fields.periodId);
       if (fields.assigneeId && fields.assigneeId !== current.ticket.assigneeId) {
         await assertUserAssignable(ctx.companyId, fields.assigneeId);
@@ -427,7 +461,7 @@ export const ticketRouter = router({
   setStatus: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1), status: statusSchema }))
     .mutation(async ({ ctx, input }) => {
-      const current = await ticketInScope(ctx, input.id);
+      const current = await ticketInScopeForWrite(ctx, input.id);
 
       if (input.status === "closed") {
         throw new TRPCError({
@@ -492,7 +526,7 @@ export const ticketRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const rows = await ticketsInScope(ctx, input.ids);
+      const rows = await ticketsInScopeForWrite(ctx, input.ids);
       const changes = rows
         .filter((row) => row.ticket.status !== input.status)
         .map((row) => ({
@@ -586,7 +620,7 @@ export const ticketRouter = router({
       // ticketInScope carries the company check and, for role=user, the
       // project-membership check — so a comment cannot be posted onto an action
       // the caller could not read.
-      const current = await ticketInScope(ctx, input.ticketId);
+      const current = await ticketInScopeForWrite(ctx, input.ticketId);
 
       const [created] = await db
         .insert(ticketComment)
@@ -632,7 +666,14 @@ export const ticketRouter = router({
         .orderBy(desc(ticketEvent.createdAt));
     }),
 
-  /** Follow or unfollow an action without owning it. */
+  /**
+   * Follow or unfollow an action without owning it.
+   *
+   * The one mutation here that stays writable on an archived project, on
+   * purpose: a watch row is the reader's own notification setting rather than
+   * the project's record, and gating it would trap someone into a subscription
+   * they cannot switch off until somebody else restores the project.
+   */
   setWatching: companyPermissionProcedure("project:read")
     .input(z.object({ ticketId: z.string().min(1), watching: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
@@ -658,7 +699,7 @@ export const ticketRouter = router({
   watching: companyPermissionProcedure("project:read")
     .input(z.object({ ticketId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
-      await ticketInScope(ctx, input.ticketId);
+      await ticketInScopeForWrite(ctx, input.ticketId);
       const [row] = await db
         .select({ userId: ticketWatcher.userId })
         .from(ticketWatcher)
@@ -687,7 +728,7 @@ export const ticketRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const current = await ticketInScope(ctx, input.id);
+      const current = await ticketInScopeForWrite(ctx, input.id);
       if (current.ticket.status === "closed") {
         throw new TRPCError({ code: "CONFLICT", message: "This action is already closed." });
       }
@@ -816,7 +857,7 @@ export const ticketRouter = router({
   delete: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const current = await ticketInScope(ctx, input.id);
+      const current = await ticketInScopeForWrite(ctx, input.id);
       await db.delete(ticket).where(eq(ticket.id, input.id));
       await recordActivity(ctx, {
         action: "deleted",
@@ -838,7 +879,7 @@ export const ticketRouter = router({
   deleteMany: companyPermissionProcedure("project:write")
     .input(z.object({ ids: z.array(z.string().min(1)).min(1).max(100) }))
     .mutation(async ({ ctx, input }) => {
-      const rows = await ticketsInScope(ctx, input.ids);
+      const rows = await ticketsInScopeForWrite(ctx, input.ids);
       const ids = rows.map((row) => row.ticket.id);
 
       await db.delete(ticket).where(inArray(ticket.id, ids));

@@ -3,7 +3,7 @@
 import { hasPermission, type Permission, type Role } from "@DashboardV2/api/lib/permissions";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@DashboardV2/ui/components/tooltip";
 import { cn } from "@DashboardV2/ui/lib/utils";
-import { Building2, HardHat, LayoutDashboard, Users } from "@DashboardV2/ui/components/icons";
+import { Building2, Cabinet, HardHat, LayoutDashboard, Users } from "@DashboardV2/ui/components/icons";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -37,6 +37,9 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
       { href: "/projects", labelKey: "projects", icon: HardHat },
+      // Its own route rather than /projects/archive: the active test below is a
+      // startsWith, so a nested path would light up Projects as well.
+      { href: "/archive", labelKey: "archive", icon: Cabinet, permission: "project:delete" },
     ],
   },
   {

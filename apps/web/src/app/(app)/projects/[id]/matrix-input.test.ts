@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { decimalOnly } from "./matrix-input";
+import { MATRIX_MAX_DIGITS, decimalOnly } from "./matrix-input";
 
 describe("decimalOnly", () => {
   test("keeps a plain decimal untouched", () => {
@@ -38,10 +38,53 @@ describe("decimalOnly", () => {
   });
 
   test("what survives is always parseable or empty", () => {
-    for (const raw of ["12.5", "1.2.3", "abc", "-2", "50%", "", "9e9", "1,5"]) {
+    for (const raw of ["12.5", "1.2.3", "abc", "-2", "50%", "", "9e9", "1,5", "12.3456789"]) {
       const cleaned = decimalOnly(raw);
       if (cleaned === "" || cleaned === "-" || cleaned.endsWith(".")) continue;
       expect(Number.isFinite(Number(cleaned))).toBe(true);
     }
+  });
+});
+
+describe("decimalOnly digit cap", () => {
+  test("four digits is the default budget", () => {
+    expect(MATRIX_MAX_DIGITS).toBe(4);
+  });
+
+  test("keeps everything that fits the column it was measured for", () => {
+    expect(decimalOnly("12.5")).toBe("12.5");
+    expect(decimalOnly("99.99")).toBe("99.99");
+    expect(decimalOnly("100.0")).toBe("100.0");
+    expect(decimalOnly("1234")).toBe("1234");
+  });
+
+  test("drops the fifth digit rather than the value someone already typed", () => {
+    expect(decimalOnly("100.55")).toBe("100.5");
+    expect(decimalOnly("12345")).toBe("1234");
+    expect(decimalOnly("12.3456789")).toBe("12.34");
+  });
+
+  test("neither the point nor the sign spends the budget", () => {
+    expect(decimalOnly("-99.99")).toBe("-99.99");
+    expect(decimalOnly("-1234")).toBe("-1234");
+  });
+
+  test("refuses a point no fraction could follow", () => {
+    // Four digits are already spent, so the "." would be punctuation the field
+    // will not let you complete.
+    expect(decimalOnly("1234.")).toBe("1234");
+    expect(decimalOnly("1234.5")).toBe("1234");
+  });
+
+  test("honours an explicit budget", () => {
+    expect(decimalOnly("12345", 2)).toBe("12");
+    expect(decimalOnly("1.25", 2)).toBe("1.2");
+    expect(decimalOnly("123456789", 6)).toBe("123456");
+  });
+
+  test("half-typed values still survive under the cap", () => {
+    expect(decimalOnly("1.")).toBe("1.");
+    expect(decimalOnly("-")).toBe("-");
+    expect(decimalOnly("999.")).toBe("999.");
   });
 });

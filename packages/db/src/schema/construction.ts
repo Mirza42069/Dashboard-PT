@@ -85,7 +85,25 @@ export const SCHEDULE_VERSION_STATUSES = ["draft", "active"] as const;
 export const WEIGHT_SOURCES = ["derived", "manual"] as const;
 export const DISTRIBUTION_TYPES = ["linear", "manual"] as const;
 export const PROGRESS_MODES = ["by_quantity", "by_percent"] as const;
-export const PERIOD_TYPES = ["weekly", "biweekly", "monthly"] as const;
+/**
+ * Cadences the reporting periods can be generated at, shortest first.
+ *
+ * `custom` is the only one whose length is not derivable from the calendar; it
+ * reads `project.periodLengthDays` for that. It sits last because it is the
+ * escape hatch, not a calendar unit like the rest.
+ *
+ * A plain text column backs this — no PG enum, no CHECK — so extending the list
+ * needs no migration. Order is display order; nothing indexes into it.
+ */
+export const PERIOD_TYPES = [
+  "daily",
+  "weekly",
+  "biweekly",
+  "semimonthly",
+  "monthly",
+  "quarterly",
+  "custom",
+] as const;
 /**
  * The reporting workflow a period moves through.
  *
@@ -148,6 +166,17 @@ export const project = pgTable(
     client: text("client"),
     location: text("location"),
     status: text("status").$type<ProjectStatus>().default("planning").notNull(),
+    /**
+     * When this project was archived, or null while it is live.
+     *
+     * A timestamp rather than a sixth `status`, because archiving is a filing
+     * decision and `status` is what the project *is*: a completed project that
+     * gets archived is still completed, and has to come back out that way. A
+     * status value would have overwritten that with nothing to restore it from.
+     *
+     * Null is the live state, so every existing row is live without a backfill.
+     */
+    archivedAt: timestamp("archived_at"),
     startDate: date("start_date"),
     endDate: date("end_date"),
     /**
@@ -158,6 +187,16 @@ export const project = pgTable(
     progress: integer("progress").default(0).notNull(),
     /** Cadence the reporting periods are generated at. */
     periodType: text("period_type").$type<PeriodType>().default("weekly").notNull(),
+    /**
+     * Days per period, and only meaningful when `periodType` is "custom".
+     *
+     * Null for every calendar cadence — those derive their length from the
+     * calendar, and a number stored beside them would be a second source of
+     * truth that could disagree with it. The routers null this on the way in
+     * whenever the cadence is not custom, so a value left over from an earlier
+     * custom setting cannot bend a weekly axis.
+     */
+    periodLengthDays: integer("period_length_days"),
     /** Optional override when reporting starts later than the contract does. */
     scheduleStart: date("schedule_start"),
     /**
@@ -176,6 +215,9 @@ export const project = pgTable(
     index("project_managerId_idx").on(table.managerId),
     index("project_companyId_idx").on(table.companyId),
     index("project_company_created_id_idx").on(table.companyId, table.createdAt, table.id),
+    // Every project list grew an archived_at predicate; this is what keeps them
+    // from scanning the company's whole portfolio to apply it.
+    index("project_company_archived_idx").on(table.companyId, table.archivedAt),
     unique("project_companyId_code_key").on(table.companyId, table.code),
   ],
 );
@@ -267,7 +309,7 @@ export const ticket = pgTable(
  *
  *   boqVersion            one baseline per project
  *   boqItem               the priced work breakdown (sections and their leaves)
- *   reportingPeriod       the time axis (weekly / biweekly / monthly buckets)
+ *   reportingPeriod       the time axis, bucketed at the project's cadence
  *   boqItemDistribution   PLANNED — what share of each item falls in each period
  *   progressEntry         ACTUAL  — cumulative completion recorded per period
  *
@@ -773,6 +815,8 @@ export const ACTIVITY_ACTIONS = [
   "trial_started",
   "trial_changed",
   "trial_cleared",
+  "archived",
+  "restored",
 ] as const;
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
 

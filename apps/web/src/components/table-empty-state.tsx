@@ -10,6 +10,7 @@ import {
   EmptyTitle,
 } from "@DashboardV2/ui/components/empty";
 import { Inbox, SearchX } from "@DashboardV2/ui/components/icons";
+import type { ReactNode } from "react";
 
 import { useT } from "@/i18n/provider";
 
@@ -26,24 +27,32 @@ import { useT } from "@/i18n/provider";
  * The two cases stay distinct: filtered results get a clear-filters exit,
  * while the unfiltered state relies on the list toolbar's create action.
  * `filtered` must come from the actual filter state, not the zero row count.
+ *
+ * The unfiltered glyph is overridable because a page whose own identity icon is
+ * the default one would otherwise show the same glyph twice on screen — the
+ * archive is the case that forced it, since its nav entry and this empty state
+ * both used to be an Inbox.
  */
 export function TableEmptyState({
   filtered,
   title,
   description,
   onClearFilters,
+  icon,
 }: {
   filtered: boolean;
   title: string;
   description: string;
   onClearFilters: () => void;
+  /** Replaces the default Inbox in the unfiltered state only. */
+  icon?: ReactNode;
 }) {
   const t = useT();
 
   return (
     <Empty className="py-10">
       <EmptyHeader>
-        <EmptyMedia variant="icon">{filtered ? <SearchX /> : <Inbox />}</EmptyMedia>
+        <EmptyMedia variant="icon">{filtered ? <SearchX /> : (icon ?? <Inbox />)}</EmptyMedia>
         {/* h2, not h3: the Card wrapping these tables has no CardHeader, so the
             page's h1 is the only heading above this and h3 would skip a level. */}
         <EmptyTitle>{title}</EmptyTitle>

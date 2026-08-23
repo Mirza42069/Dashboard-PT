@@ -1,0 +1,1 @@
+ALTER TABLE "project" ADD COLUMN "period_length_days" integer;

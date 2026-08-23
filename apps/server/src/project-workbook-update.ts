@@ -116,6 +116,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
       scheduleStart: project.scheduleStart,
       endDate: project.endDate,
       periodType: project.periodType,
+      periodLengthDays: project.periodLengthDays,
       updatedAt: project.updatedAt,
     })
     .from(project)
@@ -257,6 +258,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     scheduleStart: current.scheduleStart,
     endDate: current.endDate,
     periodType: current.periodType,
+    periodLengthDays: current.periodLengthDays,
   };
 
   let prepared: Awaited<ReturnType<typeof prepareConfirmedWorkbook>> | null = null;

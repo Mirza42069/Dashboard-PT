@@ -20,7 +20,19 @@
  */
 
 /**
- * Everything that could be part of a decimal, and nothing else.
+ * How many digits a period column was measured to hold.
+ *
+ * `MIN_PERIOD_WIDTH_READONLY` in lib/matrix-fit.ts is sized for exactly this
+ * many digits plus a decimal point, and the routers cap the value at 0-100
+ * either way (`plannedPct`, `cumulativePercent`). A fifth digit could therefore
+ * only ever be precision the cell has no room to render — so the field refuses
+ * it rather than accepting a figure it will then clip.
+ */
+export const MATRIX_MAX_DIGITS = 4;
+
+/**
+ * Everything that could be part of a decimal, and nothing else, up to
+ * `maxDigits` of it.
  *
  * Filtering as you type rather than validating on save, because the save path
  * in both grids drops a non-finite value on the floor (`Number.isFinite`) — so
@@ -30,19 +42,31 @@
  * Deliberately permissive about *incomplete* input: "1." and "-" are both kept,
  * because they are what a half-typed "1.5" and "-2" look like, and a field that
  * erases them mid-keystroke cannot be typed into.
+ *
+ * The cap counts digits only — neither the point nor the sign spends any of the
+ * budget, so "-99.99" is four digits and survives whole. It is a typing guard
+ * and not a migration: a value already stored with more precision still renders
+ * in full and can still be deleted, it just cannot be grown.
  */
-export function decimalOnly(raw: string): string {
+export function decimalOnly(raw: string, maxDigits: number = MATRIX_MAX_DIGITS): string {
   let seenDot = false;
+  let digits = 0;
   let result = "";
 
   for (const character of raw) {
     if (character >= "0" && character <= "9") {
+      if (digits >= maxDigits) continue;
+      digits++;
       result += character;
       continue;
     }
     // One decimal point, and only after something. A leading "." is left to be
     // typed as "0.".
-    if (character === "." && !seenDot) {
+    //
+    // Refused once the digit budget is spent, too: a trailing point on a
+    // full-width figure is one no fraction could ever follow, so it would sit
+    // there as punctuation the field will not let you complete.
+    if (character === "." && !seenDot && digits < maxDigits) {
       seenDot = true;
       result += character;
       continue;
