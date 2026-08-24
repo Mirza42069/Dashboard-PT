@@ -34,10 +34,11 @@ import {
 import { PERIOD_TYPES, type PeriodType } from "@DashboardV2/db/schema";
 
 import { interpolate, plural } from "@/i18n";
-import { useLocale, useT } from "@/i18n/provider";
+import { useT } from "@/i18n/provider";
 import { getServerUrl } from "@/lib/server-url";
 import { useDebounced } from "@/lib/use-debounced";
 import { cadenceLabel } from "@/lib/cadence";
+import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 type MappingField =
@@ -400,7 +401,7 @@ export default function ProjectWorkbookImportDialog({
   trialAiCredits: number | null;
 }) {
   const t = useT();
-  const { locale } = useLocale();
+  const { money } = useFormat();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<SheetCandidate[] | null>(null);
@@ -1416,7 +1417,7 @@ export default function ProjectWorkbookImportDialog({
               </p>
               <p className="mt-1 text-muted-foreground">{analysis.plan.sheetName}</p>
               <p className="mt-2">
-                {t.projectImport.totalAmount}: {new Intl.NumberFormat(locale === "id" ? "id-ID" : "en-US", { maximumFractionDigits: 0 }).format(analysis.summary.totalAmount)}
+                {t.projectImport.totalAmount}: {money(analysis.summary.totalAmount)}
                 {" · "}{t.projectImport.totalWeight}: {analysis.summary.totalWeight.toFixed(2)}%
               </p>
               {analysis.summary.latestActualPercent !== null && (

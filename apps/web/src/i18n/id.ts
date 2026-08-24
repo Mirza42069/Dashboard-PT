@@ -1183,6 +1183,13 @@ export const id = {
     closing: "Menutup…",
     requestClosed: "Permintaan dukungan ditutup",
     closedBy: "Ditutup oleh {actor} · {date}",
+    deleteRequest: "Hapus permintaan",
+    deleteRequestTitle: "Hapus permintaan dukungan ini?",
+    deleteRequestDescription:
+      "“{subject}” dan seluruh percakapannya akan dihapus permanen. Tindakan ini tidak dapat dibatalkan.",
+    deletingRequest: "Menghapus…",
+    requestDeleted: "Permintaan dukungan dihapus",
+    deleteRequestFailed: "Tidak dapat menghapus permintaan dukungan",
     actionFailed: "Tidak dapat memperbarui permintaan dukungan",
     supportTeam: "Tim dukungan",
 

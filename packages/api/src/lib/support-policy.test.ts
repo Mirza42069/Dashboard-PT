@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { nextSupportStatus, supportNoticeKindForAction } from "./support-policy";
+import {
+  canDeleteSupportRequest,
+  nextSupportStatus,
+  supportNoticeKindForAction,
+} from "./support-policy";
 
 describe("support request policy", () => {
   test("opens a thread and hands it to the requester", () => {
@@ -59,5 +63,12 @@ describe("support request policy", () => {
   test("sends no notice for a requester's own message", () => {
     // The notices are addressed to the requester; support watches the inbox.
     expect(supportNoticeKindForAction("userReply")).toBeNull();
+  });
+
+  test("only permanently deletes closed requests", () => {
+    expect(canDeleteSupportRequest("new")).toBe(false);
+    expect(canDeleteSupportRequest("accepted")).toBe(false);
+    expect(canDeleteSupportRequest("answered")).toBe(false);
+    expect(canDeleteSupportRequest("closed")).toBe(true);
   });
 });

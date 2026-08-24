@@ -30,6 +30,7 @@ import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { getServerUrl } from "@/lib/server-url";
 import { toast } from "@/lib/toast";
+import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -176,6 +177,7 @@ export default function ProjectWorkbookUpdateDialog({
   onUpdated: (result: WorkbookUpdateResult) => void;
 }) {
   const t = useT();
+  const { money } = useFormat();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<SheetCandidate[] | null>(null);
@@ -582,7 +584,9 @@ export default function ProjectWorkbookUpdateDialog({
                             <td className="px-2 py-2 tabular-nums">
                               {row.quantity ?? "-"} {row.unit ?? ""}
                             </td>
-                            <td className="px-2 py-2 tabular-nums">{row.unitRate ?? "-"}</td>
+                            <td className="px-2 py-2 tabular-nums">
+                              {row.unitRate === null ? "-" : money(row.unitRate)}
+                            </td>
                             <td className="px-2 py-2 tabular-nums">
                               {row.weight === null ? "-" : `${row.weight.toFixed(4)}%`}
                             </td>

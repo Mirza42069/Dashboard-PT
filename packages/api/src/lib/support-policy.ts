@@ -62,3 +62,8 @@ export function supportNoticeKindForAction(
 ): (typeof SUPPORT_NOTICE_KINDS)[number] | null {
   return NOTICE_KIND_BY_ACTION[action] ?? null;
 }
+
+/** Closed conversations alone may be permanently removed from the support inbox. */
+export function canDeleteSupportRequest(status: SupportRequestStatus) {
+  return status === "closed";
+}

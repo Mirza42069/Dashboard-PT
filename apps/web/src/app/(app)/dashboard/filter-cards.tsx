@@ -136,7 +136,7 @@ export function FilterCards({
   summaryPending: boolean;
 }) {
   const t = useT();
-  const { moneyCompact, percent } = useFormat();
+  const { money, percent } = useFormat();
 
   const cards = (
     [
@@ -183,8 +183,8 @@ export function FilterCards({
           {summaryPending ? (
             <Skeleton className="h-7 w-24" />
           ) : (
-            <p className="text-xl font-semibold tracking-tight tabular-nums sm:text-2xl">
-              {portfolioValue === undefined ? "—" : moneyCompact(portfolioValue)}
+            <p className="break-words text-lg font-semibold leading-tight tracking-tight tabular-nums sm:text-2xl">
+              {portfolioValue === undefined ? "—" : money(portfolioValue)}
             </p>
           )}
 

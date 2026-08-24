@@ -19,6 +19,30 @@ export const CURRENCY_PREFIX = "Rp";
 /** Grouping/decimal marks for money are pinned to Indonesian, never the UI locale. */
 const MONEY_LOCALE = "id-ID";
 
+const rupiahInput = new Intl.NumberFormat(MONEY_LOCALE, { maximumFractionDigits: 4 });
+const rupiahIntegerInput = new Intl.NumberFormat(MONEY_LOCALE, { maximumFractionDigits: 0 });
+
+/** Editable Rupiah text: dots group thousands and a comma separates decimals. */
+export function parseRupiahInput(value: string) {
+  const normalized = value.replace(/\./g, "").replace(",", ".").replace(/[^\d.]/g, "");
+  const parsed = Number(normalized);
+  return normalized === "" || !Number.isFinite(parsed) ? 0 : parsed;
+}
+
+/** Groups an editable Rupiah value without adding the `Rp` prefix. */
+export function formatRupiahInput(value: number) {
+  return Number.isFinite(value) ? rupiahInput.format(Math.max(0, value)) : "0";
+}
+
+/** Preserves a trailing decimal comma while the user is still typing. */
+export function formatRupiahInputText(value: string) {
+  const comma = value.indexOf(",");
+  const wholeDigits = (comma === -1 ? value : value.slice(0, comma)).replace(/\D/g, "");
+  const fractionDigits = comma === -1 ? "" : value.slice(comma + 1).replace(/\D/g, "").slice(0, 4);
+  const whole = rupiahIntegerInput.format(Number(wholeDigits || "0"));
+  return comma === -1 ? whole : `${whole},${fractionDigits}`;
+}
+
 export type Formatters = ReturnType<typeof createFormatters>;
 
 const cache = new Map<string, Formatters>();

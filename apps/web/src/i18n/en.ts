@@ -1202,6 +1202,13 @@ export const en = {
     closing: "Closing…",
     requestClosed: "Support request closed",
     closedBy: "Closed by {actor} · {date}",
+    deleteRequest: "Delete request",
+    deleteRequestTitle: "Delete this support request?",
+    deleteRequestDescription:
+      "“{subject}” and its full conversation will be permanently deleted. This cannot be undone.",
+    deletingRequest: "Deleting…",
+    requestDeleted: "Support request deleted",
+    deleteRequestFailed: "Could not delete the support request",
     actionFailed: "Could not update the support request",
     supportTeam: "Support team",
 

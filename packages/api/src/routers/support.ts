@@ -23,6 +23,7 @@ import {
 import { roleOf } from "../lib/permissions";
 import {
   SUPPORT_NOTICE_KINDS,
+  canDeleteSupportRequest,
   nextSupportStatus,
   supportNoticeKindForAction,
   type SupportAction,
@@ -450,6 +451,40 @@ export const supportRouter = router({
         actorName: ctx.session.user.name,
       }),
     ),
+
+  delete: permissionProcedure("support:manage")
+    .input(idSchema)
+    .mutation(async ({ input }) => {
+      const request = await requestOrThrow(input.id);
+      if (!canDeleteSupportRequest(request.status)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Close this support request before deleting it",
+        });
+      }
+
+      const result = await db.execute<{ id: string }>(sql`
+        with deleted_request as (
+          delete from "support_request"
+          where "id" = ${input.id} and "status" = 'closed'
+          returning "id"
+        ), deleted_notifications as (
+          delete from "notification" as notice
+          using deleted_request as request
+          where notice."entity_type" = 'support_request'
+            and notice."entity_id" = request."id"
+          returning notice."id"
+        )
+        select "id" from deleted_request
+      `);
+      if (result.rows.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "The support request changed; refresh and try again",
+        });
+      }
+      return { success: true };
+    }),
 
   /**
    * The requester's own threads. Scoped by requesterId rather than by company —

@@ -1,6 +1,16 @@
 "use client";
 
 import { Badge } from "@DashboardV2/ui/components/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@DashboardV2/ui/components/alert-dialog";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Card } from "@DashboardV2/ui/components/card";
 import { Input } from "@DashboardV2/ui/components/input";
@@ -24,7 +34,7 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Textarea } from "@DashboardV2/ui/components/textarea";
 import type { inferOutput } from "@trpc/tanstack-react-query";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Inbox, Loader2, SearchX, Send } from "@DashboardV2/ui/components/icons";
+import { CheckCircle2, Inbox, Loader2, SearchX, Send, Trash2 } from "@DashboardV2/ui/components/icons";
 import { useEffect, useRef, useState } from "react";
 
 import { QueryError } from "@/components/query-error";
@@ -324,6 +334,8 @@ function RequestSheet({
   const [reply, setReply] = useState("");
   const [replyError, setReplyError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const detail = useQuery({
     ...trpc.support.get.queryOptions({ id: selectedId ?? "" }),
     enabled: Boolean(selectedId),
@@ -341,8 +353,10 @@ function RequestSheet({
   const accept = useMutation(trpc.support.accept.mutationOptions());
   const sendReply = useMutation(trpc.support.reply.mutationOptions());
   const close = useMutation(trpc.support.close.mutationOptions());
+  const deleteRequestMutation = useMutation(trpc.support.delete.mutationOptions());
   const request = detail.data;
-  const actionPending = accept.isPending || sendReply.isPending || close.isPending;
+  const actionPending =
+    accept.isPending || sendReply.isPending || close.isPending || deleteRequestMutation.isPending;
 
   useEffect(() => {
     if (request?.status === "accepted") replyRef.current?.focus();
@@ -386,7 +400,22 @@ function RequestSheet({
     if (succeeded) setReply("");
   }
 
+  async function deleteRequest() {
+    if (!request) return;
+    setDeleteError(null);
+    try {
+      await deleteRequestMutation.mutateAsync({ id: request.id });
+      await refresh();
+      setDeleteOpen(false);
+      onOpenChange(false);
+      toast.success(t.support.requestDeleted);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : t.support.deleteRequestFailed);
+    }
+  }
+
   return (
+    <>
     <Sheet
       open={Boolean(selectedId)}
       onOpenChange={(open) => {
@@ -571,9 +600,65 @@ function RequestSheet({
                 )}
               </SheetFooter>
             )}
+            {request.status === "closed" && (
+              <SheetFooter className="border-t bg-card">
+                <Button
+                  variant="destructive"
+                  disabled={actionPending}
+                  onClick={() => {
+                    setDeleteError(null);
+                    setDeleteOpen(true);
+                  }}
+                >
+                  <Trash2 />
+                  {t.support.deleteRequest}
+                </Button>
+              </SheetFooter>
+            )}
           </>
         )}
       </SheetContent>
     </Sheet>
+    <AlertDialog
+      open={deleteOpen}
+      onOpenChange={(open) => {
+        if (!deleteRequestMutation.isPending) setDeleteOpen(open);
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t.support.deleteRequestTitle}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {interpolate(t.support.deleteRequestDescription, {
+              subject: request?.subject ?? "",
+            })}
+          </AlertDialogDescription>
+          {deleteError && (
+            <p role="alert" className="text-sm text-destructive">
+              {deleteError}
+            </p>
+          )}
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel
+            render={<Button variant="outline" disabled={deleteRequestMutation.isPending} />}
+          >
+            {t.common.cancel}
+          </AlertDialogCancel>
+          <AlertDialogAction
+            render={<Button variant="destructive" disabled={deleteRequestMutation.isPending} />}
+            onClick={(event) => {
+              event.preventDefault();
+              void deleteRequest();
+            }}
+          >
+            {deleteRequestMutation.isPending
+              ? t.support.deletingRequest
+              : t.support.deleteRequest}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }

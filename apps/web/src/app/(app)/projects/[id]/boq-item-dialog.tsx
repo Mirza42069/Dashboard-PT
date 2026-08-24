@@ -20,11 +20,17 @@ import {
 } from "@DashboardV2/ui/components/select";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { toast } from "@/lib/toast";
 import z from "zod";
 
 import { FieldError, fieldError } from "@/components/field-error";
 import { useT } from "@/i18n/provider";
+import {
+  formatRupiahInput,
+  formatRupiahInputText,
+  parseRupiahInput,
+} from "@/lib/format";
 import { trpc } from "@/utils/trpc";
 
 const PROGRESS_MODES = ["by_quantity", "by_percent"] as const;
@@ -151,7 +157,13 @@ export default function BoqItemDialog({
                 {(field) => <NumberField label={t.boq.quantity} field={field} />}
               </form.Field>
               <form.Field name="unitRate">
-                {(field) => <NumberField label={t.boq.unitRate} field={field} />}
+                {(field) => (
+                  <RupiahField
+                    label={t.boq.unitRate}
+                    field={field}
+                    initialValue={initialValues.unitRate}
+                  />
+                )}
               </form.Field>
             </div>
 
@@ -250,6 +262,47 @@ function NumberField({ label, field }: { label: string; field: any }) {
         onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
           field.handleChange(e.target.value === "" ? 0 : Number(e.target.value))
         }
+      />
+      <FieldError {...error} />
+    </div>
+  );
+}
+
+function RupiahField({
+  label,
+  field,
+  initialValue,
+}: {
+  label: string;
+  field: any;
+  initialValue: number;
+}) {
+  const error = fieldError(field.name, field.state.meta.errors);
+  const [inputValue, setInputValue] = useState(() => formatRupiahInput(field.state.value));
+
+  useEffect(() => {
+    setInputValue(formatRupiahInput(initialValue));
+  }, [initialValue]);
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={field.name}>{label}</Label>
+      <Input
+        {...error.control}
+        id={field.name}
+        name={field.name}
+        type="text"
+        inputMode="decimal"
+        value={inputValue}
+        onBlur={() => {
+          field.handleBlur();
+          setInputValue(formatRupiahInput(field.state.value));
+        }}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+          const formatted = formatRupiahInputText(e.target.value);
+          setInputValue(formatted);
+          field.handleChange(parseRupiahInput(formatted));
+        }}
       />
       <FieldError {...error} />
     </div>
