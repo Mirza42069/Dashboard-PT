@@ -22,11 +22,10 @@
 /**
  * How many digits a period column was measured to hold.
  *
- * `MIN_PERIOD_WIDTH_READONLY` in lib/matrix-fit.ts is sized for exactly this
- * many digits plus a decimal point, and the routers cap the value at 0-100
- * either way (`plannedPct`, `cumulativePercent`). A fifth digit could therefore
- * only ever be precision the cell has no room to render — so the field refuses
- * it rather than accepting a figure it will then clip.
+ * The routers cap the value at 0-100 either way (`plannedPct`,
+ * `cumulativePercent`), so four digits and a decimal point is all a percentage
+ * can need. A fifth could only ever be precision the cell has no room to render
+ * — so the field refuses it rather than accepting a figure it will then clip.
  */
 export const MATRIX_MAX_DIGITS = 4;
 

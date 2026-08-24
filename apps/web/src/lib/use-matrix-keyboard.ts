@@ -20,12 +20,15 @@ export function useMatrixKeyboard({
   rowCount,
   columnCount,
   rowHeight,
+  columnWidth,
 }: {
   scrollRef: RefObject<HTMLDivElement | null>;
   rowCount: number;
   columnCount: number;
   /** Used to nudge a virtualised row into existence. The estimate is enough. */
   rowHeight: number;
+  /** Used to nudge a virtualised column into existence. */
+  columnWidth: number;
 }) {
   /**
    * The props a cell input needs to take part. Spread onto the `Input`.
@@ -86,11 +89,12 @@ export function useMatrixKeyboard({
        */
       const rowStep = target.row - (row as number);
       container.scrollTop += rowStep * rowHeight;
+      container.scrollLeft += columnStep * columnWidth;
       requestAnimationFrame(() => {
         focusCell(container, target.row, target.column, columnStep, columnCount);
       });
     },
-    [scrollRef, rowCount, columnCount, rowHeight],
+    [scrollRef, rowCount, columnCount, rowHeight, columnWidth],
   );
 
   return { cellProps, onKeyDown };

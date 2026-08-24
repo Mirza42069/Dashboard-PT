@@ -82,6 +82,7 @@ export default function ArchiveTable({ canDelete }: { canDelete: boolean }) {
   const selection = useRowSelection(projects, {
     getId: (row) => row.id,
     resetKey: debouncedSearch,
+    maxSelected: 100,
   });
   const COLUMNS = 5;
 
@@ -90,7 +91,10 @@ export default function ArchiveTable({ canDelete }: { canDelete: boolean }) {
   /** Both actions move a row out of this list, so both invalidate the same tree. */
   async function refresh() {
     selection.clear();
-    await queryClient.invalidateQueries(trpc.project.pathFilter());
+    await Promise.all([
+      queryClient.invalidateQueries(trpc.project.pathFilter()),
+      queryClient.invalidateQueries(trpc.activity.pathFilter()),
+    ]);
   }
 
   async function restore() {
@@ -142,6 +146,7 @@ export default function ArchiveTable({ canDelete }: { canDelete: boolean }) {
             <ToolbarAction
               icon={<ArchiveRestore />}
               label={plural(t.projects.restoreSelectedLabel, selection.selectedCount)}
+              disabled={setArchived.isPending || deleteMany.isPending}
               onClick={() => void restore()}
             />
             {canDelete && (
@@ -149,6 +154,7 @@ export default function ArchiveTable({ canDelete }: { canDelete: boolean }) {
                 icon={<Trash2 />}
                 variant="destructive"
                 label={plural(t.projects.deleteSelectedLabel, selection.selectedCount)}
+                disabled={setArchived.isPending || deleteMany.isPending}
                 onClick={() => setDeleteOpen(true)}
               />
             )}
@@ -220,6 +226,7 @@ export default function ArchiveTable({ canDelete }: { canDelete: boolean }) {
                   <TableCell className="relative z-10 pl-4">
                     <Checkbox
                       checked={selection.isSelected(row.id)}
+                      disabled={!selection.canSelect(row.id)}
                       onCheckedChange={() => selection.toggle(row.id)}
                       aria-label={interpolate(t.common.selectRow, { name: row.name })}
                     />
@@ -279,11 +286,13 @@ export default function ArchiveTable({ canDelete }: { canDelete: boolean }) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel render={<Button variant="outline" />}>
+            <AlertDialogCancel
+              render={<Button variant="outline" disabled={deleteMany.isPending} />}
+            >
               {t.common.cancel}
             </AlertDialogCancel>
             <AlertDialogAction
-              render={<Button variant="destructive" />}
+              render={<Button variant="destructive" disabled={deleteMany.isPending} />}
               onClick={() => void deleteSelected()}
             >
               {t.archive.deletePermanently}

@@ -47,8 +47,8 @@ export function useRowSelection<T>(
   );
 
   const selectedCount = selectedIds.length;
-  const selectableCount = Math.min(visibleIds.length, maxSelected);
-  const allSelected = visibleIds.length > 0 && selectedCount === selectableCount;
+  const allSelected =
+    visibleIds.length > 0 && visibleIds.length <= maxSelected && selectedCount === visibleIds.length;
   const someSelected = selectedCount > 0 && !allSelected;
 
   const isSelected = useCallback((id: string) => held.has(id), [held]);

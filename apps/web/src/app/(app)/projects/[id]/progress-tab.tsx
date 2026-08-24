@@ -14,11 +14,12 @@ import { Input } from "@DashboardV2/ui/components/input";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, Save, Trash2 } from "@DashboardV2/ui/components/icons";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
 import {
+  MatrixColumnSpacer,
   MatrixRowSpacer,
   useMatrixWindow,
   WindowedMonthBandRow,
@@ -50,13 +51,7 @@ import {
 } from "@/lib/boq/curves";
 import { isEditable } from "@DashboardV2/api/lib/progress-workflow";
 import { isBehindDeviation } from "@DashboardV2/api/lib/deviation";
-import {
-  COMPACT_CELL_WIDTH,
-  MAX_PERIOD_WIDTH,
-  MIN_PERIOD_WIDTH_EDITABLE,
-  MIN_PERIOD_WIDTH_READONLY,
-  fitMatrix,
-} from "@/lib/matrix-fit";
+import { COMPACT_CELL_WIDTH, MAX_PERIOD_WIDTH, fitMatrix } from "@/lib/matrix-fit";
 import { toggleFold, type MonthFoldState } from "@/lib/month-fold";
 import { buildMatrixColumns, buildPeriodHeader, lastPeriodOf } from "@/lib/period-header";
 import { useFormat } from "@/lib/use-format";
@@ -76,11 +71,11 @@ const SUMMARY_TABLE_ID = "period-summary";
 const ESTIMATED_ROW_HEIGHT = 60;
 const ESTIMATED_HEADER_HEIGHT = 96;
 /**
- * The line-name block, and every pixel of it comes out of the cells — fitMatrix
- * divides whatever is left of the container between the period columns. It was
- * 320px; the 48px trimmed off goes straight to the columns, and helps lift them
- * over COMPACT_CELL_WIDTH, which is what gates the roomier padding and text.
- * The column truncates and carries its full text on `title`, so nothing is hidden.
+ * The line-name block. It was 320px, trimmed back when the grid was squeezed
+ * into its card and every pixel here came out of a period column. The columns
+ * are drawn at full width now, so this buys horizontal scroll rather than cell
+ * width — still worth having, since it is that much less scrolling. The column
+ * truncates and carries its full text on `title`, so nothing is hidden.
  */
 const LEADING_WIDTH = 272;
 /** The checkbox column, carved out of the leading block rather than added to it. */
@@ -115,16 +110,13 @@ export default function ProgressTab({
   const [saving, setSaving] = useState(false);
   /** Which period the workflow panel is showing. Null follows its own default. */
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
-  const [showFullMatrix, setShowFullMatrix] = useState(false);
   /**
-   * What the reader has said about each month, not what is folded.
+   * The months the reader has folded — see lib/month-fold.ts.
    *
-   * Empty by default. Folding is now mostly the fitter's job — it narrows the
-   * grid until it fits the card — and this map is the standing instruction that
-   * overrules it either way. See lib/month-fold.ts for why an intent map and
-   * not the set of folded months it replaced.
+   * Empty by default: the grid opens showing every period, and folding is
+   * something you ask for rather than something it does to fit the card.
    */
-  const [monthFold, setMonthFold] = useState<MonthFoldState>(() => new Map());
+  const [monthFold, setMonthFold] = useState<MonthFoldState>(() => new Set());
 
   const reportQuery = useQuery(trpc.progress.report.queryOptions({ projectId }));
   const matrixPeriods = reportQuery.data?.periods ?? [];
@@ -138,56 +130,48 @@ export default function ProgressTab({
     getId: (row) => row.leaf.id,
     resetKey: effectiveSelectedPeriodId,
   });
-  // Called before the fit, because the fit needs the container width and this
-  // is what measures it. Its own column *window* is off — see windowColumns —
-  // so the count it is given only has to be stable, not folded.
-  const matrixWindow = useMatrixWindow({
-    rowCount: matrixRows.length,
-    columnCount: matrixPeriods.length,
-    estimatedRowHeight: ESTIMATED_ROW_HEIGHT,
-    // A constant, deliberately: the fitted width changes on every resize tick,
-    // and this value is in the observer effect's dependencies.
-    columnWidth: MAX_PERIOD_WIDTH,
-    estimatedHeaderHeight: ESTIMATED_HEADER_HEIGHT,
-    leadingWidth: LEADING_WIDTH,
-    stickyLeadingWidth: LEADING_WIDTH,
-    windowed: !showFullMatrix,
-    windowColumns: false,
-  });
-  const fitAnchorDate =
-    matrixPeriods.find((period) => period.id === effectiveSelectedPeriodId)?.endDate ??
-    reportQuery.data?.project.dataDate ??
-    null;
-  /**
-   * Width and folding, decided together.
-   *
-   * "Full table" hands the fitter a width of zero, which it reads as "not
-   * measured" and answers with full-width columns and no folding of its own —
-   * which is exactly what that escape hatch now means.
-   */
   const fit = fitMatrix({
-    available: showFullMatrix ? 0 : matrixWindow.containerWidth,
     leadingWidth: LEADING_WIDTH,
     trailingWidth: 0,
     periods: matrixPeriods,
     state: monthFold,
-    // Cells here are typed into, so they get the higher floor.
-    minPeriodWidth: canEdit ? MIN_PERIOD_WIDTH_EDITABLE : MIN_PERIOD_WIDTH_READONLY,
-    dataDate: fitAnchorDate,
   });
   const allMatrixColumns = buildMatrixColumns(matrixPeriods, fit.collapsed);
+  const matrixWindow = useMatrixWindow({
+    rowCount: matrixRows.length,
+    columnCount: allMatrixColumns.length,
+    estimatedRowHeight: ESTIMATED_ROW_HEIGHT,
+    columnWidth: MAX_PERIOD_WIDTH,
+    estimatedHeaderHeight: ESTIMATED_HEADER_HEIGHT,
+    leadingWidth: LEADING_WIDTH,
+    stickyLeadingWidth: LEADING_WIDTH,
+    windowed: true,
+  });
+  useEffect(() => {
+    if (!effectiveSelectedPeriodId) return;
+    const index = allMatrixColumns.findIndex(
+      (column) => column.kind === "period" && column.period.id === effectiveSelectedPeriodId,
+    );
+    const element = matrixWindow.scrollRef.current;
+    if (index < 0 || !element) return;
+    const left = index * MAX_PERIOD_WIDTH;
+    const right = left + MAX_PERIOD_WIDTH;
+    const visibleLeft = element.scrollLeft;
+    const visibleRight = visibleLeft + element.clientWidth - LEADING_WIDTH;
+    if (left < visibleLeft || right > visibleRight) {
+      element.scrollTo({ left: Math.max(0, left - MAX_PERIOD_WIDTH), behavior: "auto" });
+    }
+  }, [allMatrixColumns, effectiveSelectedPeriodId, matrixWindow.scrollRef]);
   const matrixKeyboard = useMatrixKeyboard({
     scrollRef: matrixWindow.scrollRef,
     rowCount: matrixRows.length,
     columnCount: allMatrixColumns.length,
     rowHeight: ESTIMATED_ROW_HEIGHT,
+    columnWidth: MAX_PERIOD_WIDTH,
   });
 
   function toggleMonth(monthKey: string) {
-    // What the press means depends on what is on screen, not on what is
-    // stored — a month the fitter folded has nothing stored to invert.
-    const rendered = fit.collapsed.has(monthKey);
-    setMonthFold((current) => toggleFold(current, monthKey, rendered));
+    setMonthFold((current) => toggleFold(current, monthKey));
   }
   const bulkSave = useMutation(trpc.progress.bulkSave.mutationOptions());
   const markNoProgress = useMutation(trpc.progress.markNoProgress.mutationOptions());
@@ -234,27 +218,21 @@ export default function ProgressTab({
   // disagree.
   const summary = buildPeriodSummary(rows, periods, cells, entries, dataDate, actualSnapshots);
   const visibleRows = rows.slice(matrixWindow.rowWindow.start, matrixWindow.rowWindow.end);
-  // Every column, not a window of them. Columns are no longer virtualised —
-  // the grid is fitted to the card instead, so there is nothing off the side to
-  // leave unrendered, and a fitted grid tops out at about twenty columns, fewer
-  // than the window used to draw.
-  const visibleColumns = allMatrixColumns;
-  // The derived set, not the reader's intent: a month the fitter folded must
-  // still be offered an unfold control, and only this set knows it is folded.
+  const visibleColumns = allMatrixColumns.slice(
+    matrixWindow.columnWindow.start,
+    matrixWindow.columnWindow.end,
+  );
   const visibleHeader = buildPeriodHeader(format, visibleColumns, dataDate, fit.collapsed);
-  const renderedColumnCount = 2 + visibleColumns.length;
+  const beforeColumns = matrixWindow.columnWindow.beforeSize > 0 ? 1 : 0;
+  const afterColumns = matrixWindow.columnWindow.afterSize > 0 ? 1 : 0;
+  const renderedColumnCount = 2 + beforeColumns + visibleColumns.length + afterColumns;
   /**
-   * The two states a fitted grid can still be too wide in.
+   * Narrow enough that a column can hold a figure but not a caption under it.
    *
-   * "Full table" is the reader asking for the uncompressed grid and accepting
-   * the scrollbar that comes with it. `overflows` is the fitter admitting it
-   * could not honour both the no-scrolling promise and a month the reader
-   * explicitly unfolded — and between those two, the unfold wins. Silently
-   * re-folding the month someone just opened is the one outcome that would
-   * make the control look broken.
+   * False at the fixed column width the grid now uses. Kept because it is what
+   * the cell and header markup below branch on, and the width is the sort of
+   * thing that gets tuned.
    */
-  const scrollsSideways = showFullMatrix || fit.overflows;
-  /** Narrow enough that a column can hold a figure but not a caption under it. */
   const compact = fit.periodWidth < COMPACT_CELL_WIDTH;
   const contributors = delayContributors(rows, periods, cells, entries, dataDate);
 
@@ -546,19 +524,6 @@ export default function ProgressTab({
                   </CardTitle>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant={showFullMatrix ? "secondary" : "outline"}
-                    size="sm"
-                    aria-pressed={showFullMatrix}
-                    aria-controls="progress-matrix-table"
-                    // No longer "stop virtualising" but "stop constraining":
-                    // every row, columns at full width, no folding of the
-                    // fitter's own, and the sideways scroll that implies.
-                    title={t.common.fullTableHint}
-                    onClick={() => setShowFullMatrix((current) => !current)}
-                  >
-                    {t.common.fullTable}
-                  </Button>
                   {canEdit && drafts.size > 0 && (
                     <>
                       <Button variant="outline" size="sm" onClick={() => setDrafts(new Map())}>
@@ -577,16 +542,6 @@ export default function ProgressTab({
             </CardHeader>
 
             <CardContent className="px-0">
-              {/* The fold is visible on the band row; that it happened on its
-                  own, because the window changed size, is not. */}
-              <p className="sr-only" role="status" aria-live="polite">
-                {fit.overflows
-                  ? t.progress.tooWide
-                  : fit.autoCollapsed.size > 0
-                    ? plural(t.progress.autoFolded, fit.autoCollapsed.size)
-                    : ""}
-              </p>
-
               {canActOnSelection && (
                 <div className="px-4 pb-2">
                   <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
@@ -648,26 +603,21 @@ export default function ProgressTab({
                       // their default, so Tab still leaves the grid.
                       onKeyDown: matrixKeyboard.onKeyDown,
                     }}
-                    scrollX={scrollsSideways}
+                    scrollX
                     // This grid draws its own fade and page buttons instead —
                     // see components/matrix-scroll-affordance.tsx.
                     scrollShadows={false}
-                    containerClassName={`max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
-                      showFullMatrix ? "" : "[overflow-anchor:none]"
-                    } ${scrollsSideways ? "" : "overflow-x-clip"}`}
+                    containerClassName="max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [overflow-anchor:none] [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
                     aria-rowcount={rows.length + 2}
                     aria-colcount={allMatrixColumns.length + 2}
                     className="table-fixed"
                     style={{
-                      // The fitter has already divided the container between
-                      // these columns, so this is the width it arrived at
-                      // rather than a width the reader has to scroll to reach.
-                      // minWidth only in the two states that can still exceed
-                      // the container: "Full table", and a month the reader
-                      // unfolded that will not fit however much is folded
-                      // around it.
+                      // Every column at full width, whether or not that fits
+                      // the card. minWidth keeps a short project's grid
+                      // spanning the card rather than leaving a gap down its
+                      // right-hand side.
                       width: fit.tableWidth,
-                      minWidth: scrollsSideways ? "100%" : undefined,
+                      minWidth: "100%",
                     }}
                   >
                     <caption className="sr-only">
@@ -679,17 +629,23 @@ export default function ProgressTab({
                           does not have to know the checkbox exists. */}
                       <col style={{ width: SELECT_WIDTH }} />
                       <col style={{ width: LEADING_WIDTH - SELECT_WIDTH }} />
-                      {visibleColumns.map((column, index) => (
-                        <col key={column.key} style={{ width: fit.columnWidths[index] }} />
+                      {beforeColumns > 0 && (
+                        <col style={{ width: matrixWindow.columnWindow.beforeSize }} />
+                      )}
+                      {visibleColumns.map((column) => (
+                        <col key={column.key} style={{ width: MAX_PERIOD_WIDTH }} />
                       ))}
+                      {afterColumns > 0 && (
+                        <col style={{ width: matrixWindow.columnWindow.afterSize }} />
+                      )}
                     </colgroup>
                     <TableHeader>
                     <WindowedMonthBandRow
                       header={visibleHeader}
                       leadingLabel={t.schedule.line}
                       leadingColSpan={2}
-                      beforeSize={0}
-                      afterSize={0}
+                      beforeSize={matrixWindow.columnWindow.beforeSize}
+                      afterSize={matrixWindow.columnWindow.afterSize}
                       onToggleMonth={toggleMonth}
                       gridId="progress-matrix-table"
                     />
@@ -707,6 +663,7 @@ export default function ProgressTab({
                       <TableHead className="sticky left-10 z-10 h-auto bg-card px-2 py-2.5">
                         <span className="sr-only">{t.schedule.line}</span>
                       </TableHead>
+                      <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} header />
                       {visibleHeader.columns.map((view, index) => {
                         // Narrowed here rather than via a `folded` boolean: the
                         // discriminant has to be read off the union itself for
@@ -717,7 +674,7 @@ export default function ProgressTab({
                           <TableHead
                             key={view.column.key}
                             scope="col"
-                            aria-colindex={index + 3}
+                            aria-colindex={matrixWindow.columnWindow.start + index + 3}
                             aria-current={view.isCurrent ? "true" : undefined}
                             aria-label={[
                               view.accessibleName,
@@ -777,6 +734,7 @@ export default function ProgressTab({
                           </TableHead>
                         );
                       })}
+                      <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} header />
                     </TableRow>
                     </TableHeader>
 
@@ -831,6 +789,7 @@ export default function ProgressTab({
                           </span>
                         </th>
 
+                        <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
                         {visibleHeader.columns.map(({ column, accessibleName }, index) => {
                           // A folded month shows the position it reached, which
                           // for a cumulative figure is the last period in it that
@@ -850,7 +809,7 @@ export default function ProgressTab({
                           return (
                             <TableCell
                               key={column.key}
-                              aria-colindex={index + 3}
+                              aria-colindex={matrixWindow.columnWindow.start + index + 3}
                               className={`py-2 ${compact ? "px-1" : "px-1.5"}`}
                             >
                               {editable ? (
@@ -861,7 +820,10 @@ export default function ProgressTab({
                                   inputMode="decimal"
                                   value={cellValue(row.leaf.id, period.id)}
                                   aria-label={`${row.leaf.code} - ${accessibleName}`}
-                                  {...matrixKeyboard.cellProps(rowIndex, index)}
+                                  {...matrixKeyboard.cellProps(
+                                    rowIndex,
+                                    matrixWindow.columnWindow.start + index,
+                                  )}
                                   // px-1 once the column is compact. The Input
                                   // primitive spends 22px on its own padding and
                                   // borders before a digit is drawn, which at the
@@ -910,6 +872,7 @@ export default function ProgressTab({
                             </TableCell>
                           );
                         })}
+                        <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
                         </TableRow>
                       );
                     })}
@@ -919,14 +882,14 @@ export default function ProgressTab({
                     />
                     </TableBody>
                   </Table>
-                  {scrollsSideways && (
-                    <MatrixScrollAffordance
-                      scrollRef={matrixWindow.scrollRef}
-                      edges={matrixWindow.edges}
-                      leadingWidth={LEADING_WIDTH}
-                      controls="progress-matrix-table"
-                    />
-                  )}
+                  {/* Always mounted — it draws nothing until there is
+                      something off the side, and reads `edges` to know. */}
+                  <MatrixScrollAffordance
+                    scrollRef={matrixWindow.scrollRef}
+                    edges={matrixWindow.edges}
+                    leadingWidth={LEADING_WIDTH}
+                    controls="progress-matrix-table"
+                  />
               </div>
             </CardContent>
           </Card>

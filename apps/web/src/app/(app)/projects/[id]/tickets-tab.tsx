@@ -74,7 +74,7 @@ const PAGE_SIZE = 25;
 type DialogState = { id: string | null; values: TicketFormValues };
 type CloseTarget = { id: string; title: string };
 
-export default function TicketsTab({ projectId }: { projectId: string }) {
+export default function TicketsTab({ projectId, canEdit }: { projectId: string; canEdit: boolean }) {
   const t = useT();
   const searchParams = useSearchParams();
   const requestedAction = searchParams.get("action");
@@ -200,10 +200,12 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle>{t.tickets.title}</CardTitle>
-            <Button size="sm" onClick={() => setDialog({ id: null, values: EMPTY_TICKET })}>
-              <Plus />
-              {t.tickets.newTicket}
-            </Button>
+            {canEdit && (
+              <Button size="sm" onClick={() => setDialog({ id: null, values: EMPTY_TICKET })}>
+                <Plus />
+                {t.tickets.newTicket}
+              </Button>
+            )}
           </div>
           <div className="flex flex-wrap gap-2 pt-2">
             <Input
@@ -241,7 +243,7 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
               </Link>
             </div>
           )}
-          <div className="px-4 pb-2">
+          {canEdit && <div className="px-4 pb-2">
             <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
               <Select
                 items={statusOptions}
@@ -292,11 +294,11 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                 onClick={() => setBulkDeleteOpen(true)}
               />
             </BulkActionsBar>
-          </div>
+          </div>}
           <Table className="min-w-[48rem] table-fixed">
             <TableHeader>
               <TableRow>
-                <SelectAllHead selection={selection} />
+                {canEdit ? <SelectAllHead selection={selection} /> : <TableHead className="w-10" />}
                 <TableHead className="w-[26%]">{t.tickets.titleLabel}</TableHead>
                 <TableHead>{t.tickets.issuer}</TableHead>
                 <TableHead>{t.tickets.responsibleName}</TableHead>
@@ -352,7 +354,11 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                       : undefined
                   }
                 >
-                  <SelectRowCell selection={selection} id={row.id} name={row.title} />
+                  {canEdit ? (
+                    <SelectRowCell selection={selection} id={row.id} name={row.title} />
+                  ) : (
+                    <TableCell />
+                  )}
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-medium">{row.title}</p>
@@ -378,7 +384,7 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                     {formatDateTime(row.createdAt)}
                   </TableCell>
                   <TableCell>
-                    <Select
+                    {canEdit ? <Select
                       items={statusOptions.filter(
                         (option) => option.value !== "closed" || row.status === "closed",
                       )}
@@ -402,11 +408,11 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
                           </SelectItem>
                           ))}
                       </SelectContent>
-                    </Select>
+                    </Select> : <Badge variant="outline">{statusLabel("ticket", row.status)}</Badge>}
                   </TableCell>
                   <TableCell className="pr-4">
                     <div className="flex justify-end gap-1">
-                      {row.status !== "closed" && (
+                      {canEdit && row.status !== "closed" && (
                         <Button
                           variant="ghost"
                           size="icon-sm"
@@ -439,7 +445,7 @@ export default function TicketsTab({ projectId }: { projectId: string }) {
         />
       )}
 
-      {dialog && (
+      {canEdit && dialog && (
         <TicketDialog
           key={dialog.id ?? "new"}
           open

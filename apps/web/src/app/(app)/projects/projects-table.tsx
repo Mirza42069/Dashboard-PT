@@ -170,7 +170,10 @@ export default function ProjectsTable({
     try {
       const result = await setArchived.mutateAsync({ ids, archived: true });
       selection.clear();
-      await queryClient.invalidateQueries(trpc.project.pathFilter());
+      await Promise.all([
+        queryClient.invalidateQueries(trpc.project.pathFilter()),
+        queryClient.invalidateQueries(trpc.activity.pathFilter()),
+      ]);
       toast.success(plural(t.projects.archivedToast, result.count));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.projects.archiveFailed);

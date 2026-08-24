@@ -9,7 +9,7 @@ import {
   project,
   reportingPeriod,
 } from "@DashboardV2/db/schema";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 
 import {
   type ImportError,
@@ -194,6 +194,13 @@ export function prepareBoqRevision(input: {
 
   const importId = crypto.randomUUID();
   const statements = [
+    db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.projectId}, 0))`),
+    db.execute(sql`
+      select 1 / case when exists (
+        select 1 from "project"
+        where "id" = ${input.projectId} and "archived_at" is null
+      ) then 1 else 0 end
+    `),
     db.insert(boqVersion).values({
       id: versionId,
       projectId: input.projectId,
@@ -312,21 +319,29 @@ export async function commitImport(input: {
         ? [{ row: input.headerRow, column: null, message: "No rows were found under the header row." }]
         : errors;
 
-    const [written] = await db
-      .insert(boqImport)
-      .values({
+    const failedImportId = crypto.randomUUID();
+    await runBatch([
+      db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.projectId}, 0))`),
+      db.execute(sql`
+        select 1 / case when exists (
+          select 1 from "project"
+          where "id" = ${input.projectId} and "archived_at" is null
+        ) then 1 else 0 end
+      `),
+      db.insert(boqImport).values({
+        id: failedImportId,
         ...record,
         status: "failed",
         rowsTotal: rows.length + listed.length,
         rowsImported: 0,
         errorCount: listed.length,
         errors: JSON.stringify(listed),
-      })
-      .returning({ id: boqImport.id });
+      }),
+    ]);
 
     return {
       status: "failed",
-      importId: written?.id ?? "",
+      importId: failedImportId,
       errors: listed,
       rowsTotal: rows.length,
     };

@@ -458,15 +458,21 @@ function RequestSheet({
                   message carries its own author and time, so the "replied by"
                   and "final reply" captions this replaced are now redundant. */}
               <div className="px-4 py-6">
-                <SupportTranscript
-                  opening={{
-                    body: request.message,
-                    authorName: request.requesterName,
-                    createdAt: request.createdAt,
-                  }}
-                  messages={thread.data ?? []}
-                  mine="support"
-                />
+                {thread.isError ? (
+                  <QueryError error={thread.error} onRetry={() => void thread.refetch()} />
+                ) : thread.isPending ? (
+                  <Skeleton className="h-40 w-full" />
+                ) : (
+                  <SupportTranscript
+                    opening={{
+                      body: request.message,
+                      authorName: request.requesterName,
+                      createdAt: request.createdAt,
+                    }}
+                    messages={thread.data}
+                    mine="support"
+                  />
+                )}
               </div>
 
               {request.acceptedAt && (
@@ -530,7 +536,9 @@ function RequestSheet({
               )}
             </div>
 
-            {(request.status === "new" || request.status === "answered") && (
+            {(request.status === "new" ||
+              request.status === "accepted" ||
+              request.status === "answered") && (
               <SheetFooter className="border-t bg-card">
                 {request.status === "new" && (
                   <Button
@@ -546,7 +554,7 @@ function RequestSheet({
                     {accept.isPending ? t.support.accepting : t.support.acceptRequest}
                   </Button>
                 )}
-                {request.status === "answered" && (
+                {(request.status === "accepted" || request.status === "answered") && (
                   <Button
                     ref={closeButtonRef}
                     variant="outline"

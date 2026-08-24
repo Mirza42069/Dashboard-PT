@@ -68,12 +68,7 @@ function messagesFor(requestId: string) {
 }
 
 /**
- * Appends to the transcript, then moves the turn.
- *
- * The message lands first on purpose: the transition is the conditional write
- * that can lose a race, so if it throws, the caller sees the conflict rather
- * than a status that moved without anything being said. A stray message with no
- * transition is recoverable — the reverse is not.
+ * Appends to the transcript and moves the turn in one statement.
  */
 async function appendMessage(input: {
   requestId: string;
@@ -83,14 +78,6 @@ async function appendMessage(input: {
   authorName: string;
   authorSide: SupportMessageAuthor;
 }) {
-  await db.insert(supportMessage).values({
-    requestId: input.requestId,
-    body: input.body,
-    authorId: input.authorId,
-    authorName: input.authorName,
-    authorSide: input.authorSide,
-  });
-
   return transitionWithNotice({
     id: input.requestId,
     action: input.action,
@@ -99,6 +86,12 @@ async function appendMessage(input: {
     // Mirrored onto the request so the notice CTE can lift it for the
     // notification body without a second round trip.
     finalReply: input.action === "reply" ? input.body : undefined,
+    message: {
+      body: input.body,
+      authorId: input.authorId,
+      authorName: input.authorName,
+      authorSide: input.authorSide,
+    },
   });
 }
 
@@ -155,6 +148,12 @@ async function transitionWithNotice(input: {
   actorId: string;
   actorName: string;
   finalReply?: string;
+  message?: {
+    body: string;
+    authorId: string;
+    authorName: string;
+    authorSide: SupportMessageAuthor;
+  };
 }) {
   const sources = actionSources[input.action];
   const landings = sources.map((from) => {
@@ -219,15 +218,27 @@ async function transitionWithNotice(input: {
       WHERE "id" = ${input.id} AND "status" IN (${expected})
        RETURNING "id", "requester_id", "company_id", "subject", "final_reply"
     )`;
+  const appended = input.message
+    ? sql`, appended AS (
+        INSERT INTO "support_message" (
+          "id", "request_id", "body", "author_id", "author_name", "author_side", "created_at"
+        )
+        SELECT
+          ${crypto.randomUUID()}, changed."id", ${input.message.body}, ${input.message.authorId},
+          ${input.message.authorName}, ${input.message.authorSide}, ${now}
+        FROM transitioned AS changed
+        RETURNING "id"
+      )`
+    : sql``;
 
   if (noticeKind === null) {
-    const quiet = await db.execute(sql`${transitioned} SELECT "id" FROM transitioned`);
+    const quiet = await db.execute(sql`${transitioned}${appended} SELECT "id" FROM transitioned`);
     if (quiet.rows.length === 0) await throwTransitionError(input.id, input.action);
     return requestOrThrow(input.id);
   }
 
   const result = await db.execute(sql`
-    ${transitioned}, superseded AS (
+    ${transitioned}${appended}, superseded AS (
       DELETE FROM "notification" AS old_notice
       USING transitioned AS changed
       WHERE old_notice."user_id" = changed."requester_id"

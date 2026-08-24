@@ -52,13 +52,14 @@ import {
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import {
+  MatrixColumnSpacer,
   MatrixRowSpacer,
   useMatrixWindow,
   WindowedMonthBandRow,
 } from "@/components/matrix-window";
 import { MatrixScrollAffordance } from "@/components/matrix-scroll-affordance";
 import { QueryError } from "@/components/query-error";
-import { interpolate, plural } from "@/i18n";
+import { interpolate } from "@/i18n";
 import {
   Popover,
   PopoverContent,
@@ -70,13 +71,7 @@ import { Hint } from "@/components/hint";
 import { useLocale, useT } from "@/i18n/provider";
 import { computePlannedCurve, distributionMap, scheduleRows } from "@/lib/boq/curves";
 import { datePickerLabels } from "@/lib/date-picker-labels";
-import {
-  COMPACT_CELL_WIDTH,
-  MAX_PERIOD_WIDTH,
-  MIN_PERIOD_WIDTH_EDITABLE,
-  MIN_PERIOD_WIDTH_READONLY,
-  fitMatrix,
-} from "@/lib/matrix-fit";
+import { COMPACT_CELL_WIDTH, MAX_PERIOD_WIDTH, fitMatrix } from "@/lib/matrix-fit";
 import { toggleFold, type MonthFoldState } from "@/lib/month-fold";
 import { useMatrixKeyboard } from "@/lib/use-matrix-keyboard";
 import { useRowSelection } from "@/lib/use-row-selection";
@@ -102,14 +97,12 @@ const ROW_TOLERANCE = 0.5;
  * <colgroup>: the fit arithmetic depends on the two agreeing, and they used to
  * be kept in step by hand.
  *
- * And every pixel of it comes out of the cells. fitMatrix divides whatever is
- * left of the container between the period columns, so these blocks are not
- * neutral chrome — they are the reason a cell was 56px wide. They were
- * [40, 256] and [88, 80]; the 64px trimmed off goes straight to the columns,
- * enough to lift several of them over COMPACT_CELL_WIDTH, which is what gates
- * the roomier padding and the second header line. The description column
- * truncates and carries its full text on `title`, so a narrower one hides
- * nothing.
+ * These were [40, 256] and [88, 80] back when the grid was squeezed into its
+ * card and every pixel here came out of a period column. The columns are drawn
+ * at full width now, so the narrower blocks buy horizontal scroll rather than
+ * cell width — still worth having, since it is that much less scrolling. The
+ * description column truncates and carries its full text on `title`, so a
+ * narrower one hides nothing.
  */
 const LEADING_COL_WIDTHS = [40, 208] as const;
 /**
@@ -168,13 +161,13 @@ export default function ScheduleTab({
   const [bulkPlan, setBulkPlan] = useState<PlanDraft>({ start: "", finish: "" });
   const [saving, setSaving] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [showFullMatrix, setShowFullMatrix] = useState(false);
   /**
-   * What the reader has said about each month — see the same state in
-   * progress-tab.tsx and lib/month-fold.ts. The two grids fold independently,
-   * because they are read for different reasons and rarely at the same width.
+   * The months the reader has folded — see the same state in progress-tab.tsx
+   * and lib/month-fold.ts. Empty to start with: the grid opens showing every
+   * period, and folding is something you ask for. The two grids fold
+   * independently, because they are read for different reasons.
    */
-  const [monthFold, setMonthFold] = useState<MonthFoldState>(() => new Map());
+  const [monthFold, setMonthFold] = useState<MonthFoldState>(() => new Set());
 
   const reportQuery = useQuery(
     trpc.progress.report.queryOptions({ projectId, versionId: targetVersionId }),
@@ -191,43 +184,33 @@ export default function ScheduleTab({
    * BoQ line every bulk action addresses.
    */
   const selection = useRowSelection(matrixRows, { getId: (row) => row.leaf.id });
-  // Called before the fit: this is what measures the container the fit divides.
-  // Its own column window is off, so the count it takes need only be stable.
-  const matrixWindow = useMatrixWindow({
-    rowCount: matrixRows.length,
-    columnCount: matrixPeriods.length,
-    estimatedRowHeight: ESTIMATED_ROW_HEIGHT,
-    // Constant on purpose — the fitted width moves on every resize tick and
-    // this value sits in the observer effect's dependency list.
-    columnWidth: MAX_PERIOD_WIDTH,
-    estimatedHeaderHeight: ESTIMATED_HEADER_HEIGHT,
-    leadingWidth: LEADING_WIDTH,
-    stickyLeadingWidth: STICKY_LEADING_WIDTH,
-    windowed: !showFullMatrix,
-    windowColumns: false,
-  });
   const fit = fitMatrix({
-    available: showFullMatrix ? 0 : matrixWindow.containerWidth,
     leadingWidth: LEADING_WIDTH,
     trailingWidth: TRAILING_WIDTH,
     periods: matrixPeriods,
     state: monthFold,
-    minPeriodWidth: canEdit ? MIN_PERIOD_WIDTH_EDITABLE : MIN_PERIOD_WIDTH_READONLY,
-    dataDate: reportQuery.data?.project.dataDate ?? null,
   });
   const allMatrixColumns = buildMatrixColumns(matrixPeriods, fit.collapsed);
+  const matrixWindow = useMatrixWindow({
+    rowCount: matrixRows.length,
+    columnCount: allMatrixColumns.length,
+    estimatedRowHeight: ESTIMATED_ROW_HEIGHT,
+    columnWidth: MAX_PERIOD_WIDTH,
+    estimatedHeaderHeight: ESTIMATED_HEADER_HEIGHT,
+    leadingWidth: LEADING_WIDTH,
+    stickyLeadingWidth: STICKY_LEADING_WIDTH,
+    windowed: true,
+  });
   const matrixKeyboard = useMatrixKeyboard({
     scrollRef: matrixWindow.scrollRef,
     rowCount: matrixRows.length,
     columnCount: allMatrixColumns.length,
     rowHeight: ESTIMATED_ROW_HEIGHT,
+    columnWidth: MAX_PERIOD_WIDTH,
   });
 
   function toggleMonth(monthKey: string) {
-    // Against what is rendered, not what is stored: a month the fitter folded
-    // has no stored intent to invert.
-    const rendered = fit.collapsed.has(monthKey);
-    setMonthFold((current) => toggleFold(current, monthKey, rendered));
+    setMonthFold((current) => toggleFold(current, monthKey));
   }
   const generatePeriods = useMutation(trpc.schedule.generatePeriods.mutationOptions());
   const setCells = useMutation(trpc.schedule.setDistributionCells.mutationOptions());
@@ -320,15 +303,14 @@ export default function ScheduleTab({
 
   const rows = matrixRows;
   const visibleRows = rows.slice(matrixWindow.rowWindow.start, matrixWindow.rowWindow.end);
-  // Every column. Columns are no longer virtualised — the grid is fitted to
-  // the card instead, so there is nothing off the side to leave unrendered.
-  const visibleColumns = allMatrixColumns;
+  const visibleColumns = allMatrixColumns.slice(
+    matrixWindow.columnWindow.start,
+    matrixWindow.columnWindow.end,
+  );
   const visibleHeader = buildPeriodHeader(
     format,
     visibleColumns,
     report?.project.dataDate ?? null,
-    // The derived set, not the intent: a month the fitter folded still has to
-    // be offered an unfold control, and only this knows it is folded.
     fit.collapsed,
   );
   /**
@@ -364,10 +346,17 @@ export default function ScheduleTab({
     );
   }
 
-  const renderedColumnCount = LEADING_COLUMNS + visibleColumns.length + TRAILING_COLUMNS;
-  /** The two states a fitted grid can still exceed its container in. */
-  const scrollsSideways = showFullMatrix || fit.overflows;
-  /** Narrow enough to hold a figure but not a caption under it. */
+  const beforeColumns = matrixWindow.columnWindow.beforeSize > 0 ? 1 : 0;
+  const afterColumns = matrixWindow.columnWindow.afterSize > 0 ? 1 : 0;
+  const renderedColumnCount =
+    LEADING_COLUMNS + beforeColumns + visibleColumns.length + afterColumns + TRAILING_COLUMNS;
+  /**
+   * Narrow enough to hold a figure but not a caption under it.
+   *
+   * False at the fixed column width the grid now uses. Kept because it is what
+   * the cell and header markup below branch on, and the width is the sort of
+   * thing that gets tuned.
+   */
   const compact = fit.periodWidth < COMPACT_CELL_WIDTH;
   const firstIndex = periods[0]?.periodIndex ?? 1;
   const lastIndex = periods[periods.length - 1]?.periodIndex ?? 1;
@@ -652,16 +641,6 @@ export default function ScheduleTab({
               </CardTitle>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button
-                variant={showFullMatrix ? "secondary" : "outline"}
-                size="sm"
-                aria-pressed={showFullMatrix}
-                aria-controls="schedule-matrix-table"
-                title={t.common.fullTableHint}
-                onClick={() => setShowFullMatrix((current) => !current)}
-              >
-                {t.common.fullTable}
-              </Button>
               {editable && drafts.size > 0 && (
                 <>
                   <Button variant="outline" size="sm" onClick={() => setDrafts(new Map())}>
@@ -691,16 +670,6 @@ export default function ScheduleTab({
         </CardHeader>
 
         <CardContent className="px-0">
-          {/* The fold is visible on the band row; that it happened on its own,
-              because the window changed size, is not. */}
-          <p className="sr-only" role="status" aria-live="polite">
-            {fit.overflows
-              ? t.progress.tooWide
-              : fit.autoCollapsed.size > 0
-                ? plural(t.progress.autoFolded, fit.autoCollapsed.size)
-                : ""}
-          </p>
-
           {/* The positioning context the scroll affordance hangs off. It wraps
               the Table rather than living inside it, because the container is
               the thing that scrolls and a cue inside it scrolls away.
@@ -726,23 +695,20 @@ export default function ScheduleTab({
                   // their default, so Tab still leaves the grid.
                   onKeyDown: matrixKeyboard.onKeyDown,
                 }}
-                scrollX={scrollsSideways}
+                scrollX
                 // This grid draws its own fade and page buttons instead — see
                 // components/matrix-scroll-affordance.tsx.
                 scrollShadows={false}
-                containerClassName={`max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] ${
-                  showFullMatrix ? "" : "[overflow-anchor:none]"
-                } ${scrollsSideways ? "" : "overflow-x-clip"}`}
+                containerClassName="max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [overflow-anchor:none] [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
                 aria-rowcount={rows.length + 4}
                 aria-colcount={LEADING_COLUMNS + allMatrixColumns.length + TRAILING_COLUMNS}
                 className="table-fixed"
                 style={{
-                  // The width the fitter arrived at, not one the reader has to
-                  // scroll to reach. minWidth only where the grid can still
-                  // exceed the container: "Full table", or an unfold that will
-                  // not fit however much is folded around it.
+                  // Every column at full width, whether or not that fits the
+                  // card. minWidth keeps a short project's grid spanning the
+                  // card rather than leaving a gap down its right-hand side.
                   width: fit.tableWidth,
-                  minWidth: scrollsSideways ? "100%" : undefined,
+                  minWidth: "100%",
                 }}
               >
                 <caption className="sr-only">
@@ -754,9 +720,15 @@ export default function ScheduleTab({
                   {LEADING_COL_WIDTHS.map((width, index) => (
                     <col key={`leading-${index}`} style={{ width }} />
                   ))}
-                  {visibleColumns.map((column, index) => (
-                    <col key={column.key} style={{ width: fit.columnWidths[index] }} />
+                  {beforeColumns > 0 && (
+                    <col style={{ width: matrixWindow.columnWindow.beforeSize }} />
+                  )}
+                  {visibleColumns.map((column) => (
+                    <col key={column.key} style={{ width: MAX_PERIOD_WIDTH }} />
                   ))}
+                  {afterColumns > 0 && (
+                    <col style={{ width: matrixWindow.columnWindow.afterSize }} />
+                  )}
                   {TRAILING_COL_WIDTHS.map((width, index) => (
                     <col key={`trailing-${index}`} style={{ width }} />
                   ))}
@@ -767,8 +739,8 @@ export default function ScheduleTab({
                     leadingLabel={t.schedule.line}
                     leadingColSpan={LEADING_COLUMNS}
                     trailingColSpan={TRAILING_COLUMNS}
-                    beforeSize={0}
-                    afterSize={0}
+                    beforeSize={matrixWindow.columnWindow.beforeSize}
+                    afterSize={matrixWindow.columnWindow.afterSize}
                     onToggleMonth={toggleMonth}
                     gridId="schedule-matrix-table"
                   />
@@ -792,11 +764,14 @@ export default function ScheduleTab({
                     <TableHead scope="col" className="sticky left-10 z-10 h-auto bg-card px-2 py-2.5">
                       {t.schedule.line}
                     </TableHead>
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} header />
                     {visibleHeader.columns.map((view, index) => (
                       <TableHead
                         key={view.column.key}
                         scope="col"
-                        aria-colindex={LEADING_COLUMNS + index + 1}
+                        aria-colindex={
+                          LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
+                        }
                         aria-current={view.isCurrent ? "true" : undefined}
                         aria-label={view.accessibleName}
                         // h-auto: these headers carry two lines, and TableHead's
@@ -832,6 +807,7 @@ export default function ScheduleTab({
                         )}
                       </TableHead>
                     ))}
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} header />
                     <TableHead
                       scope="col"
                       aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 1}
@@ -922,6 +898,7 @@ export default function ScheduleTab({
                           {row.leaf.description}
                         </th>
 
+                        <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
                         {/* Start, finish, duration and weight/period were four
                             columns here. They live in the plan popover in the
                             actions cell now: the same editors on the same commit
@@ -946,7 +923,7 @@ export default function ScheduleTab({
                             <TableCell
                               key={column.key}
                               aria-colindex={
-                                LEADING_COLUMNS + index + 1
+                                  LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
                               }
                               className={`py-2 ${compact ? "px-1" : "px-1.5"}`}
                             >
@@ -958,7 +935,10 @@ export default function ScheduleTab({
                                   inputMode="decimal"
                                   value={drafts.get(key) ?? (value === 0 ? "" : String(value))}
                                   aria-label={`${row.leaf.code} - ${accessibleName}`}
-                                  {...matrixKeyboard.cellProps(rowIndex, index)}
+                                  {...matrixKeyboard.cellProps(
+                                    rowIndex,
+                                    matrixWindow.columnWindow.start + index,
+                                  )}
                                   // px-1 once the column is compact: the Input
                                   // primitive spends 22px on padding and borders
                                   // before a digit is drawn.
@@ -990,6 +970,7 @@ export default function ScheduleTab({
                             </TableCell>
                           );
                         })}
+                        <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
 
                         <TableCell
                           aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 1}
@@ -1137,6 +1118,7 @@ export default function ScheduleTab({
                     >
                       {t.schedule.plannedPerPeriod}
                     </th>
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
                     {/* Indexed by column, not by period: these arrays are one
                         entry per period, so a folded column has to gather the
                         entries it covers rather than take the one that happens
@@ -1145,13 +1127,14 @@ export default function ScheduleTab({
                       <TableCell
                         key={column.key}
                         aria-colindex={
-                          LEADING_COLUMNS + index + 1
+                          LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
                         }
                         className="px-2 py-2 text-right tabular-nums text-muted-foreground"
                       >
                         {plannedForColumn(planned.perPeriod, column, "sum").toFixed(1)}
                       </TableCell>
                     ))}
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
                     <TableCell colSpan={TRAILING_COLUMNS} />
                   </TableRow>
                   <TableRow aria-rowindex={rows.length + 4}>
@@ -1162,31 +1145,33 @@ export default function ScheduleTab({
                     >
                       {t.schedule.plannedCumulative}
                     </th>
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
                     {/* Cumulative, so a folded month is where it *ended*, never
                         the sum of the running totals inside it. */}
                     {visibleColumns.map((column, index) => (
                       <TableCell
                         key={column.key}
                         aria-colindex={
-                          LEADING_COLUMNS + index + 1
+                          LEADING_COLUMNS + matrixWindow.columnWindow.start + index + 1
                         }
                         className="px-2 py-2 text-right font-medium tabular-nums"
                       >
                         {plannedForColumn(planned.cumulative, column, "last").toFixed(1)}
                       </TableCell>
                     ))}
+                    <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
                     <TableCell colSpan={TRAILING_COLUMNS} />
                   </TableRow>
                 </TableFooter>
               </Table>
-              {scrollsSideways && (
-                <MatrixScrollAffordance
-                  scrollRef={matrixWindow.scrollRef}
-                  edges={matrixWindow.edges}
-                  leadingWidth={LEADING_WIDTH}
-                  controls="schedule-matrix-table"
-                />
-              )}
+              {/* Always mounted — it draws nothing until there is something
+                  off the side, and reads `edges` to know. */}
+              <MatrixScrollAffordance
+                scrollRef={matrixWindow.scrollRef}
+                edges={matrixWindow.edges}
+                leadingWidth={LEADING_WIDTH}
+                controls="schedule-matrix-table"
+              />
           </div>
         </CardContent>
       </Card>

@@ -165,7 +165,10 @@ export default function ProjectDetail({
   async function restore() {
     try {
       await setArchived.mutateAsync({ ids: [projectId], archived: false });
-      await queryClient.invalidateQueries(trpc.project.pathFilter());
+      await Promise.all([
+        queryClient.invalidateQueries(trpc.project.pathFilter()),
+        queryClient.invalidateQueries(trpc.activity.pathFilter()),
+      ]);
       toast.success(plural(t.projects.restoredToast, 1));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.projects.archiveFailed);
@@ -234,7 +237,12 @@ export default function ProjectDetail({
           </AlertDescription>
           {canArchive && (
             <AlertAction>
-              <Button variant="outline" size="sm" onClick={() => void restore()}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={setArchived.isPending}
+                onClick={() => void restore()}
+              >
                 {t.projects.restore}
               </Button>
             </AlertAction>
@@ -288,7 +296,7 @@ export default function ProjectDetail({
         </TabsContent>
 
         <TabsContent value="tickets">
-          {activeTab === "tickets" && <TicketsTab projectId={projectId} />}
+          {activeTab === "tickets" && <TicketsTab projectId={projectId} canEdit={writable} />}
         </TabsContent>
 
         <TabsContent value="daily">
@@ -310,7 +318,7 @@ export default function ProjectDetail({
         {canManageMembers && (
           <TabsContent value="team">
             {activeTab === "team" && (
-              <TeamTab projectId={projectId} managerId={project.managerId} />
+              <TeamTab projectId={projectId} managerId={project.managerId} canEdit={!archived} />
             )}
           </TabsContent>
         )}

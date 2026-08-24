@@ -12,11 +12,10 @@ import type { ScrollEdges } from "@/lib/matrix-window";
  * The "there is more this way" cue for the entry grids, and the control that
  * acts on it.
  *
- * The grids normally fit their card rather than scroll — see `fitMatrix`, which
- * compresses columns and then folds months to avoid it. This is for the two
- * states where that promise is deliberately broken: "Full table", and a month
- * the reader unfolded that will not fit however much is folded around it. In
- * both, columns really are hidden off the side and nothing on screen said so.
+ * The grids draw every period at full width, so on any project longer than the
+ * card is wide there are columns off the right-hand side and nothing on screen
+ * would otherwise say so. Folding a month (the chevrons on the band row) is the
+ * way to shorten the grid; this is the way to reach what is still off it.
  *
  * `table-scroll-shadows` is what every other table uses for this, and it is not
  * enough here: it paints on the container's *background*, under a grid whose
@@ -54,9 +53,8 @@ export function MatrixScrollAffordance({
    * still on screen after the jump. The floor is for a very narrow container,
    * where 80% of nothing much would not move at all.
    *
-   * Smooth unconditionally. `prefers-reduced-motion` is deliberately not
-   * consulted for interaction-triggered motion in this product — see the note
-   * on the sidebar collapse in packages/ui/src/styles/globals.css.
+   * Respect reduced motion even though this movement is interaction-triggered:
+   * a near-viewport jump is large enough to be disorienting.
    */
   function page(direction: 1 | -1) {
     const element = scrollRef.current;
@@ -64,7 +62,7 @@ export function MatrixScrollAffordance({
 
     element.scrollBy({
       left: direction * Math.max(120, element.clientWidth * 0.8),
-      behavior: "smooth",
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
     });
   }
 

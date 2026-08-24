@@ -520,7 +520,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     db.execute(sql`
       select 1 / case when exists (
         select 1 from project
-        where id = ${input.projectId} and company_id = ${input.companyId}
+        where id = ${input.projectId} and company_id = ${input.companyId} and archived_at is null
       ) then 1 else 0 end
     `),
   ];
@@ -545,6 +545,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
             and schedule_start is not distinct from ${current.scheduleStart}
             and end_date is not distinct from ${current.endDate}
             and period_type is not distinct from ${current.periodType}
+            and period_length_days is not distinct from ${current.periodLengthDays}
         ) then 1 else 0 end
       `),
     );

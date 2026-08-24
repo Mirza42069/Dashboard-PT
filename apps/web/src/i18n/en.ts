@@ -52,9 +52,6 @@ export const en = {
     keepEditing: "Keep editing",
     scrollLeft: "Scroll left",
     scrollRight: "Scroll right",
-    fullTable: "Full table",
-    fullTableHint:
-      "Show every row and period at full width. The table may scroll sideways.",
     // Date picker. packages/ui has no dictionary of its own, so these are passed
     // in as props — the same arrangement as DialogContent's closeLabel.
     pickDate: "Pick a date",
@@ -708,23 +705,7 @@ export const en = {
     expandMonth: "Unfold {month} back into its periods",
     monthFolded: "{month}, folded — showing the figure at the end of the month",
     monthFoldedHint:
-      "Fold a month to bring the ones on either side of it onto the screen. Nothing is lost; unfold it to enter figures again.",
-    /*
-     * Announced, not drawn. The folding is visible on the band row; what a
-     * screen reader has no way to notice is that it happened on its own,
-     * because the window changed size rather than because anyone asked.
-     */
-    autoFolded: {
-      one: "One month folded so the grid fits the screen.",
-      other: "{count} months folded so the grid fits the screen.",
-    },
-    /*
-     * The one case where a fitted grid still scrolls: a month was unfolded by
-     * hand and will not fit however much is folded around it. Says which
-     * choice caused it, so the way out is obvious.
-     */
-    tooWide:
-      "Wider than the screen, because a month is unfolded. Fold it again to bring the grid back into view.",
+      "Every period is shown, so the table scrolls sideways on a long project. Fold a month to shorten it. Nothing is lost; unfold it to enter figures again.",
     clearSelected: "Clear readings",
     clearedToast: { one: "Reading cleared on 1 line", other: "Readings cleared on {count} lines" },
     markNoProgressSelected: "Mark as unchanged",

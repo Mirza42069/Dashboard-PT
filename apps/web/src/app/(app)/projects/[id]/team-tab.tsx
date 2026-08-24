@@ -29,9 +29,11 @@ import { trpc } from "@/utils/trpc";
 export default function TeamTab({
   projectId,
   managerId,
+  canEdit,
 }: {
   projectId: string;
   managerId: string | null;
+  canEdit: boolean;
 }) {
   const t = useT();
   const queryClient = useQueryClient();
@@ -113,7 +115,7 @@ export default function TeamTab({
               >
                 <Checkbox
                   checked={selected.has(user.id)}
-                  disabled={user.id === protectedManagerId}
+                  disabled={!canEdit || user.id === protectedManagerId}
                   onCheckedChange={() => toggle(user.id)}
                   aria-label={user.name}
                 />
@@ -129,10 +131,12 @@ export default function TeamTab({
             ))}
           </div>
         )}
-        <Button size="sm" disabled={setMembers.isPending} onClick={() => void save()}>
-          <Save />
-          {t.common.save}
-        </Button>
+        {canEdit && (
+          <Button size="sm" disabled={setMembers.isPending} onClick={() => void save()}>
+            <Save />
+            {t.common.save}
+          </Button>
+        )}
       </CardContent>
     </Card>
   );

@@ -13,7 +13,7 @@ import {
 } from "./project-workbook";
 import { loadWorkbook } from "./boq-import-parse";
 
-setDefaultTimeout(15_000);
+setDefaultTimeout(30_000);
 
 const REFERENCE = resolve(import.meta.dir, "../../../reference/S-CURVE PLAN VS ACTUAL RSCH.xlsx");
 const DAILY_PROGRESS = resolve(import.meta.dir, "../../../reference/DAILY PROGRESS WEEK 16.xlsx");

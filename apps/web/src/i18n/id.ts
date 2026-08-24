@@ -56,9 +56,6 @@ export const id = {
     keepEditing: "Lanjut mengubah",
     scrollLeft: "Geser ke kiri",
     scrollRight: "Geser ke kanan",
-    fullTable: "Tabel lengkap",
-    fullTableHint:
-      "Tampilkan seluruh baris dan periode pada lebar penuh. Tabel dapat digeser ke samping.",
     pickDate: "Pilih tanggal",
     today: "Hari ini",
     clear: "Kosongkan",
@@ -709,13 +706,7 @@ export const id = {
     expandMonth: "Buka {month} kembali menjadi periodenya",
     monthFolded: "{month}, terlipat — menampilkan angka pada akhir bulan",
     monthFoldedHint:
-      "Lipat sebuah bulan untuk memunculkan bulan di kiri dan kanannya ke layar. Tidak ada data yang hilang; buka kembali untuk mengisi angka.",
-    autoFolded: {
-      one: "Satu bulan dilipat agar tabel muat di layar.",
-      other: "{count} bulan dilipat agar tabel muat di layar.",
-    },
-    tooWide:
-      "Lebih lebar dari layar karena ada bulan yang terbuka. Lipat kembali untuk mengembalikan tampilan.",
+      "Seluruh periode ditampilkan, jadi tabel dapat digeser ke samping pada proyek yang panjang. Lipat sebuah bulan untuk mempersingkatnya. Tidak ada data yang hilang; buka kembali untuk mengisi angka.",
     clearSelected: "Kosongkan angka",
     clearedToast: { one: "Angka dikosongkan pada 1 baris", other: "Angka dikosongkan pada {count} baris" },
     markNoProgressSelected: "Tandai tidak berubah",

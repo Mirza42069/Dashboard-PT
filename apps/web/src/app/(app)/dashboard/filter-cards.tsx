@@ -197,8 +197,12 @@ export function FilterCards({
               aria-label={t.projects.progressMeter}
               aria-valuemin={0}
               aria-valuemax={100}
-              aria-valuenow={completionPercent ?? 0}
-              aria-valuetext={percent(completionPercent ?? 0)}
+              aria-valuenow={completionPercent ?? undefined}
+              aria-valuetext={
+                completionPercent === null || completionPercent === undefined
+                  ? "—"
+                  : percent(completionPercent)
+              }
             >
               <TickBar value={completionPercent ?? 0} max={100} />
               <span className="text-xs text-muted-foreground tabular-nums" aria-hidden>

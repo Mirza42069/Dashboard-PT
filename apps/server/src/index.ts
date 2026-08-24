@@ -179,7 +179,7 @@ app.post("/notes/:noteId/photos", async (c) => {
   const { companyId } = scope;
   const noteId = c.req.param("noteId");
   const [note] = await db
-    .select({ id: projectNote.id })
+    .select({ id: projectNote.id, archivedAt: project.archivedAt })
     .from(projectNote)
     .innerJoin(project, eq(projectNote.projectId, project.id))
     .where(
@@ -204,6 +204,9 @@ app.post("/notes/:noteId/photos", async (c) => {
   if (!note) {
     return c.json({ error: "Note not found" }, 404);
   }
+  if (note.archivedAt !== null) {
+    return c.json({ error: "This project is archived. Restore it to make changes." }, 409);
+  }
 
   const body = Buffer.from(await c.req.arrayBuffer());
   if (body.byteLength === 0) {
@@ -213,15 +216,20 @@ app.post("/notes/:noteId/photos", async (c) => {
     return c.json({ error: "Photo exceeds the 4 MB upload limit" }, 413);
   }
 
-  const [created] = await db
-    .insert(notePhoto)
-    .values({ noteId, data: body, contentType, size: body.byteLength })
-    .returning({ id: notePhoto.id });
-  if (!created) {
-    return c.json({ error: "Could not save the photo" }, 500);
+  const photoId = crypto.randomUUID();
+  const created = await db.execute<{ id: string }>(sql`
+    insert into "note_photo" ("id", "note_id", "data", "content_type", "size")
+    select ${photoId}, note."id", ${body}, ${contentType}, ${body.byteLength}
+    from "project_note" as note
+    inner join "project" as parent on parent."id" = note."project_id"
+    where note."id" = ${noteId} and parent."archived_at" is null
+    returning "id"
+  `);
+  if (created.rows.length === 0) {
+    return c.json({ error: "This project changed. Refresh and try again." }, 409);
   }
 
-  return c.json({ id: created.id });
+  return c.json({ id: photoId });
 });
 
 /**
@@ -366,10 +374,11 @@ type ProjectWriteAccess =
         client: string | null;
         location: string | null;
         updatedAt: Date;
+        archivedAt: Date | null;
       };
     };
 
-async function requireProjectWrite(
+async function requireProjectAccess(
   c: HonoRequestContext,
   projectId: string,
 ): Promise<ProjectWriteAccess> {
@@ -389,6 +398,7 @@ async function requireProjectWrite(
       client: project.client,
       location: project.location,
       updatedAt: project.updatedAt,
+      archivedAt: project.archivedAt,
     })
     .from(project)
     .where(
@@ -398,8 +408,16 @@ async function requireProjectWrite(
       ),
     );
   if (!visible) return { error: "Not found", status: 404 as const };
-
   return { session, companyId: scope.companyId, project: visible };
+}
+
+async function requireProjectWrite(
+  c: HonoRequestContext,
+  projectId: string,
+): Promise<ProjectWriteAccess> {
+  const access = await requireProjectAccess(c, projectId);
+  if ("error" in access || access.project.archivedAt === null) return access;
+  return { error: "This project is archived. Restore it to make changes.", status: 409 as const };
 }
 
 /** Reads the uploaded workbook, refusing anything past the body limit. */
@@ -1322,7 +1340,7 @@ app.post("/projects/:id/boq-import/commit", async (c) => {
 
 app.get("/projects/:id/boq-import/:importId/errors.csv", async (c) => {
   const projectId = c.req.param("id");
-  const access = await requireProjectWrite(c, projectId);
+  const access = await requireProjectAccess(c, projectId);
   if ("error" in access) return c.json({ error: access.error }, access.status);
 
   const { errorReportCsv, getImportRecord } = await import("./boq-import");

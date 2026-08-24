@@ -42,7 +42,11 @@ export default function SupportThreads() {
   const [composeOpen, setComposeOpen] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
-  const listQuery = useQuery(trpc.support.myRequests.queryOptions());
+  const listQuery = useQuery({
+    ...trpc.support.myRequests.queryOptions(),
+    refetchInterval: THREAD_POLL_MS,
+    refetchIntervalInBackground: false,
+  });
   const requests = listQuery.data ?? [];
 
   // Falls back to the newest thread so the pane is never blank on arrival, and
@@ -73,9 +77,10 @@ export default function SupportThreads() {
    */
   useEffect(() => {
     if (!activeId || unreadHere === 0) return;
-    void markRead.mutateAsync({ id: activeId }).then(() =>
-      queryClient.invalidateQueries(trpc.support.pathFilter()),
-    );
+    void markRead
+      .mutateAsync({ id: activeId })
+      .then(() => queryClient.invalidateQueries(trpc.support.pathFilter()))
+      .catch(() => undefined);
     // markRead and queryClient are stable; re-running on them would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, unreadHere]);
