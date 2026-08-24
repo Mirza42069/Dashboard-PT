@@ -53,8 +53,8 @@ const actionSources: Record<
  * The request's own `message` is the opening and is not in here; callers render
  * it from the request row.
  */
-function messagesFor(requestId: string) {
-  return db
+async function messagesFor(requestId: string) {
+  const messages = await db
     .select({
       id: supportMessage.id,
       body: supportMessage.body,
@@ -65,6 +65,35 @@ function messagesFor(requestId: string) {
     .from(supportMessage)
     .where(eq(supportMessage.requestId, requestId))
     .orderBy(asc(supportMessage.createdAt));
+
+  // During deployment migrations run before the old server is replaced. A
+  // reply written in that window exists only on support_request because the
+  // old server does not know support_message yet. Preserve it in the transcript
+  // without duplicating rows already copied by migration 0032.
+  const [legacy] = await db
+    .select({
+      body: supportRequest.finalReply,
+      authorName: supportRequest.repliedByName,
+      createdAt: supportRequest.repliedAt,
+    })
+    .from(supportRequest)
+    .where(eq(supportRequest.id, requestId));
+  if (
+    legacy?.body &&
+    legacy.createdAt &&
+    !messages.some((message) => message.authorSide === "support" && message.body === legacy.body)
+  ) {
+    messages.push({
+      id: `legacy:${requestId}`,
+      body: legacy.body,
+      authorName: legacy.authorName ?? "Support",
+      authorSide: "support",
+      createdAt: legacy.createdAt,
+    });
+    messages.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+  }
+
+  return messages;
 }
 
 /**
