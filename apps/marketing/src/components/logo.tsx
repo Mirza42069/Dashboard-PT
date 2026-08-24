@@ -1,5 +1,5 @@
 /**
- * The Fushin mark.
+ * The Fushin AI mark.
  *
  * Two glyphs — a bowl and a notched banner — lifted verbatim from the source
  * artwork so the curves stay exactly as drawn. Both live in the 810×810 space

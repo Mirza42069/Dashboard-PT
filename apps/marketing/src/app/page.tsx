@@ -12,8 +12,8 @@ export const dynamic = "force-static";
 
 export const metadata: Metadata = {
   // `absolute` bypasses the layout template; a plain string would render
-  // "Fushin | Kontrol progres konstruksi | Fushin".
-  title: { absolute: "Fushin | Kontrol progres konstruksi" },
+  // "Fushin AI | Kontrol progres konstruksi | Fushin".
+  title: { absolute: "Fushin AI | Kontrol progres konstruksi" },
   description: content.id.hero.body,
   alternates: { canonical: "/", languages: { id: "/", en: "/en" } },
   openGraph: { locale: "id_ID", alternateLocale: "en_US" },

@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og";
 
 import { BANNER, BOWL } from "@/components/logo";
 
-export const alt = "Fushin construction progress control";
+export const alt = "Fushin AI construction progress control";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -18,7 +18,10 @@ export default function OpenGraphImage() {
             <path d={BOWL} fill="#000000" />
             <path d={BANNER} fill="#000000" />
           </svg>
-          <span style={{ fontSize: 38, fontWeight: 600, letterSpacing: "-0.02em" }}>Fushin</span>
+          <div style={{ display: "flex", gap: 10, fontSize: 38, fontWeight: 600, letterSpacing: "-0.02em" }}>
+            <span>Fushin</span>
+            <span style={{ color: "#fffefa99" }}>AI</span>
+          </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 28, maxWidth: 930 }}>
           <div style={{ fontSize: 76, lineHeight: 1.02, letterSpacing: "-0.045em", fontWeight: 600 }}>Control construction progress. Baseline to decision.</div>

@@ -74,7 +74,7 @@ export function demoEmail(lead: DemoLead) {
     ["Active projects", lead.size || "Not provided"],
     ["Language", lead.locale.toUpperCase()],
   ];
-  const text = `New Fushin demo request\n\n${fields.map(([label, entry]) => `${label}: ${entry}`).join("\n")}\n\nChallenge:\n${lead.challenge}`;
-  const html = `<div style="font-family:Arial,sans-serif;color:#171717;line-height:1.6"><h1 style="font-size:22px">New Fushin demo request</h1><table style="border-collapse:collapse;width:100%;max-width:640px">${fields.map(([label, entry]) => `<tr><td style="padding:8px 12px;border-bottom:1px solid #e5e5e5;color:#666">${escapeHtml(label)}</td><td style="padding:8px 12px;border-bottom:1px solid #e5e5e5"><strong>${escapeHtml(entry)}</strong></td></tr>`).join("")}</table><h2 style="font-size:16px;margin-top:24px">Main challenge</h2><p style="white-space:pre-wrap">${escapeHtml(lead.challenge)}</p></div>`;
+  const text = `New Fushin AI demo request\n\n${fields.map(([label, entry]) => `${label}: ${entry}`).join("\n")}\n\nChallenge:\n${lead.challenge}`;
+  const html = `<div style="font-family:Arial,sans-serif;color:#171717;line-height:1.6"><h1 style="font-size:22px">New Fushin AI demo request</h1><table style="border-collapse:collapse;width:100%;max-width:640px">${fields.map(([label, entry]) => `<tr><td style="padding:8px 12px;border-bottom:1px solid #e5e5e5;color:#666">${escapeHtml(label)}</td><td style="padding:8px 12px;border-bottom:1px solid #e5e5e5"><strong>${escapeHtml(entry)}</strong></td></tr>`).join("")}</table><h2 style="font-size:16px;margin-top:24px">Main challenge</h2><p style="white-space:pre-wrap">${escapeHtml(lead.challenge)}</p></div>`;
   return { text, html };
 }

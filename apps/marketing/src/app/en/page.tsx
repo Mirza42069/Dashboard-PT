@@ -11,7 +11,7 @@ import { content } from "@/lib/content";
 export const dynamic = "force-static";
 
 export const metadata: Metadata = {
-  title: { absolute: "Fushin | Construction progress control" },
+  title: { absolute: "Fushin AI | Construction progress control" },
   description: content.en.hero.body,
   alternates: { canonical: "/en", languages: { id: "/", en: "/en" } },
   openGraph: { locale: "en_US", alternateLocale: "id_ID" },

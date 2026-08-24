@@ -1,12 +1,12 @@
 import { Fragment } from "react";
 
 import type { Content } from "@/lib/content";
-import { contactMailto, isDemoConfigured } from "@/lib/site";
+import { contactMailto, isDemoConfigured, LOGIN_URL } from "@/lib/site";
 import { requestDemo } from "@/app/actions";
 
 import { DemoForm } from "./demo-form";
 import { GradualBlur } from "./gradual-blur";
-import { ArrowDown, Check, File } from "./icons";
+import { ArrowDown, ArrowRight, Check, File } from "./icons";
 import { LiveDemo } from "./live-demo";
 import { ProductShot } from "./product-shot";
 import { SiteHeader } from "./site-header";
@@ -27,7 +27,7 @@ export function LandingPage({ t }: { t: Content }) {
               </h1>
               <p className="lede">{t.hero.body}</p>
               <div className="hero-actions">
-                <a href="#workflow" className="button button-dark">{t.hero.secondary}<ArrowDown /></a>
+                <a href={LOGIN_URL} className="button button-dark">{t.hero.login}<ArrowRight /></a>
               </div>
             </div>
           </div>
@@ -177,6 +177,49 @@ export function LandingPage({ t }: { t: Content }) {
           </div>
         </section>
 
+
+        {/*
+          Questions immediately before the form: the last doubts get answered
+          while the form is still the next thing on screen.
+
+          Native <details>/<summary>: keyboard and screen-reader correct with no
+          JS, which matters because this app ships no design-system runtime (see
+          components/icons.tsx). The shared `name` makes it a real accordion in
+          browsers that support it and independent panels in those that do not.
+        */}
+        <section className="section faq-section" id="faq" aria-labelledby="faq-title">
+          <div className="page-shell">
+            <div className="section-heading">
+              <div>
+                <p className="micro-label">{t.faq.label}</p>
+                <h2 id="faq-title">{t.faq.title}</h2>
+              </div>
+            </div>
+            <div className="faq-list">
+              {t.faq.items.map(([question, answer]) => (
+                <details key={question} name="faq">
+                  <summary>{question}<ArrowDown /></summary>
+                  <p>{answer}</p>
+                </details>
+              ))}
+            </div>
+          </div>
+          {/* Built from the same array as the markup above, so the two cannot drift. */}
+          <script
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{
+              __html: JSON.stringify({
+                "@context": "https://schema.org",
+                "@type": "FAQPage",
+                mainEntity: t.faq.items.map(([question, answer]) => ({
+                  "@type": "Question",
+                  name: question,
+                  acceptedAnswer: { "@type": "Answer", text: answer },
+                })),
+              }),
+            }}
+          />
+        </section>
 
         <section className="demo-section" id="demo">
           <div className="page-shell demo-layout">

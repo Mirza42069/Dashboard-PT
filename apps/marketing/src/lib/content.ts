@@ -15,14 +15,14 @@ const id = {
   alternateLocale: "en" as const,
   alternateLabel: "EN",
   nav: {
-    home: "Beranda Fushin",
+    home: "Beranda Fushin AI",
     skipToContent: "Lewati ke konten",
   },
   hero: {
     titleStart: "Kendalikan progres konstruksi.",
     titleAccent: "Dari baseline sampai keputusan.",
     body: "Baseline BoQ, rencana vs realisasi, dan laporan lapangan dalam satu tempat.",
-    secondary: "Lihat cara kerjanya",
+    login: "Masuk ke dasbor",
   },
   proof: {
     label: "Kemampuan inti",
@@ -35,22 +35,22 @@ const id = {
   },
   shots: {
     dashboard: {
-      alt: "Dasbor portofolio Fushin menampilkan nilai portofolio, pekerjaan terukur, dan daftar proyek yang perlu perhatian.",
+      alt: "Dasbor portofolio Fushin AI menampilkan nilai portofolio, pekerjaan terukur, dan daftar proyek yang perlu perhatian.",
       title: "Kontrol portofolio",
       caption: "Dasbor",
     },
     progress: {
-      alt: "Tab progres proyek Fushin dengan kurva-S rencana versus realisasi, berjalan sampai tanggal data.",
+      alt: "Tab progres proyek Fushin AI dengan kurva-S rencana versus realisasi, berjalan sampai tanggal data.",
       title: "Progres proyek",
       caption: "Kurva-S",
     },
     import: {
-      alt: "Dialog impor workbook Fushin pada langkah pemilihan berkas .xlsx, sebelum AI membaca tata letaknya.",
+      alt: "Dialog impor workbook Fushin AI pada langkah pemilihan berkas .xlsx, sebelum AI membaca tata letaknya.",
       title: "Impor workbook",
       caption: "Impor .xlsx",
     },
     boq: {
-      alt: "Tab BoQ Fushin menampilkan item pekerjaan, bobot, volume, harga satuan, dan jumlah.",
+      alt: "Tab BoQ Fushin AI menampilkan item pekerjaan, bobot, volume, harga satuan, dan jumlah.",
       title: "Bill of Quantities",
       caption: "Baseline",
     },
@@ -73,11 +73,11 @@ const id = {
     title: "Impor BoQ dari Excel.",
     body: "AI membaca tata letak workbook Anda, lalu menyusun draft baseline.",
     bullets: [
-      ["Membaca format, bukan mengisi angka", "AI hanya mengenali tata letak. Semua angka tetap berasal dari workbook Anda."],
-      ["Anda menyetujui dulu", "Pemetaan kolom ditampilkan untuk ditinjau sebelum baseline dibuat."],
+      ["Membaca format, bukan mengisi angka", "Semua angka tetap dari workbook Anda."],
+      ["Anda menyetujui dulu", "Pemetaan kolom ditinjau sebelum baseline dibuat."],
       ["Ada cadangan deterministik", "Bila AI ragu, pembacaan berbasis aturan mengambil alih."],
     ],
-    note: ".xlsx hingga 50 MB. AI dapat memproses sampel sel; salinan privat sementara dihapus permanen setelah diproses.",
+    note: ".xlsx hingga 50 MB. AI membaca sampel sel; salinan sementara dihapus permanen setelah diproses.",
   },
   attention: {
     title: "Mulai dari yang bermasalah.",
@@ -96,17 +96,17 @@ const id = {
       [
         "Nilai kontrak",
         "Rp1,7 T berjalan",
-        "Sepuluh proyek dengan baseline BoQ dan jadwal terkunci, sembilan di antaranya masih berjalan.",
+        "Sepuluh proyek berbaseline, sembilan masih berjalan.",
       ],
       [
         "Periode",
         "Mingguan sampai bulanan",
-        "Periode dibuat dari tanggal kontrak, jadi satu dasbor menampung ritme yang berbeda.",
+        "Periode dibuat dari tanggal kontrak tiap proyek.",
       ],
       [
         "Deviasi",
         "−15,1% pada yang terburuk",
-        "Proyek paling tertinggal muncul lebih dulu, lengkap dengan lini penyebabnya.",
+        "Yang paling tertinggal muncul lebih dulu.",
       ],
     ],
     note: "Portofolio contoh yang dipakai untuk tangkapan layar di halaman ini, bukan data pelanggan.",
@@ -129,7 +129,7 @@ const id = {
     body: "Sekitar 30 menit. Gratis, tanpa komitmen.",
     unavailable: "Kirim email dan kami balas untuk menjadwalkan.",
     emailCta: "Email kami",
-    mailSubject: "Permintaan demo Fushin",
+    mailSubject: "Permintaan demo Fushin AI",
     mailNote: "Email Anda hanya dipakai untuk membalas permintaan ini.",
     privacyLink: "Kebijakan privasi",
     sequence: ["BoQ", "Jadwal", "Progres", "Keputusan"],
@@ -144,7 +144,42 @@ const id = {
       submit: "Kirim permintaan",
       submitting: "Mengirim…",
     },
-    privacy: "Dengan mengirim form ini, Anda setuju dihubungi terkait demo Fushin.",
+    privacy: "Dengan mengirim form ini, Anda setuju dihubungi terkait demo Fushin AI.",
+  },
+  /**
+   * Six objections, in the order they come up on a call. Answers are one line:
+   * the section sits below the demo form, so it removes a doubt rather than
+   * restating the pitch.
+   */
+  faq: {
+    label: "Tanya jawab",
+    title: "Pertanyaan yang sering masuk.",
+    items: [
+      [
+        "Apakah AI mengubah angka BoQ kami?",
+        "Tidak. AI hanya membaca tata letak workbook. Semua angka tetap dari file Anda.",
+      ],
+      [
+        "Apakah data proyek kami terpisah dari perusahaan lain?",
+        "Ya. Setiap perusahaan punya ruang sendiri. Hanya akun yang Anda undang bisa melihatnya.",
+      ],
+      [
+        "Tim kami sudah terbiasa Excel. Harus ganti?",
+        "Tidak. Tim tetap pakai Excel, Fushin AI yang membaca dan merapikannya.",
+      ],
+      [
+        "Berapa lama sampai bisa dipakai?",
+        "Impor satu workbook, baseline langsung jadi. Umumnya kurang dari satu hari.",
+      ],
+      [
+        "Bisa untuk berapa proyek sekaligus?",
+        "Tidak dibatasi. Satu dasbor menampung periode mingguan sampai bulanan.",
+      ],
+      [
+        "Berapa biayanya?",
+        "Menyesuaikan jumlah proyek aktif. Kami bahas angkanya saat demo.",
+      ],
+    ],
   },
 };
 
@@ -167,14 +202,14 @@ const en: Content = {
   alternateLocale: "id",
   alternateLabel: "ID",
   nav: {
-    home: "Fushin home",
+    home: "Fushin AI home",
     skipToContent: "Skip to content",
   },
   hero: {
     titleStart: "Control construction progress.",
     titleAccent: "Baseline to decision.",
     body: "BoQ baselines, planned vs actual, and field reports in one place.",
-    secondary: "See how it works",
+    login: "Log in to the dashboard",
   },
   proof: {
     label: "Core capabilities",
@@ -187,22 +222,22 @@ const en: Content = {
   },
   shots: {
     dashboard: {
-      alt: "The Fushin portfolio dashboard showing portfolio value, measured work, and the list of projects needing attention.",
+      alt: "The Fushin AI portfolio dashboard showing portfolio value, measured work, and the list of projects needing attention.",
       title: "Portfolio control",
       caption: "Dashboard",
     },
     progress: {
-      alt: "The Fushin project progress tab with a planned-versus-actual S-curve running to the data date.",
+      alt: "The Fushin AI project progress tab with a planned-versus-actual S-curve running to the data date.",
       title: "Project progress",
       caption: "S-curve",
     },
     import: {
-      alt: "The Fushin workbook import dialog at the file selection step, before AI reads the layout.",
+      alt: "The Fushin AI workbook import dialog at the file selection step, before AI reads the layout.",
       title: "Workbook import",
       caption: ".xlsx import",
     },
     boq: {
-      alt: "The Fushin BoQ tab showing work items with weights, quantities, unit rates, and amounts.",
+      alt: "The Fushin AI BoQ tab showing work items with weights, quantities, unit rates, and amounts.",
       title: "Bill of Quantities",
       caption: "Baseline",
     },
@@ -225,11 +260,11 @@ const en: Content = {
     title: "Import your BoQ from Excel.",
     body: "AI reads your workbook layout, then drafts the baseline.",
     bullets: [
-      ["Reads format, not figures", "AI only recognises the layout. Every number still comes from your workbook."],
-      ["You approve first", "The column mapping is shown for review before any baseline is created."],
+      ["Reads format, not figures", "Every number still comes from your workbook."],
+      ["You approve first", "You review the column mapping before any baseline is created."],
       ["Deterministic fallback", "If AI is unsure, rule-based parsing takes over."],
     ],
-    note: ".xlsx up to 50 MB. AI may process sample cells; the private temporary copy is permanently deleted after processing.",
+    note: ".xlsx up to 50 MB. AI reads sample cells; the temporary copy is permanently deleted after processing.",
   },
   attention: {
     title: "Start with what is off track.",
@@ -248,17 +283,17 @@ const en: Content = {
       [
         "Contract value",
         "Rp1.7 T running",
-        "Ten projects with a baselined BoQ and a locked schedule, nine of them still running.",
+        "Ten baselined projects, nine still running.",
       ],
       [
         "Periods",
         "Weekly to monthly",
-        "Periods come from the contract dates, so one dashboard holds different rhythms.",
+        "Periods come from each project's contract dates.",
       ],
       [
         "Deviation",
         "−15.1% at the worst",
-        "The project furthest behind surfaces first, with the lines causing it.",
+        "The project furthest behind surfaces first.",
       ],
     ],
     note: "The sample portfolio these screenshots were taken from, not customer data.",
@@ -281,7 +316,7 @@ const en: Content = {
     body: "About 30 minutes. Free, no commitment.",
     unavailable: "Email us and we will reply to schedule it.",
     emailCta: "Email us",
-    mailSubject: "Fushin demo request",
+    mailSubject: "Fushin AI demo request",
     mailNote: "We use your email only to reply to this request.",
     privacyLink: "Privacy policy",
     sequence: ["BoQ", "Schedule", "Progress", "Decision"],
@@ -296,7 +331,37 @@ const en: Content = {
       submit: "Send request",
       submitting: "Sending…",
     },
-    privacy: "By submitting this form, you agree to be contacted about a Fushin demo.",
+    privacy: "By submitting this form, you agree to be contacted about a Fushin AI demo.",
+  },
+  faq: {
+    label: "Questions",
+    title: "What people ask first.",
+    items: [
+      [
+        "Does AI change our BoQ figures?",
+        "No. AI only reads the workbook layout. Every number stays as it is in your file.",
+      ],
+      [
+        "Is our project data separate from other companies?",
+        "Yes. Each company has its own space. Only the accounts you invite can see it.",
+      ],
+      [
+        "Our team knows Excel. Do we have to switch?",
+        "No. The team keeps using Excel, Fushin AI reads it and tidies it up.",
+      ],
+      [
+        "How long until we can use it?",
+        "Import one workbook and the baseline is ready. Usually under a day.",
+      ],
+      [
+        "How many projects can it handle?",
+        "No limit. One dashboard holds weekly through monthly periods.",
+      ],
+      [
+        "What does it cost?",
+        "It follows your active project count. We go through the numbers in the demo.",
+      ],
+    ],
   },
 };
 

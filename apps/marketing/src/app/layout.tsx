@@ -11,8 +11,8 @@ import { SITE_URL } from "@/lib/site";
  * webfonts (see apps/web/src/app/layout.tsx), and that stays true — these are
  * self-hosted by next/font and never requested by the product.
  *
- * The stack matches thebillow.ai: Geist for headings, Inter for body copy,
- * Geist Mono for figures and micro-labels.
+ * Roles: Geist for headings, Inter for body copy, Geist Mono for figures and
+ * micro-labels.
  */
 const geist = Geist({
   subsets: ["latin"],
@@ -34,11 +34,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: { default: "Fushin | Kontrol progres konstruksi", template: "%s | Fushin" },
+  title: { default: "Fushin AI | Kontrol progres konstruksi", template: "%s | Fushin AI" },
   description: "Kontrol progres konstruksi dari baseline BoQ hingga review, persetujuan, dan keputusan proyek.",
-  applicationName: "Fushin",
+  applicationName: "Fushin AI",
   alternates: { canonical: "/", languages: { id: "/", en: "/en" } },
-  openGraph: { type: "website", siteName: "Fushin", locale: "id_ID", alternateLocale: "en_US", images: [{ url: "/opengraph-image", width: 1200, height: 630 }] },
+  openGraph: { type: "website", siteName: "Fushin AI", locale: "id_ID", alternateLocale: "en_US", images: [{ url: "/opengraph-image", width: 1200, height: 630 }] },
   twitter: { card: "summary_large_image", images: ["/opengraph-image"] },
 };
 

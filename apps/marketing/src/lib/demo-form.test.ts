@@ -55,7 +55,7 @@ describe("demo lead validation", () => {
     expect(parsed.lead).toBeDefined();
     const email = demoEmail(parsed.lead!);
     expect(email.html).not.toContain("<img src=x");
-    expect(email.html).toContain("New Fushin demo request");
-    expect(email.text).toStartWith("New Fushin demo request");
+    expect(email.html).toContain("New Fushin AI demo request");
+    expect(email.text).toStartWith("New Fushin AI demo request");
   });
 });
