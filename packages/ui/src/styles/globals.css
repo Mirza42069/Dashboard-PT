@@ -98,46 +98,15 @@
   --chart-4: oklch(0.6500 0.1400 75);
   --chart-5: oklch(0.8300 0.0800 85);
   /*
-   * The progress ramp: three stops, red through amber to green.
-   *
-   * A bar samples this along its own length rather than picking one colour for
-   * the whole fill, so the *tip* of the bar states how far along it is — barely
-   * started ends red, a third of the way ends amber, finished ends green. See
-   * progressRampColor() in apps/web/src/lib/progress-tone.ts, which mixes
-   * between whichever two of these bracket a position.
-   *
-   * This replaced five discrete bands running amber → cyan → teal → green. The
-   * bands were defensible — they refused to make two projects four points apart
-   * look different — but they read as an arbitrary sequence of hues rather than
-   * as a scale, and nobody could say which of two teals meant "further along".
-   * Red-to-green is a scale everyone already knows how to read.
-   *
-   * Separate from --chart-* on purpose. The chart ramp encodes magnitude for a
-   * data series and its steps must sit legibly beside each other; this one is a
-   * continuum and only its endpoints have to be told apart.
-   *
-   * The light midpoint is a gold rather than a lemon yellow, and that is a
-   * constraint rather than a preference: these bars are graphical objects
-   * carrying information, so they owe 3:1 against the card behind them (WCAG
-   * 1.4.11, non-text contrast), and yellow only clears that on white at about
-   * L 0.64 — which is amber. Dark mode has the headroom and goes properly
-   * yellow.
-   *
-   * Red no longer means only "behind schedule". A late project's bar used to
-   * override to --destructive; it now draws this ramp like any other, and the
-   * deviation badge beside it is what says it is late. Colour was a poor place
-   * for that: it cannot say *how far* behind, and the badge already does.
-   *
-   * Chroma here is held down by sRGB rather than by taste. The ramp passes
-   * through hue ~90 at L~0.60, where sRGB runs out at about C 0.123 — a first
-   * pass at C 0.15 put thirteen of the twenty pills outside the gamut, and
-   * clipped pills collapse onto each other and flatten the middle of the scale
-   * into one colour. The red end has far more headroom (C 0.237 is available at
-   * h27) and keeps more of it.
+   * The five-stop progress ramp, converted from the supplied sRGB palette.
+   * Bars sample between adjacent stops, while their written value remains the
+   * authoritative reading and schedule deviation stays a separate indicator.
    */
-  --progress-low: oklch(0.5800 0.1800 27);
-  --progress-mid: oklch(0.6400 0.1200 75);
-  --progress-high: oklch(0.5800 0.1300 148);
+  --progress-1: oklch(0.6642333 0.2126592 25.08985);  /* #fb4b4b */
+  --progress-2: oklch(0.8072961 0.1202373 48.82692);  /* #ffa879 */
+  --progress-3: oklch(0.8494849 0.1315476 75.70558);  /* #ffc163 */
+  --progress-4: oklch(0.9706823 0.1787478 109.65321); /* #feff5c */
+  --progress-5: oklch(0.9242794 0.2229197 126.32289); /* #c0ff33 */
   --radius: 0.375rem;
   --sidebar: oklch(0.9601 0.0103 261.7889);
   --sidebar-foreground: oklch(0.1443 0.0191 261.1564);
@@ -241,13 +210,12 @@
   --chart-3: oklch(0.7200 0.1300 165);
   --chart-4: oklch(0.7600 0.1400 75);
   --chart-5: oklch(0.5200 0.1000 195);
-  /* The progress ramp, lifted for a dark card. Same unreachable-for-now note as
-     the ramp above. The midpoint can be a real yellow here: 3:1 against a dark
-     card wants a *lighter* colour, which is the direction yellow already wants
-     to go, so the compromise the light theme makes does not apply. */
-  --progress-low: oklch(0.6800 0.1900 27);
-  --progress-mid: oklch(0.8000 0.1500 85);
-  --progress-high: oklch(0.7200 0.1600 148);
+  /* Keep the requested progress palette exact if dark mode is re-enabled. */
+  --progress-1: oklch(0.6642333 0.2126592 25.08985);
+  --progress-2: oklch(0.8072961 0.1202373 48.82692);
+  --progress-3: oklch(0.8494849 0.1315476 75.70558);
+  --progress-4: oklch(0.9706823 0.1787478 109.65321);
+  --progress-5: oklch(0.9242794 0.2229197 126.32289);
   --sidebar: oklch(0.2452 0.0305 256.8649);
   --sidebar-foreground: oklch(0.9392 0.0101 238.5151);
   --sidebar-primary: oklch(0.4887 0.2427 263.9688);
@@ -370,6 +338,17 @@
   }
   html {
     @apply font-sans;
+  }
+
+  /*
+   * Authenticated pages scroll inside AppShell's <main>. Lock the document only
+   * while that shell exists so its overflowing page content cannot create a
+   * second browser scrollbar; standalone auth pages keep normal document scroll.
+   */
+  html:has([data-app-shell]),
+  body:has([data-app-shell]) {
+    height: 100%;
+    overflow: hidden;
   }
 
   /*

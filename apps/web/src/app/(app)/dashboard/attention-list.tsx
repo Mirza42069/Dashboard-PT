@@ -28,6 +28,7 @@ import {
 import { cn } from "@DashboardV2/ui/lib/utils";
 import type { Route } from "next";
 import Link from "next/link";
+import type { ProjectModuleKey } from "@DashboardV2/api/lib/project-modules";
 
 import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
 import { Hint } from "@/components/hint";
@@ -36,6 +37,11 @@ import { QueryError } from "@/components/query-error";
 import { TickBar } from "@/components/tick-bar";
 import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import {
+  isProjectTabVisible,
+  projectTabPath,
+  type ProjectTab,
+} from "@/lib/project-navigation";
 import { useCoarsePointer } from "@/lib/use-coarse-pointer";
 import { useFormat } from "@/lib/use-format";
 
@@ -63,6 +69,7 @@ export type AttentionRow = SeverityInput & {
   hasBaseline: boolean;
   dataDate: string | null;
   reportAgeDays: number | null;
+  hiddenModules: ProjectModuleKey[];
 };
 
 /** The left edge, and nothing else, carries the row's urgency. */
@@ -199,10 +206,8 @@ export function AttentionList({
    * that one.
    */
   function signalHref(id: SignalId, row: AttentionRow): Route {
-    const base = `/projects/${row.projectId}`;
-    if (id === "openActions") return `${base}?tab=tickets` as Route;
-    if (id === "baselineMissing") return `${base}?tab=boq` as Route;
-    return `${base}?tab=progress` as Route;
+    const tab = id === "openActions" ? "tickets" : id === "baselineMissing" ? "boq" : "progress";
+    return projectTabPath(row.projectId, tab, row.hiddenModules) as Route;
   }
 
   /**
@@ -213,9 +218,11 @@ export function AttentionList({
    * tab even on a project that is also behind.
    */
   function href(row: AttentionRow): Route {
-    const base = `/projects/${row.projectId}`;
-    if (filter === "actions" && row.reasons.openActions) return `${base}?tab=tickets` as Route;
-    if (row.reasons.baselineMissing) return `${base}?tab=boq` as Route;
+    if (filter === "actions" && row.reasons.openActions) {
+      return projectTabPath(row.projectId, "tickets", row.hiddenModules) as Route;
+    }
+    const candidates: ProjectTab[] = [];
+    if (row.reasons.baselineMissing) candidates.push("boq");
     if (
       row.reasons.behind ||
       row.reasons.unreported ||
@@ -223,9 +230,13 @@ export function AttentionList({
       row.reasons.reportsDue ||
       row.reasons.awaitingReview
     ) {
-      return `${base}?tab=progress` as Route;
+      candidates.push("progress");
     }
-    return `${base}?tab=tickets` as Route;
+    candidates.push("tickets");
+    const tab = candidates.find((candidate) =>
+      isProjectTabVisible(candidate, row.hiddenModules, false),
+    );
+    return projectTabPath(row.projectId, tab ?? "overview", row.hiddenModules) as Route;
   }
 
   /**

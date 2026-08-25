@@ -58,6 +58,7 @@ import {
   WindowedMonthBandRow,
 } from "@/components/matrix-window";
 import { MatrixScrollAffordance } from "@/components/matrix-scroll-affordance";
+import { HEADER_RULE } from "@/components/month-band-row";
 import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
 import {
@@ -129,7 +130,6 @@ const TRAILING_WIDTH = sumWidths(TRAILING_COL_WIDTHS);
 /** Tracks the row padding below. The virtualiser scrolls by this. */
 const ESTIMATED_ROW_HEIGHT = 52;
 const ESTIMATED_HEADER_HEIGHT = 72;
-const STICKY_LEADING_WIDTH = 40;
 
 const cellKey = (itemId: string, periodId: string) => `${itemId}|${periodId}`;
 
@@ -198,8 +198,10 @@ export default function ScheduleTab({
     columnWidth: MAX_PERIOD_WIDTH,
     estimatedHeaderHeight: ESTIMATED_HEADER_HEIGHT,
     leadingWidth: LEADING_WIDTH,
-    stickyLeadingWidth: STICKY_LEADING_WIDTH,
+    stickyLeadingWidth: LEADING_WIDTH,
     windowed: true,
+    // No vertical scrollbar of its own — see the note in progress-tab.tsx.
+    windowRows: false,
   });
   const matrixKeyboard = useMatrixKeyboard({
     scrollRef: matrixWindow.scrollRef,
@@ -699,7 +701,7 @@ export default function ScheduleTab({
                 // This grid draws its own fade and page buttons instead — see
                 // components/matrix-scroll-affordance.tsx.
                 scrollShadows={false}
-                containerClassName="max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [overflow-anchor:none] [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
+                containerClassName="max-w-[120rem] overscroll-x-contain [overflow-anchor:none] focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
                 aria-rowcount={rows.length + 4}
                 aria-colcount={LEADING_COLUMNS + allMatrixColumns.length + TRAILING_COLUMNS}
                 className="table-fixed"
@@ -733,7 +735,11 @@ export default function ScheduleTab({
                     <col key={`trailing-${index}`} style={{ width }} />
                   ))}
                 </colgroup>
-                <TableHeader>
+                {/* Not sticky — see the note in progress-tab.tsx. The header
+                    still needs z-30 on its leading cells and an opaque
+                    bg-card everywhere, because the leading columns stay
+                    sticky *horizontally* while the grid scrolls sideways. */}
+                <TableHeader className="bg-card [&_tr]:border-b-0">
                   <WindowedMonthBandRow
                     header={visibleHeader}
                     leadingLabel={t.schedule.line}
@@ -746,7 +752,7 @@ export default function ScheduleTab({
                   />
                   <TableRow>
                     <TableHead
-                      className="sticky left-0 z-10 h-auto bg-card px-2 py-2.5"
+                      className={`sticky left-0 z-30 h-auto bg-card px-2 py-2.5 ${HEADER_RULE}`}
                     >
                       {editable && (
                         <Checkbox
@@ -761,7 +767,10 @@ export default function ScheduleTab({
                         more columns here. They are in the row's plan popover
                         now; the width they cost every row is what the period
                         columns are spending instead. */}
-                    <TableHead scope="col" className="sticky left-10 z-10 h-auto bg-card px-2 py-2.5">
+                    <TableHead
+                      scope="col"
+                      className={`sticky left-[40px] z-30 h-auto bg-card px-2 py-2.5 ${HEADER_RULE}`}
+                    >
                       {t.schedule.line}
                     </TableHead>
                     <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} header />
@@ -779,8 +788,17 @@ export default function ScheduleTab({
                         //
                         // No w-20: the colgroup owns the width now, and a
                         // utility here would fight the fitted value on the <col>.
-                        className={`h-auto py-2 text-right ${compact ? "px-1" : "px-2"} ${
-                          view.isCurrent ? "border-b-2 border-b-[var(--chart-1)]" : ""
+                        // bg-card because the header is sticky: a transparent
+                        // cell here is a window the body scrolls through. The
+                        // current-period marker stays a border — it is on the
+                        // cell, so it travels — and replaces the shadow rule
+                        // rather than doubling it.
+                        className={`h-auto bg-card py-2 text-right ${
+                          compact ? "px-1" : "px-2"
+                        } ${
+                          view.isCurrent
+                            ? "border-b-2 border-b-[var(--chart-1)]"
+                            : HEADER_RULE
                         }`}
                         title={compact ? view.accessibleName : undefined}
                       >
@@ -815,14 +833,14 @@ export default function ScheduleTab({
                       // table-fixed, and the 88 and 80 that used to sit on these
                       // two never applied — they only disagreed with
                       // TRAILING_COL_WIDTHS.
-                      className="h-auto px-3 py-2.5 text-right"
+                      className={`h-auto bg-card px-3 py-2.5 text-right ${HEADER_RULE}`}
                     >
                       {t.schedule.rowTotal}
                     </TableHead>
                     <TableHead
                       scope="col"
                       aria-colindex={LEADING_COLUMNS + allMatrixColumns.length + 2}
-                      className="h-auto px-2 py-2.5"
+                      className={`h-auto bg-card px-2 py-2.5 ${HEADER_RULE}`}
                     >
                       <span className="sr-only">{t.common.actions}</span>
                     </TableHead>
@@ -889,7 +907,7 @@ export default function ScheduleTab({
                             scrolls by, so the padding here is load-bearing. */}
                         <th
                           scope="row"
-                          className="sticky left-10 z-10 max-w-52 truncate bg-card px-2 py-2 text-left align-middle font-normal"
+                          className="sticky left-[40px] z-10 max-w-52 truncate bg-card px-2 py-2 text-left align-middle font-normal"
                           title={`${row.section} - ${row.leaf.description}`}
                         >
                           <span className="font-mono text-xs text-muted-foreground">
@@ -1169,6 +1187,7 @@ export default function ScheduleTab({
               <MatrixScrollAffordance
                 scrollRef={matrixWindow.scrollRef}
                 edges={matrixWindow.edges}
+                gutter={matrixWindow.gutter}
                 leadingWidth={LEADING_WIDTH}
                 controls="schedule-matrix-table"
               />

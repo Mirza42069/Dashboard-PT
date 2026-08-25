@@ -69,7 +69,7 @@ export const noteRouter = router({
         .from(project)
         .where(eq(project.id, input.projectId));
       if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
       }
 
       const [created] = await db
@@ -83,7 +83,7 @@ export const noteRouter = router({
         .returning({ id: projectNote.id });
 
       if (!created) {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the note" });
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: ctx.t.note.couldNotCreate });
       }
 
       await recordActivity(ctx, {
@@ -108,7 +108,7 @@ export const noteRouter = router({
         .from(notePhoto)
         .where(eq(notePhoto.id, input.id));
       if (!photo) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Photo not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.note.photoNotFound });
       }
       await assertNoteWritable(ctx, photo.noteId);
 

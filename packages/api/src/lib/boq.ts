@@ -70,7 +70,7 @@ export async function getVersion(ctx: ProjectScopeCtx, versionId: string) {
  */
 export async function getWritableVersion(ctx: ProjectScopeCtx, versionId: string) {
   const row = await getVersionRow(ctx, versionId);
-  assertNotArchived(row.archivedAt);
+  assertNotArchived(ctx.t, row.archivedAt);
   return row.version;
 }
 
@@ -88,10 +88,10 @@ async function getVersionRow(ctx: ProjectScopeCtx, versionId: string) {
     .where(eq(boqVersion.id, versionId));
 
   if (!row || row.companyId !== ctx.companyId) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "BoQ version not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.versionNotFound });
   }
   if (roleOf(ctx.session.user) === "user") {
-    await assertMember(row.projectId, ctx.session.user.id, "BoQ version not found");
+    await assertMember(row.projectId, ctx.session.user.id, ctx.t.boq.versionNotFound);
   }
   return row;
 }
@@ -107,7 +107,7 @@ export async function requireDraft(ctx: ProjectScopeCtx, versionId: string) {
   if (version.status !== "draft") {
     throw new TRPCError({
       code: "CONFLICT",
-      message: "This BoQ is baselined. Quantities can no longer be edited.",
+      message: ctx.t.boq.baselinedLocked,
     });
   }
   return version;
@@ -129,16 +129,16 @@ export async function requireDraftForItem(ctx: ProjectScopeCtx, itemId: string) 
     .where(eq(boqItem.id, itemId));
 
   if (!row || row.item.deletedAt !== null || row.companyId !== ctx.companyId) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "BoQ item not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.itemNotFound });
   }
   if (roleOf(ctx.session.user) === "user") {
-    await assertMember(row.projectId, ctx.session.user.id, "BoQ item not found");
+    await assertMember(row.projectId, ctx.session.user.id, ctx.t.boq.itemNotFound);
   }
-  assertNotArchived(row.archivedAt);
+  assertNotArchived(ctx.t, row.archivedAt);
   if (row.versionStatus !== "draft") {
     throw new TRPCError({
       code: "CONFLICT",
-      message: "This BoQ is baselined. Quantities can no longer be edited.",
+      message: ctx.t.boq.baselinedLocked,
     });
   }
   return row.item;

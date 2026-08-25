@@ -1,4 +1,10 @@
 import { createContext } from "@DashboardV2/api/context";
+import {
+  interpolate,
+  localeFromHeaders,
+  type MessageDictionary,
+  tFor,
+} from "@DashboardV2/api/lib/messages/index";
 import { recordActivity } from "@DashboardV2/api/lib/activity";
 import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
@@ -160,13 +166,21 @@ app.post("/notes/:noteId/photos", async (c) => {
 
   const contentType = (c.req.header("content-type") ?? "").split(";")[0]?.trim() ?? "";
   if (!PHOTO_CONTENT_TYPES.has(contentType)) {
-    return c.json({ error: `Unsupported image type: ${contentType || "unknown"}` }, 415);
+    const t = tFor(c.req.raw.headers);
+    return c.json(
+      {
+        error: interpolate(t.upload.unsupportedImageType, {
+          type: contentType || t.upload.unknownImageType,
+        }),
+      },
+      415,
+    );
   }
 
   // Reject on the declared length before buffering the body into memory.
   const declaredLength = Number(c.req.header("content-length") ?? Number.NaN);
   if (Number.isFinite(declaredLength) && declaredLength > MAX_PHOTO_BYTES) {
-    return c.json({ error: "Photo exceeds the 4 MB upload limit" }, 413);
+    return c.json({ error: tFor(c.req.raw.headers).upload.photoTooLarge }, 413);
   }
 
   // Same company (and, for role=user, project-membership) rule as tRPC — a
@@ -202,18 +216,18 @@ app.post("/notes/:noteId/photos", async (c) => {
       ),
     );
   if (!note) {
-    return c.json({ error: "Note not found" }, 404);
+    return c.json({ error: tFor(c.req.raw.headers).note.notFound }, 404);
   }
   if (note.archivedAt !== null) {
-    return c.json({ error: "This project is archived. Restore it to make changes." }, 409);
+    return c.json({ error: tFor(c.req.raw.headers).archived.project }, 409);
   }
 
   const body = Buffer.from(await c.req.arrayBuffer());
   if (body.byteLength === 0) {
-    return c.json({ error: "Empty upload" }, 400);
+    return c.json({ error: tFor(c.req.raw.headers).upload.empty }, 400);
   }
   if (body.byteLength > MAX_PHOTO_BYTES) {
-    return c.json({ error: "Photo exceeds the 4 MB upload limit" }, 413);
+    return c.json({ error: tFor(c.req.raw.headers).upload.photoTooLarge }, 413);
   }
 
   const photoId = crypto.randomUUID();
@@ -226,7 +240,7 @@ app.post("/notes/:noteId/photos", async (c) => {
     returning "id"
   `);
   if (created.rows.length === 0) {
-    return c.json({ error: "This project changed. Refresh and try again." }, 409);
+    return c.json({ error: tFor(c.req.raw.headers).project.changedRefresh }, 409);
   }
 
   return c.json({ id: photoId });
@@ -333,7 +347,10 @@ app.get("/projects/export", async (c) => {
   const { filename, body } = await buildProjectWorkbook({
     companyId: scope.companyId,
     session: { user: session.user },
-    locale: c.req.query("locale") === "id" ? "id" : "en",
+    // An explicit query param wins — the download URL carries its own
+    // choice — but the request's own locale is a better default than
+    // assuming English.
+    locale: c.req.query("locale") === "id" ? "id" : localeFromHeaders(c.req.raw.headers),
   });
 
   return c.body(body, 200, {
@@ -417,16 +434,17 @@ async function requireProjectWrite(
 ): Promise<ProjectWriteAccess> {
   const access = await requireProjectAccess(c, projectId);
   if ("error" in access || access.project.archivedAt === null) return access;
-  return { error: "This project is archived. Restore it to make changes.", status: 409 as const };
+  return { error: tFor(c.req.raw.headers).archived.project, status: 409 as const };
 }
 
 /** Reads the uploaded workbook, refusing anything past the body limit. */
 function readUpload(
+  t: MessageDictionary,
   bytes: Uint8Array,
 ): { bytes: Uint8Array } | { error: string; status: 400 | 413 } {
-  if (bytes.byteLength === 0) return { error: "Empty upload", status: 400 as const };
+  if (bytes.byteLength === 0) return { error: t.upload.empty, status: 400 as const };
   if (bytes.byteLength > MAX_IMPORT_BYTES) {
-    return { error: "The workbook exceeds the 4 MB upload limit", status: 413 as const };
+    return { error: t.upload.workbookTooLarge, status: 413 as const };
   }
   return { bytes };
 }
@@ -453,7 +471,7 @@ async function readWorkbookRequest(c: HonoRequestContext) {
   if ((c.req.header("content-type") ?? "").startsWith(WORKBOOK_TRANSPORT_CONTENT_TYPE)) {
     try {
       const decoded = decodeWorkbookTransport(new Uint8Array(await c.req.arrayBuffer()));
-      const upload = readUpload(decoded.bytes);
+      const upload = readUpload(tFor(c.req.raw.headers), decoded.bytes);
       if ("error" in upload) return upload;
       return {
         bytes: upload.bytes,
@@ -473,8 +491,8 @@ async function readWorkbookRequest(c: HonoRequestContext) {
 
   const form = await c.req.parseBody();
   const file = form.file;
-  if (!(file instanceof File)) return { error: "No workbook was attached.", status: 400 as const };
-  const upload = readUpload(new Uint8Array(await file.arrayBuffer()));
+  if (!(file instanceof File)) return { error: tFor(c.req.raw.headers).upload.noWorkbook, status: 400 as const };
+  const upload = readUpload(tFor(c.req.raw.headers), new Uint8Array(await file.arrayBuffer()));
   if ("error" in upload) return upload;
   return { bytes: upload.bytes, fields: form, filename: file.name || "workbook.xlsx" };
 }
@@ -623,14 +641,14 @@ function workbookUpdateFailure(error: unknown) {
 app.post("/projects/:id/workbook-update/upload", async (c) => {
   const blobToken = env.BLOB_READ_WRITE_TOKEN;
   if (!blobToken || !env.CRON_SECRET) {
-    return c.json({ error: "Temporary workbook uploads are not configured." }, 503);
+    return c.json({ error: tFor(c.req.raw.headers).upload.notConfigured }, 503);
   }
 
   let body: HandleUploadBody;
   try {
     body = (await c.req.json()) as HandleUploadBody;
   } catch {
-    return c.json({ error: "The upload request is invalid." }, 400);
+    return c.json({ error: tFor(c.req.raw.headers).upload.invalidRequest }, 400);
   }
 
   try {
@@ -694,14 +712,14 @@ app.post("/projects/:id/workbook-update/upload", async (c) => {
 app.post("/project-import/upload", async (c) => {
   const blobToken = env.BLOB_READ_WRITE_TOKEN;
   if (!blobToken || !env.CRON_SECRET) {
-    return c.json({ error: "Temporary workbook uploads are not configured." }, 503);
+    return c.json({ error: tFor(c.req.raw.headers).upload.notConfigured }, 503);
   }
 
   let body: HandleUploadBody;
   try {
     body = (await c.req.json()) as HandleUploadBody;
   } catch {
-    return c.json({ error: "The upload request is invalid." }, 400);
+    return c.json({ error: tFor(c.req.raw.headers).upload.invalidRequest }, 400);
   }
 
   try {
@@ -756,7 +774,9 @@ app.post("/projects/:id/workbook-update/discover", async (c) => {
     const owner = `${projectId}/${access.session.user.id}`;
     if (!(await consumeWorkbookRequestLimit(access.session.user.id, "update-discover", 20))) {
       await discardTemporaryWorkbook(parsed.pathname, owner);
-      return c.json({ error: "Too many workbook uploads. Try again in a few minutes." }, 429);
+      return c.json({ error: interpolate(tFor(c.req.raw.headers).upload.rateLimited, {
+            operation: tFor(c.req.raw.headers).enums.workbookOperation.uploads,
+          }) }, 429);
     }
     return c.json(
       await consumeTemporaryWorkbook({
@@ -790,14 +810,16 @@ app.post("/projects/:id/workbook-update/analyze", async (c) => {
   const owner = `${projectId}/${access.session.user.id}`;
   if (!(await consumeWorkbookRequestLimit(access.session.user.id, "update-analyze", 10))) {
     await discardTemporaryWorkbook(parsed.pathname, owner);
-    return c.json({ error: "Too many workbook analyses. Try again in a few minutes." }, 429);
+    return c.json({ error: interpolate(tFor(c.req.raw.headers).upload.rateLimited, {
+            operation: tFor(c.req.raw.headers).enums.workbookOperation.analyses,
+          }) }, 429);
   }
 
   const credit = await spendTrialAiCredit(access.session.user.id);
   if (!credit.charged && credit.exhausted) {
     await discardTemporaryWorkbook(parsed.pathname, owner);
     return c.json(
-      { error: "This trial's AI import allowance is used up.", code: TRIAL_AI_EXHAUSTED },
+      { error: tFor(c.req.raw.headers).upload.aiAllowanceUsedUp, code: TRIAL_AI_EXHAUSTED },
       403,
     );
   }
@@ -902,7 +924,9 @@ app.post("/projects/:id/workbook-update/commit", async (c) => {
     const owner = `${projectId}/${access.session.user.id}`;
     if (!(await consumeWorkbookRequestLimit(access.session.user.id, "update-commit", 10))) {
       await discardTemporaryWorkbook(parsed.pathname, owner);
-      return c.json({ error: "Too many workbook updates. Try again in a few minutes." }, 429);
+      return c.json({ error: interpolate(tFor(c.req.raw.headers).upload.rateLimited, {
+            operation: tFor(c.req.raw.headers).enums.workbookOperation.updates,
+          }) }, 429);
     }
     const selectedSheetName = parsed.body.selectedSheetName;
     const sections = parsed.body.sections;
@@ -991,7 +1015,9 @@ app.post("/project-import/discover", async (c) => {
   const upload = await readWorkbookRequest(c);
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
   if (!(await consumeWorkbookRequestLimit(access.session.user.id, "discover", 20))) {
-    return c.json({ error: "Too many workbook uploads. Try again in a few minutes." }, 429);
+    return c.json({ error: interpolate(tFor(c.req.raw.headers).upload.rateLimited, {
+            operation: tFor(c.req.raw.headers).enums.workbookOperation.uploads,
+          }) }, 429);
   }
 
   try {
@@ -1023,11 +1049,13 @@ app.post("/project-import/analyze", async (c) => {
   const upload = await readWorkbookRequest(c);
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
   if (!(await consumeWorkbookRequestLimit(access.session.user.id, "analyze", 10))) {
-    return c.json({ error: "Too many workbook analyses. Try again in a few minutes." }, 429);
+    return c.json({ error: interpolate(tFor(c.req.raw.headers).upload.rateLimited, {
+            operation: tFor(c.req.raw.headers).enums.workbookOperation.analyses,
+          }) }, 429);
   }
   const selectedSheetName = upload.fields.selectedSheetName;
   if (typeof selectedSheetName !== "string" || !selectedSheetName) {
-    return c.json({ error: "Choose a worksheet to analyze." }, 400);
+    return c.json({ error: tFor(c.req.raw.headers).upload.chooseWorksheet }, 400);
   }
 
   // Charged up front and handed back below if the model turned out not to be
@@ -1036,7 +1064,7 @@ app.post("/project-import/analyze", async (c) => {
   const credit = await spendTrialAiCredit(access.session.user.id);
   if (!credit.charged && credit.exhausted) {
     return c.json(
-      { error: "This trial's AI import allowance is used up.", code: TRIAL_AI_EXHAUSTED },
+      { error: tFor(c.req.raw.headers).upload.aiAllowanceUsedUp, code: TRIAL_AI_EXHAUSTED },
       403,
     );
   }
@@ -1144,7 +1172,9 @@ app.post("/project-import/review", async (c) => {
   const upload = await readWorkbookRequest(c);
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
   if (!(await consumeWorkbookRequestLimit(access.session.user.id, "review", 30))) {
-    return c.json({ error: "Too many workbook reviews. Try again in a few minutes." }, 429);
+    return c.json({ error: interpolate(tFor(c.req.raw.headers).upload.rateLimited, {
+            operation: tFor(c.req.raw.headers).enums.workbookOperation.reviews,
+          }) }, 429);
   }
 
   try {
@@ -1176,7 +1206,9 @@ app.post("/project-import/commit", async (c) => {
   const upload = await readWorkbookRequest(c);
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
   if (!(await consumeWorkbookRequestLimit(access.session.user.id, "commit", 10))) {
-    return c.json({ error: "Too many workbook imports. Try again in a few minutes." }, 429);
+    return c.json({ error: interpolate(tFor(c.req.raw.headers).upload.rateLimited, {
+            operation: tFor(c.req.raw.headers).enums.workbookOperation.imports,
+          }) }, 429);
   }
 
   let submitted: unknown;
@@ -1187,7 +1219,7 @@ app.post("/project-import/commit", async (c) => {
         : upload.fields.confirmed;
     if (!submitted) throw new Error();
   } catch {
-    return c.json({ error: "The confirmed import plan could not be read." }, 400);
+    return c.json({ error: tFor(c.req.raw.headers).upload.planUnreadable }, 400);
   }
 
   try {
@@ -1222,7 +1254,7 @@ app.post("/project-import/commit", async (c) => {
           ? String((error as { cause?: { code?: unknown } }).cause?.code ?? "")
           : "";
     if (databaseCode === "23505") {
-      return c.json({ error: "That project code is already in use." }, 409);
+      return c.json({ error: tFor(c.req.raw.headers).upload.projectCodeInUse }, 409);
     }
     const isPublic = isPublicImportError(error);
     const invalidRequest = isInvalidImportRequest(error);
@@ -1259,7 +1291,7 @@ app.post("/projects/:id/boq-import/preview", async (c) => {
   const access = await requireProjectWrite(c, projectId);
   if ("error" in access) return c.json({ error: access.error }, access.status);
 
-  const upload = await readUpload(new Uint8Array(await c.req.arrayBuffer()));
+  const upload = await readUpload(tFor(c.req.raw.headers), new Uint8Array(await c.req.arrayBuffer()));
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
 
   // Lazy for the same reason as the portfolio export — this module pulls
@@ -1270,7 +1302,7 @@ app.post("/projects/:id/boq-import/preview", async (c) => {
   } catch {
     // A corrupt or non-xlsx upload throws from deep inside the zip reader; the
     // message is about central directories and helps nobody.
-    return c.json({ error: "That file could not be read as an .xlsx workbook." }, 400);
+    return c.json({ error: tFor(c.req.raw.headers).upload.notXlsx }, 400);
   }
 });
 
@@ -1282,17 +1314,17 @@ app.post("/projects/:id/boq-import/commit", async (c) => {
   const form = await c.req.parseBody();
   const file = form.file;
   if (!(file instanceof File)) {
-    return c.json({ error: "No workbook was attached." }, 400);
+    return c.json({ error: tFor(c.req.raw.headers).upload.noWorkbook }, 400);
   }
 
-  const upload = await readUpload(new Uint8Array(await file.arrayBuffer()));
+  const upload = await readUpload(tFor(c.req.raw.headers), new Uint8Array(await file.arrayBuffer()));
   if ("error" in upload) return c.json({ error: upload.error }, upload.status);
 
   let plan: { sheetName: string; headerRow: number; mapping: unknown };
   try {
     plan = JSON.parse(String(form.plan));
   } catch {
-    return c.json({ error: "The column mapping could not be read." }, 400);
+    return c.json({ error: tFor(c.req.raw.headers).upload.mappingUnreadable }, 400);
   }
 
   let outcome;
@@ -1312,7 +1344,7 @@ app.post("/projects/:id/boq-import/commit", async (c) => {
       return c.json({ error: error instanceof Error ? error.message : "Import rejected." }, 422);
     }
     logUnexpectedImportError(error);
-    return c.json({ error: "The workbook could not be imported." }, 500);
+    return c.json({ error: tFor(c.req.raw.headers).upload.importFailed }, 500);
   }
 
   if (outcome.status === "rejected") {

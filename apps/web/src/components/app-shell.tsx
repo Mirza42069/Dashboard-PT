@@ -45,15 +45,22 @@ export default function AppShell({
   }
 
   return (
-    // overflow-x-hidden matches the reference's .layout and matters more here
+    // overflow-hidden matches the reference's .layout and matters more here
     // than it looks: nav labels keep their full natural width while collapsed
     // and are only clipped by the rail, so without this a horizontal scrollbar
     // can flicker in and out across the one-second slide.
-    <div className="flex h-svh overflow-x-hidden">
+    //
+    // Both axes, not just x. `overflow-x: hidden` with `overflow-y: visible` is
+    // not a thing CSS will give you — the spec computes the visible axis to
+    // `auto` — so this element was silently a vertical scroll container. It is
+    // exactly h-svh and everything inside scrolls itself, so the only scrollbar
+    // it could ever show is one for content that has escaped its box: the third
+    // bar down the right-hand edge, next to <main>'s and the grid's.
+    <div data-app-shell className="flex h-svh overflow-hidden">
       {/* First in the DOM so it is the first thing Tab reaches. */}
       <SkipLink />
       <AppSidebar role={role} collapsed={collapsed} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <Header
           user={user}
           collapsed={collapsed}
@@ -63,7 +70,12 @@ export default function AppShell({
         {/* tabIndex={-1} so the skip link can actually land focus here; without
             it the browser scrolls to #main but focus stays on the link, and the
             next Tab goes back into the sidebar. */}
-        <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto outline-none">
+        {/* min-h-0 is what makes overflow-y-auto work at all. A flex item
+            defaults to `min-height: auto`, which floors it at its content
+            height — so a long page grew this column past h-svh instead of
+            scrolling inside it, and the page ran on past the last card into
+            dead space. */}
+        <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto outline-none">
           {children}
         </main>
       </div>

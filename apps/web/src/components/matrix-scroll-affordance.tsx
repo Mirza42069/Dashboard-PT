@@ -29,12 +29,23 @@ import type { ScrollEdges } from "@/lib/matrix-window";
 export function MatrixScrollAffordance({
   scrollRef,
   edges,
+  gutter,
   leadingWidth,
   controls,
 }: {
   /** The same container ref the grid handed `useMatrixWindow`. */
   scrollRef: RefObject<HTMLDivElement | null>;
   edges: ScrollEdges;
+  /**
+   * The container's own scrollbars, from `useMatrixWindow`.
+   *
+   * This component is positioned against a wrapper the size of the container's
+   * *border* box, which includes them. Inset by this and the cues sit on the
+   * content the reader is actually looking at; without it the right-hand fade
+   * and page button are painted over the vertical scrollbar and both fades
+   * cover the horizontal one — which is not a cue, it is a broken scrollbar.
+   */
+  gutter: { right: number; bottom: number };
   /**
    * Width of the sticky leading columns, in pixels.
    *
@@ -73,16 +84,17 @@ export function MatrixScrollAffordance({
           carries this to a screen reader. */}
       <div
         aria-hidden="true"
-        className={`pointer-events-none absolute inset-y-0 z-20 w-10 bg-gradient-to-r from-card to-transparent transition-opacity ${
+        className={`pointer-events-none absolute top-0 z-20 w-10 bg-gradient-to-r from-card to-transparent transition-opacity ${
           edges.canScrollLeft ? "opacity-100" : "opacity-0"
         }`}
-        style={{ left: leadingWidth }}
+        style={{ left: leadingWidth, bottom: gutter.bottom }}
       />
       <div
         aria-hidden="true"
-        className={`pointer-events-none absolute inset-y-0 right-0 z-20 w-10 bg-gradient-to-l from-card to-transparent transition-opacity ${
+        className={`pointer-events-none absolute top-0 z-20 w-10 bg-gradient-to-l from-card to-transparent transition-opacity ${
           edges.canScrollRight ? "opacity-100" : "opacity-0"
         }`}
+        style={{ right: gutter.right, bottom: gutter.bottom }}
       />
 
       {/* Conditionally rendered rather than disabled: a control that cannot do
@@ -95,8 +107,10 @@ export function MatrixScrollAffordance({
           size="icon-sm"
           aria-label={t.common.scrollLeft}
           aria-controls={controls}
+          // Centred on the visible area rather than on the border box, which is
+          // taller than it by the horizontal scrollbar.
           className="absolute top-1/2 z-30 -translate-y-1/2 rounded-full bg-card shadow-md"
-          style={{ left: leadingWidth + 8 }}
+          style={{ left: leadingWidth + 8, marginTop: -gutter.bottom / 2 }}
           onClick={() => page(-1)}
         >
           <ChevronLeft />
@@ -108,7 +122,8 @@ export function MatrixScrollAffordance({
           size="icon-sm"
           aria-label={t.common.scrollRight}
           aria-controls={controls}
-          className="absolute top-1/2 right-2 z-30 -translate-y-1/2 rounded-full bg-card shadow-md"
+          className="absolute top-1/2 z-30 -translate-y-1/2 rounded-full bg-card shadow-md"
+          style={{ right: gutter.right + 8, marginTop: -gutter.bottom / 2 }}
           onClick={() => page(1)}
         >
           <ChevronRight />

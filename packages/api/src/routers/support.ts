@@ -20,6 +20,7 @@ import {
   createdAtCursorSchema,
   exactCursorTimestamp,
 } from "../lib/created-at-cursor";
+import { interpolate, type MessageDictionary } from "../lib/messages/index";
 import { roleOf } from "../lib/permissions";
 import {
   SUPPORT_NOTICE_KINDS,
@@ -101,6 +102,7 @@ async function messagesFor(requestId: string) {
  * Appends to the transcript and moves the turn in one statement.
  */
 async function appendMessage(input: {
+  t: MessageDictionary;
   requestId: string;
   action: Extract<SupportAction, "reply" | "userReply">;
   body: string;
@@ -109,6 +111,7 @@ async function appendMessage(input: {
   authorSide: SupportMessageAuthor;
 }) {
   return transitionWithNotice({
+    t: input.t,
     id: input.requestId,
     action: input.action,
     actorId: input.authorId,
@@ -125,10 +128,10 @@ async function appendMessage(input: {
   });
 }
 
-async function requestOrThrow(id: string) {
+async function requestOrThrow(t: MessageDictionary, id: string) {
   const [request] = await db.select().from(supportRequest).where(eq(supportRequest.id, id));
   if (!request) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Support request not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: t.support.notFound });
   }
   return request;
 }
@@ -140,27 +143,37 @@ async function requestOrThrow(id: string) {
  * has no business learning that another company's request id exists, and the two
  * cases are indistinguishable from outside on purpose.
  */
-async function ownThreadOrThrow(id: string, userId: string) {
+async function ownThreadOrThrow(t: MessageDictionary, id: string, userId: string) {
   const [request] = await db
     .select()
     .from(supportRequest)
     .where(and(eq(supportRequest.id, id), eq(supportRequest.requesterId, userId)));
   if (!request) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Support request not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: t.support.notFound });
   }
   return request;
 }
 
-async function throwTransitionError(id: string, action: SupportAction): Promise<never> {
-  const request = await requestOrThrow(id);
+async function throwTransitionError(
+  t: MessageDictionary,
+  id: string,
+  action: SupportAction,
+): Promise<never> {
+  const request = await requestOrThrow(t, id);
   if (nextSupportStatus(request.status, action) === null) {
+    // Both halves are looked up rather than spliced in as English: Indonesian
+    // puts the status before the verb and the verb in the passive, so the
+    // sentence is a frame with two noun slots, not a translated clause.
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Cannot ${action} a ${request.status} support request`,
+      message: interpolate(t.support.invalidTransition, {
+        status: t.enums.supportStatus[request.status],
+        action: t.enums.supportAction[action],
+      }),
     });
   }
   // The row changed after the failed conditional write and before this read.
-  throw new TRPCError({ code: "CONFLICT", message: "Support request changed; refresh and try again" });
+  throw new TRPCError({ code: "CONFLICT", message: t.support.changedRefresh });
 }
 
 /**
@@ -173,6 +186,7 @@ async function throwTransitionError(id: string, action: SupportAction): Promise<
  * conditional UPDATE with the two notice CTEs left off.
  */
 async function transitionWithNotice(input: {
+  t: MessageDictionary;
   id: string;
   action: SupportAction;
   actorId: string;
@@ -263,8 +277,8 @@ async function transitionWithNotice(input: {
 
   if (noticeKind === null) {
     const quiet = await db.execute(sql`${transitioned}${appended} SELECT "id" FROM transitioned`);
-    if (quiet.rows.length === 0) await throwTransitionError(input.id, input.action);
-    return requestOrThrow(input.id);
+    if (quiet.rows.length === 0) await throwTransitionError(input.t, input.id, input.action);
+    return requestOrThrow(input.t, input.id);
   }
 
   const result = await db.execute(sql`
@@ -299,8 +313,8 @@ async function transitionWithNotice(input: {
     SELECT "id" FROM transitioned
   `);
 
-  if (result.rows.length === 0) await throwTransitionError(input.id, input.action);
-  return requestOrThrow(input.id);
+  if (result.rows.length === 0) await throwTransitionError(input.t, input.id, input.action);
+  return requestOrThrow(input.t, input.id);
 }
 
 export const supportRouter = router({
@@ -315,7 +329,7 @@ export const supportRouter = router({
       if (roleOf(ctx.session.user) === "super_admin") {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "System accounts cannot submit support requests",
+          message: ctx.t.support.systemCannotSubmit,
         });
       }
 
@@ -339,7 +353,7 @@ export const supportRouter = router({
           ),
         );
       if (!identity) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "A company account is required" });
+        throw new TRPCError({ code: "FORBIDDEN", message: ctx.t.auth.companyAccountRequired });
       }
 
       const [created] = await db
@@ -405,12 +419,13 @@ export const supportRouter = router({
 
   get: permissionProcedure("support:manage")
     .input(idSchema)
-    .query(({ input }) => requestOrThrow(input.id)),
+    .query(({ ctx, input }) => requestOrThrow(ctx.t, input.id)),
 
   accept: permissionProcedure("support:manage")
     .input(idSchema)
     .mutation(({ ctx, input }) =>
       transitionWithNotice({
+        t: ctx.t,
         id: input.id,
         action: "accept",
         actorId: ctx.session.user.id,
@@ -427,6 +442,7 @@ export const supportRouter = router({
     )
     .mutation(({ ctx, input }) =>
       appendMessage({
+        t: ctx.t,
         requestId: input.id,
         action: "reply",
         body: input.reply,
@@ -445,6 +461,7 @@ export const supportRouter = router({
     .input(idSchema)
     .mutation(({ ctx, input }) =>
       transitionWithNotice({
+        t: ctx.t,
         id: input.id,
         action: "close",
         actorId: ctx.session.user.id,
@@ -454,12 +471,12 @@ export const supportRouter = router({
 
   delete: permissionProcedure("support:manage")
     .input(idSchema)
-    .mutation(async ({ input }) => {
-      const request = await requestOrThrow(input.id);
+    .mutation(async ({ ctx, input }) => {
+      const request = await requestOrThrow(ctx.t, input.id);
       if (!canDeleteSupportRequest(request.status)) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "Close this support request before deleting it",
+          message: ctx.t.support.closeBeforeDelete,
         });
       }
 
@@ -480,7 +497,7 @@ export const supportRouter = router({
       if (result.rows.length === 0) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "The support request changed; refresh and try again",
+          message: ctx.t.support.changedRefresh,
         });
       }
       return { success: true };
@@ -527,7 +544,7 @@ export const supportRouter = router({
 
   /** One of the requester's own threads, opening message included. */
   myThread: protectedProcedure.input(idSchema).query(async ({ ctx, input }) => {
-    const request = await ownThreadOrThrow(input.id, ctx.session.user.id);
+    const request = await ownThreadOrThrow(ctx.t, input.id, ctx.session.user.id);
     return {
       request: {
         id: request.id,
@@ -549,14 +566,15 @@ export const supportRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const request = await ownThreadOrThrow(input.id, ctx.session.user.id);
+      const request = await ownThreadOrThrow(ctx.t, input.id, ctx.session.user.id);
       if (request.status === "closed") {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "This conversation is closed",
+          message: ctx.t.support.conversationClosed,
         });
       }
       await appendMessage({
+        t: ctx.t,
         requestId: request.id,
         action: "userReply",
         body: input.body,

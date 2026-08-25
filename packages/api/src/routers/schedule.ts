@@ -19,6 +19,7 @@ import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { databaseErrorIncludes } from "../lib/database-error";
 import { getVersion, getWritableVersion, leafPredicate } from "../lib/boq";
+import { interpolate, type MessageDictionary, plural } from "../lib/messages/index";
 import { assertProjectAccess, assertProjectWritable, type ProjectScopeCtx } from "../lib/scope";
 import {
   CUSTOM_PERIOD_MAX_DAYS,
@@ -48,12 +49,13 @@ async function requireScheduleDraft(ctx: ProjectScopeCtx, versionId: string) {
     version.scheduleStatus === "draft" &&
     (version.status === "draft" || version.status === "active");
   if (!editable) {
-    throw new TRPCError({ code: "CONFLICT", message: "This schedule is active and locked." });
+    throw new TRPCError({ code: "CONFLICT", message: ctx.t.schedule.activeLocked });
   }
   return version;
 }
 
 async function runScheduleDraftMutation(
+  t: MessageDictionary,
   projectId: string,
   versionId: string,
   statements: Parameters<typeof runBatch>[0],
@@ -76,7 +78,7 @@ async function runScheduleDraftMutation(
     if (databaseErrorIncludes(error, "division by zero")) {
       throw new TRPCError({
         code: "CONFLICT",
-        message: "This schedule was activated while it was being edited. Refresh and try again.",
+        message: t.schedule.activatedWhileEditing,
       });
     }
     throw error;
@@ -116,7 +118,11 @@ async function listPeriodsFor(projectId: string) {
  * carry no plan of their own, so accepting one would create a cell that
  * silently never counts toward anything.
  */
-async function assertLeavesOfVersion(versionId: string, itemIds: string[]) {
+async function assertLeavesOfVersion(
+  t: MessageDictionary,
+  versionId: string,
+  itemIds: string[],
+) {
   if (itemIds.length === 0) return;
 
   const leaves = await db
@@ -136,12 +142,16 @@ async function assertLeavesOfVersion(versionId: string, itemIds: string[]) {
   if (missing.length > 0) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Only priced BoQ lines can be scheduled — sections roll up from theirs.",
+      message: t.schedule.onlyPricedLines,
     });
   }
 }
 
-async function assertPeriodsOfProject(projectId: string, periodIds: string[]) {
+async function assertPeriodsOfProject(
+  t: MessageDictionary,
+  projectId: string,
+  periodIds: string[],
+) {
   if (periodIds.length === 0) return;
 
   const periods = await db
@@ -150,7 +160,7 @@ async function assertPeriodsOfProject(projectId: string, periodIds: string[]) {
     .where(and(eq(reportingPeriod.projectId, projectId), inArray(reportingPeriod.id, periodIds)));
 
   if (periods.length !== new Set(periodIds).size) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown reporting period" });
+    throw new TRPCError({ code: "BAD_REQUEST", message: t.schedule.unknownPeriod });
   }
 }
 
@@ -184,18 +194,21 @@ export const scheduleRouter = router({
       await assertProjectWritable(ctx, input.projectId);
       const version = await requireScheduleDraft(ctx, input.versionId);
       if (version.projectId !== input.projectId) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Baseline does not belong to this project." });
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.schedule.baselineNotThisProject });
       }
       if (input.endDate < input.startDate) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date." });
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.schedule.endBeforeStart });
       }
       if (input.scheduleStart && input.scheduleStart < input.startDate) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Reporting cannot start before the project." });
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.schedule.reportingBeforeProject });
       }
       if (input.periodType === "custom" && !input.periodLengthDays) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `A custom cadence needs a cycle of ${CUSTOM_PERIOD_MIN_DAYS} to ${CUSTOM_PERIOD_MAX_DAYS} days.`,
+          message: interpolate(ctx.t.schedule.customCadenceRange, {
+            min: CUSTOM_PERIOD_MIN_DAYS,
+            max: CUSTOM_PERIOD_MAX_DAYS,
+          }),
         });
       }
 
@@ -220,11 +233,11 @@ export const scheduleRouter = router({
       if (recorded || activeSchedule) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "Baseline timing is fixed after the first baseline is activated.",
+          message: ctx.t.schedule.timingFixed,
         });
       }
 
-      await runScheduleDraftMutation(input.projectId, input.versionId, [
+      await runScheduleDraftMutation(ctx.t, input.projectId, input.versionId, [
         db.update(project).set({
           startDate: input.startDate,
           endDate: input.endDate,
@@ -252,7 +265,7 @@ export const scheduleRouter = router({
       await assertProjectWritable(ctx, input.projectId);
       const [target] = await db.select().from(project).where(eq(project.id, input.projectId));
       if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
       }
 
       const start = target.scheduleStart ?? target.startDate;
@@ -260,7 +273,7 @@ export const scheduleRouter = router({
       if (!start || !finish) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Set the project's start and target completion dates first.",
+          message: ctx.t.schedule.needsProjectDates,
         });
       }
 
@@ -273,7 +286,7 @@ export const scheduleRouter = router({
       if (recorded) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "Progress has already been recorded, so the reporting periods can no longer be rebuilt.",
+          message: ctx.t.schedule.progressBlocksRebuild,
         });
       }
 
@@ -285,7 +298,7 @@ export const scheduleRouter = router({
       if (existingReport) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "Daily reports already use these periods, so they can no longer be rebuilt.",
+          message: ctx.t.schedule.historyBlocksRebuild,
         });
       }
 
@@ -297,7 +310,7 @@ export const scheduleRouter = router({
       if (linkedAction) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "Actions already use these periods, so they can no longer be rebuilt.",
+          message: ctx.t.schedule.actionsBlockRebuild,
         });
       }
 
@@ -311,7 +324,7 @@ export const scheduleRouter = router({
       if (activeSchedule) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "The active schedule uses these periods, so they can no longer be rebuilt.",
+          message: ctx.t.schedule.activeScheduleBlocksRebuild,
         });
       }
 
@@ -328,7 +341,7 @@ export const scheduleRouter = router({
       if (periods.length === 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "No periods fall inside those dates.",
+          message: ctx.t.schedule.noPeriodsInDates,
         });
       }
 
@@ -379,7 +392,7 @@ export const scheduleRouter = router({
         if (databaseErrorIncludes(error, "division by zero")) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: "The reporting periods became in use and can no longer be rebuilt.",
+            message: ctx.t.schedule.becameInUse,
           });
         }
         throw error;
@@ -449,8 +462,8 @@ export const scheduleRouter = router({
       const itemIds = [...new Set(input.cells.map((cell) => cell.boqItemId))];
       const periodIds = [...new Set(input.cells.map((cell) => cell.periodId))];
 
-      await assertLeavesOfVersion(input.versionId, itemIds);
-      await assertPeriodsOfProject(version.projectId, periodIds);
+      await assertLeavesOfVersion(ctx.t, input.versionId, itemIds);
+      await assertPeriodsOfProject(ctx.t, version.projectId, periodIds);
 
       const cleared = input.cells.filter((cell) => cell.plannedPct <= 0);
       const written = input.cells.filter((cell) => cell.plannedPct > 0);
@@ -496,7 +509,7 @@ export const scheduleRouter = router({
         db.update(boqItem).set({ distribution: "manual" }).where(inArray(boqItem.id, itemIds)),
       );
 
-      await runScheduleDraftMutation(version.projectId, input.versionId, statements);
+      await runScheduleDraftMutation(ctx.t, version.projectId, input.versionId, statements);
 
       return { success: true };
     }),
@@ -537,13 +550,13 @@ export const scheduleRouter = router({
       const version = await requireScheduleDraft(ctx, input.versionId);
 
       const itemIds = [...new Set(input.items.map((item) => item.boqItemId))];
-      await assertLeavesOfVersion(input.versionId, itemIds);
+      await assertLeavesOfVersion(ctx.t, input.versionId, itemIds);
 
       const periods = await listPeriodsFor(version.projectId);
       if (periods.length === 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Generate the reporting periods first.",
+          message: ctx.t.schedule.generatePeriodsFirst,
         });
       }
 
@@ -559,7 +572,7 @@ export const scheduleRouter = router({
           if (item.startPeriodIndex !== null || item.finishPeriodIndex !== null) {
             throw new TRPCError({
               code: "BAD_REQUEST",
-              message: "A planning window needs both a start and a finish period.",
+              message: ctx.t.schedule.windowNeedsBothEnds,
             });
           }
           return { boqItemId: item.boqItemId, window: null };
@@ -573,13 +586,16 @@ export const scheduleRouter = router({
         if (problem?.kind === "finish_before_start") {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: "The finish period cannot come before the start period.",
+            message: ctx.t.schedule.finishBeforeStart,
           });
         }
         if (problem?.kind === "out_of_range") {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `Periods run from ${problem.firstIndex} to ${problem.lastIndex}.`,
+            message: interpolate(ctx.t.schedule.periodsRunFrom, {
+              first: problem.firstIndex,
+              last: problem.lastIndex,
+            }),
           });
         }
         return { boqItemId: item.boqItemId, window };
@@ -613,7 +629,7 @@ export const scheduleRouter = router({
         if (values.length > MAX_PLAN_CELLS) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `That would write ${values.length} planned cells at once. Apply the plan to fewer lines.`,
+            message: plural(ctx.t.schedule.tooManyCellsSpread, values.length),
           });
         }
         if (values.length > 0) {
@@ -642,7 +658,7 @@ export const scheduleRouter = router({
         `),
       );
 
-      await runScheduleDraftMutation(version.projectId, input.versionId, statements);
+      await runScheduleDraftMutation(ctx.t, version.projectId, input.versionId, statements);
 
       return { success: true };
     }),
@@ -668,10 +684,10 @@ export const scheduleRouter = router({
       if (targetIds.length === 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Choose at least one line to copy the plan onto.",
+          message: ctx.t.schedule.chooseLineToCopy,
         });
       }
-      await assertLeavesOfVersion(input.versionId, [input.sourceItemId, ...targetIds]);
+      await assertLeavesOfVersion(ctx.t, input.versionId, [input.sourceItemId, ...targetIds]);
 
       const [[source], sourceCells] = await Promise.all([
         db
@@ -692,14 +708,14 @@ export const scheduleRouter = router({
       ]);
 
       if (!source) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "BoQ line not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.lineNotFound });
       }
 
       const cellCount = sourceCells.length * targetIds.length;
       if (cellCount > MAX_PLAN_CELLS) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `That would write ${cellCount} planned cells at once. Copy onto fewer lines.`,
+          message: plural(ctx.t.schedule.tooManyCellsCopy, cellCount),
         });
       }
 
@@ -733,7 +749,7 @@ export const scheduleRouter = router({
           .where(inArray(boqItem.id, targetIds)),
       );
 
-      await runScheduleDraftMutation(version.projectId, input.versionId, statements);
+      await runScheduleDraftMutation(ctx.t, version.projectId, input.versionId, statements);
 
       return { copied: targetIds.length };
     }),
@@ -749,9 +765,9 @@ export const scheduleRouter = router({
     .mutation(async ({ ctx, input }) => {
       const version = await requireScheduleDraft(ctx, input.versionId);
       const itemIds = [...new Set(input.boqItemIds)];
-      await assertLeavesOfVersion(input.versionId, itemIds);
+      await assertLeavesOfVersion(ctx.t, input.versionId, itemIds);
 
-      await runScheduleDraftMutation(version.projectId, input.versionId, [
+      await runScheduleDraftMutation(ctx.t, version.projectId, input.versionId, [
         liveScheduleItemsGuard(input.versionId, itemIds),
         db.delete(boqItemDistribution).where(inArray(boqItemDistribution.boqItemId, itemIds)),
         db

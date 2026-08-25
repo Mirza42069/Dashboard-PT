@@ -232,6 +232,13 @@
       "when": 1787493270176,
       "tag": "0032_steady_meteorite",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1787582265285,
+      "tag": "0033_violet_captain_marvel",
+      "breakpoints": true
     }
   ]
 }

@@ -32,6 +32,12 @@ import {
   serializeItem,
   serializeVersion,
 } from "../lib/boq";
+import {
+  formatNumber,
+  interpolate,
+  type MessageDictionary,
+  plural,
+} from "../lib/messages/index";
 import { assertProjectAccess, assertProjectWritable } from "../lib/scope";
 
 const itemSchema = z.object({
@@ -52,18 +58,19 @@ function toQuantityString(value: number): string {
 }
 
 /** Audit label for the project — the company filter doubles as the scope check. */
-async function projectLabel(companyId: string, projectId: string) {
+async function projectLabel(t: MessageDictionary, companyId: string, projectId: string) {
   const [row] = await db
     .select({ code: project.code, name: project.name })
     .from(project)
     .where(and(eq(project.id, projectId), eq(project.companyId, companyId)));
   if (!row) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: t.project.notFound });
   }
   return `${row.code} - ${row.name}`;
 }
 
 async function runDraftMutation(
+  t: MessageDictionary,
   projectId: string,
   versionId: string,
   statements: Parameters<typeof runBatch>[0],
@@ -83,7 +90,7 @@ async function runDraftMutation(
     if (databaseErrorIncludes(error, "division by zero")) {
       throw new TRPCError({
         code: "CONFLICT",
-        message: "This BoQ was baselined while it was being edited. Refresh and try again.",
+        message: t.boq.baselinedWhileEditing,
       });
     }
     throw error;
@@ -103,7 +110,7 @@ function liveItemsGuard(versionId: string, itemIds: string[]) {
 }
 
 /** Rejects a code that already exists among the item's siblings. */
-async function assertCodeFree(input: {
+async function assertCodeFree(t: MessageDictionary, input: {
   versionId: string;
   parentId: string | null;
   code: string;
@@ -125,7 +132,7 @@ async function assertCodeFree(input: {
   if (clash) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Code ${input.code} is already used at this level`,
+      message: interpolate(t.boq.codeUsedAtLevel, { code: input.code }),
     });
   }
 }
@@ -154,7 +161,7 @@ export const boqRouter = router({
           versions.find((row) => row.status === "active") ??
           versions[0]);
       if (input.versionId && !current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "BoQ version not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.versionNotFound });
       }
       if (!current) {
         return { version: null, items: [] };
@@ -189,7 +196,7 @@ export const boqRouter = router({
     .input(z.object({ projectId: z.string().min(1), title: z.string().trim().max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectWritable(ctx, input.projectId);
-      const label = await projectLabel(ctx.companyId, input.projectId);
+      const label = await projectLabel(ctx.t, ctx.companyId, input.projectId);
 
       const [existing] = await db
         .select()
@@ -223,7 +230,7 @@ export const boqRouter = router({
           .returning();
 
         if (!created) {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the BoQ" });
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: ctx.t.boq.couldNotCreate });
         }
 
         await recordActivity(ctx, {
@@ -345,7 +352,7 @@ export const boqRouter = router({
     .input(z.object({ versionId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const draft = await requireDraft(ctx, input.versionId);
-      await runDraftMutation(draft.projectId, input.versionId, [
+      await runDraftMutation(ctx.t, draft.projectId, input.versionId, [
         db.execute(recalcWeightsStatement(input.versionId)),
         db.execute(refreshTotalValueStatement(input.versionId)),
       ]);
@@ -367,14 +374,16 @@ export const boqRouter = router({
         draft.scheduleStatus === "draft" &&
         (draft.status === "draft" || draft.status === "active");
       if (!activatable) {
-        throw new TRPCError({ code: "CONFLICT", message: "This baseline is not an editable draft." });
+        throw new TRPCError({ code: "CONFLICT", message: ctx.t.boq.notEditableDraft });
       }
       await recalcWeights(input.versionId);
       const total = await leafWeightTotal(input.versionId);
       if (Math.abs(total - 100) > WEIGHT_TOLERANCE) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `Weights must total 100% before baselining — they currently total ${total.toFixed(2)}%. Add priced items, or check any manually weighted lines.`,
+          message: interpolate(ctx.t.boq.weightsMustTotal, {
+            total: formatNumber(ctx.locale, total),
+          }),
         });
       }
 
@@ -400,10 +409,10 @@ export const boqRouter = router({
           .where(eq(boqItem.boqVersionId, input.versionId)),
       ]);
       if (periods.length === 0) {
-        throw new TRPCError({ code: "CONFLICT", message: "Generate reporting periods first." });
+        throw new TRPCError({ code: "CONFLICT", message: ctx.t.schedule.generatePeriodsFirst });
       }
       if (leaves.length === 0) {
-        throw new TRPCError({ code: "CONFLICT", message: "The BoQ has no schedulable lines." });
+        throw new TRPCError({ code: "CONFLICT", message: ctx.t.boq.noSchedulableLines });
       }
       const scheduleTotals = new Map<string, number>();
       for (const cell of distribution) {
@@ -418,7 +427,7 @@ export const boqRouter = router({
       if (incomplete.length > 0) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `${incomplete.length} schedule row(s) must total 100% before activation.`,
+          message: plural(ctx.t.boq.scheduleRowsIncomplete, incomplete.length),
         });
       }
 
@@ -529,7 +538,7 @@ export const boqRouter = router({
         if (databaseErrorIncludes(error, "division by zero")) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: "The baseline changed while it was being activated. Review it and try again.",
+            message: ctx.t.boq.changedWhileActivating,
           });
         }
         throw error;
@@ -540,7 +549,7 @@ export const boqRouter = router({
         action: "baselined",
         entityType: "boq",
         entityId: activated.id,
-        entityLabel: await projectLabel(ctx.companyId, activated.projectId),
+        entityLabel: await projectLabel(ctx.t, ctx.companyId, activated.projectId),
         detail: `${activated.title} - BoQ and schedule`,
       });
 
@@ -602,11 +611,11 @@ export const boqRouter = router({
             ),
           );
         if (!parent) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Parent section not found" });
+          throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.parentSectionNotFound });
         }
       }
 
-      await assertCodeFree({ versionId: input.versionId, parentId, code: input.code });
+      await assertCodeFree(ctx.t, { versionId: input.versionId, parentId, code: input.code });
 
       // New lines land at the bottom of their group.
       const [last] = await db
@@ -621,7 +630,7 @@ export const boqRouter = router({
         );
 
       const itemId = crypto.randomUUID();
-      await runDraftMutation(version.projectId, input.versionId, [
+      await runDraftMutation(ctx.t, version.projectId, input.versionId, [
         ...(parentId ? [liveItemsGuard(input.versionId, [parentId])] : []),
         db.insert(boqItem).values({
           id: itemId,
@@ -652,7 +661,7 @@ export const boqRouter = router({
       const { id, code, quantity, unitRate, weight, ...rest } = input;
 
       if (code && code !== current.code) {
-        await assertCodeFree({
+        await assertCodeFree(ctx.t, {
           versionId: current.boqVersionId,
           parentId: current.parentId,
           code,
@@ -660,7 +669,7 @@ export const boqRouter = router({
         });
       }
 
-      await runDraftMutation(version.projectId, current.boqVersionId, [
+      await runDraftMutation(ctx.t, version.projectId, current.boqVersionId, [
         liveItemsGuard(current.boqVersionId, [id]),
         db.update(boqItem).set({
           ...rest,
@@ -721,7 +730,7 @@ export const boqRouter = router({
         if (databaseErrorIncludes(error, "division by zero")) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: "This BoQ was baselined while it was being edited. Refresh and try again.",
+            message: ctx.t.boq.baselinedWhileEditing,
           });
         }
         throw error;
@@ -792,7 +801,7 @@ export const boqRouter = router({
         if (databaseErrorIncludes(error, "division by zero")) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: "This BoQ was baselined while it was being edited. Refresh and try again.",
+            message: ctx.t.boq.baselinedWhileEditing,
           });
         }
         throw error;
@@ -820,7 +829,7 @@ export const boqRouter = router({
         sql`, `,
       );
 
-      await runDraftMutation(version.projectId, input.versionId, [
+      await runDraftMutation(ctx.t, version.projectId, input.versionId, [
         liveItemsGuard(input.versionId, input.orderedIds),
         db.execute(sql`
           update boq_item

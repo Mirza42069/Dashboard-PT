@@ -7,6 +7,7 @@ import { asc, count, eq } from "drizzle-orm";
 import z from "zod";
 
 import { permissionProcedure, protectedProcedure, router } from "../index";
+import { interpolate } from "../lib/messages/index";
 import { roleOf } from "../lib/permissions";
 import { resolveCompanyIdForSession } from "../lib/scope";
 
@@ -70,11 +71,11 @@ export const companyRouter = router({
     };
   }),
 
-  create: permissionProcedure("company:manage").input(upsertSchema).mutation(async ({ input }) => {
+  create: permissionProcedure("company:manage").input(upsertSchema).mutation(async ({ ctx, input }) => {
     const code = input.code.toUpperCase();
     const [existing] = await db.select({ id: company.id }).from(company).where(eq(company.code, code));
     if (existing) {
-      throw new TRPCError({ code: "CONFLICT", message: `Company code ${code} is already in use` });
+      throw new TRPCError({ code: "CONFLICT", message: interpolate(ctx.t.company.codeInUse, { code }) });
     }
 
     const [created] = await db
@@ -87,11 +88,11 @@ export const companyRouter = router({
 
   update: permissionProcedure("company:manage")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { id, name, code } = input;
       const [current] = await db.select().from(company).where(eq(company.id, id));
       if (!current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.company.notFound });
       }
 
       if (code && code.toUpperCase() !== current.code) {
@@ -100,7 +101,7 @@ export const companyRouter = router({
           .from(company)
           .where(eq(company.code, code.toUpperCase()));
         if (clash) {
-          throw new TRPCError({ code: "CONFLICT", message: `Company code ${code} is already in use` });
+          throw new TRPCError({ code: "CONFLICT", message: interpolate(ctx.t.company.codeInUse, { code }) });
         }
       }
 
@@ -119,13 +120,13 @@ export const companyRouter = router({
    */
   delete: permissionProcedure("company:manage")
     .input(z.object({ id: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const [current] = await db
         .select({ id: company.id })
         .from(company)
         .where(eq(company.id, input.id));
       if (!current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.company.notFound });
       }
 
       const [[projects], [users]] = await Promise.all([
@@ -149,7 +150,7 @@ export const companyRouter = router({
       if (total <= 1) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Cannot delete the only remaining company",
+          message: ctx.t.company.cannotDeleteLast,
         });
       }
 

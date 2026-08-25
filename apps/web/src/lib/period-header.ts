@@ -127,6 +127,16 @@ export function periodsOf<P extends PeriodLike>(column: MatrixColumn<P>): P[] {
   return column.kind === "period" ? [column.period] : column.periods;
 }
 
+/** Finds the rendered column containing a period, including inside a folded month. */
+export function findPeriodColumnIndex<P extends PeriodLike>(
+  columns: readonly MatrixColumn<P>[],
+  periodId: string,
+): number {
+  return columns.findIndex((column) =>
+    periodsOf(column).some((period) => period.id === periodId),
+  );
+}
+
 /**
  * The period whose value a folded column shows.
  *

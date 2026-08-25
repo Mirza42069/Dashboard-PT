@@ -58,14 +58,14 @@ const PROJECT_SEEDS: {
   start: number;
   end: number;
 }[] = [
-  { suffix: "001", name: "Riverside Tower — Phase 1", client: "Meridian Holdings", location: "Riverside", status: "active", progress: 62, start: -180, end: 120 },
-  { suffix: "002", name: "Northgate Retail Park", client: "Northgate Estates", location: "Northgate", status: "active", progress: 41, start: -95, end: 160 },
-  { suffix: "003", name: "Harbour Road Bridge Repair", client: "City Transport Authority", location: "Harbour Road", status: "active", progress: 78, start: -140, end: 25 },
-  { suffix: "004", name: "Eastfield Warehouse", client: "Eastfield Logistics", location: "Eastfield", status: "on_hold", progress: 18, start: -60, end: 240 },
-  { suffix: "005", name: "Civic Centre Refurbishment", client: "Borough Council", location: "Civic Square", status: "planning", progress: 0, start: 30, end: 420 },
-  { suffix: "006", name: "Lakeside Apartments", client: "Lakeside Developments", location: "Lakeside", status: "completed", progress: 100, start: -520, end: -40 },
-  { suffix: "007", name: "Contoh - Terlambat", client: "Klien Contoh", location: "Jakarta", status: "active", progress: 45, start: -30, end: 30 },
-  { suffix: "008", name: "Contoh - Sesuai Jadwal", client: "Klien Contoh", location: "Jakarta", status: "active", progress: 60, start: -30, end: 30 },
+  { suffix: "001", name: "Menara Riverside — Tahap 1", client: "PT Meridian Sejahtera", location: "Jakarta Selatan", status: "active", progress: 62, start: -180, end: 120 },
+  { suffix: "002", name: "Pusat Niaga Gerbang Utara", client: "PT Gerbang Utara Properti", location: "Bekasi", status: "active", progress: 41, start: -95, end: 160 },
+  { suffix: "003", name: "Perbaikan Jembatan Jalan Pelabuhan", client: "Dinas Perhubungan Kota", location: "Semarang", status: "active", progress: 78, start: -140, end: 25 },
+  { suffix: "004", name: "Gudang Ladang Timur", client: "PT Ladang Timur Logistik", location: "Karawang", status: "on_hold", progress: 18, start: -60, end: 240 },
+  { suffix: "005", name: "Renovasi Gedung Balai Kota", client: "Pemerintah Kota", location: "Bandung", status: "planning", progress: 0, start: 30, end: 420 },
+  { suffix: "006", name: "Apartemen Tepi Danau", client: "PT Tepi Danau Development", location: "Tangerang Selatan", status: "completed", progress: 100, start: -520, end: -40 },
+  { suffix: "007", name: "Contoh — Terlambat", client: "Klien Contoh", location: "Jakarta", status: "active", progress: 45, start: -30, end: 30 },
+  { suffix: "008", name: "Contoh — Sesuai Jadwal", client: "Klien Contoh", location: "Jakarta", status: "active", progress: 60, start: -30, end: 30 },
 ];
 
 const PROGRESS_EXAMPLES: Record<string, { actual: number; planned: number }> = {

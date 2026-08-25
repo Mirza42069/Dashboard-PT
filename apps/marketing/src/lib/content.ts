@@ -21,7 +21,7 @@ const id = {
   hero: {
     titleStart: "Kendalikan progres konstruksi.",
     titleAccent: "Dari baseline sampai keputusan.",
-    body: "Baseline BoQ, rencana vs realisasi, dan laporan lapangan dalam satu tempat.",
+    body: "Baseline BoQ, rencana vs realisasi, dan alur review progres dalam satu tempat.",
     login: "Masuk ke dasbor",
   },
   proof: {
@@ -208,7 +208,7 @@ const en: Content = {
   hero: {
     titleStart: "Control construction progress.",
     titleAccent: "Baseline to decision.",
-    body: "BoQ baselines, planned vs actual, and field reports in one place.",
+    body: "BoQ baselines, planned vs actual, and progress review in one place.",
     login: "Log in to the dashboard",
   },
   proof: {

@@ -2,6 +2,7 @@ import { auth } from "@DashboardV2/auth";
 import { TRPCError } from "@trpc/server";
 import type { Context as HonoContext } from "hono";
 
+import { dictionaryFor, localeFromHeaders } from "./lib/messages/index";
 import { resolveCompanyIdForSession } from "./lib/scope";
 
 export type CreateContextOptions = {
@@ -10,6 +11,13 @@ export type CreateContextOptions = {
 
 export async function createContext({ context }: CreateContextOptions) {
   const headers = context.req.raw.headers;
+
+  // Resolved once per request, from the same cookie apps/web writes. Every
+  // throw site downstream reaches for `ctx.t` rather than plumbing a locale of
+  // its own, and the Hono routes outside tRPC call localeFromHeaders directly.
+  const locale = localeFromHeaders(headers);
+  const t = dictionaryFor(locale);
+
   const session = await auth.api.getSession({ headers });
 
   // Memoized, not resolved eagerly. httpBatchLink packs several procedures into
@@ -27,12 +35,14 @@ export async function createContext({ context }: CreateContextOptions) {
     // Forwarded to auth.api.* calls so better-auth re-verifies the caller
     // server-side rather than trusting whatever the procedure passes in.
     headers,
+    locale,
+    t,
     session,
     getCompanyId() {
       if (!session) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
-          message: "Authentication required",
+          message: t.auth.required,
           cause: "No session",
         });
       }

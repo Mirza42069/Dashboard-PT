@@ -1,8 +1,10 @@
 "use client";
 
 import { Download } from "@DashboardV2/ui/components/icons";
+import { Checkbox } from "@DashboardV2/ui/components/checkbox";
 import type { PeriodSummary } from "@DashboardV2/api/lib/curves";
 import { groupPeriodsByMonth } from "@DashboardV2/api/lib/periods";
+import { cn } from "@DashboardV2/ui/lib/utils";
 
 import {
   Table,
@@ -15,7 +17,7 @@ import {
 
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { SelectAllHead, SelectRowCell, ToolbarAction } from "@/components/table-selection";
-import { plural } from "@/i18n";
+import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { downloadBlob } from "@/lib/download-file";
 import { toast } from "@/lib/toast";
@@ -134,8 +136,24 @@ export default function PeriodSummaryTable({
 
   return (
     <div className="space-y-3">
+      <p role="status" aria-live="polite" className="sr-only">
+        {selection.selectedCount > 0
+          ? interpolate(t.common.selected, { count: selection.selectedCount })
+          : ""}
+      </p>
+      <BulkActionsBar
+        count={selection.selectedCount}
+        onClear={selection.clear}
+        className="mx-4"
+      >
+        <ToolbarAction
+          icon={<Download />}
+          label={t.periodSummary.exportSelected}
+          onClick={exportSelected}
+        />
+      </BulkActionsBar>
       {/*
-       * Phones get a card per period rather than a squeezed eight-column grid.
+       * Phones and tablets get a card per period rather than a squeezed grid.
        * Same figures, same rules about blanks — but stacked, because a table
        * this wide on a 390px screen is a horizontal drag per week and nobody
        * reads a deviation that way.
@@ -144,7 +162,7 @@ export default function PeriodSummaryTable({
        * stays a real table: it is what an expert user scans down a column of,
        * and turning it into stacked rows everywhere would cost that.
        */}
-      <ul className="space-y-2 px-3 sm:hidden">
+      <ul className="space-y-2 px-4 xl:hidden">
         {summary.map((row, index) => {
           const group = monthStart.get(index);
           return (
@@ -154,8 +172,15 @@ export default function PeriodSummaryTable({
                 row.isCurrent ? "border-l-2 border-l-[var(--chart-1)] bg-accent/40" : ""
               }`}
             >
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <span className="font-medium tabular-nums">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-2 font-medium tabular-nums">
+                  <Checkbox
+                    checked={selection.isSelected(row.period.id)}
+                    aria-label={interpolate(t.periodSummary.selectPeriod, {
+                      period: row.period.periodIndex,
+                    })}
+                    onCheckedChange={() => selection.toggle(row.period.id)}
+                  />
                   {group && (
                     <span className="mr-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                       {formatMonthKey(group.monthKey)}
@@ -171,14 +196,20 @@ export default function PeriodSummaryTable({
                 <p className="text-xs text-muted-foreground">{t.periodSummary.current}</p>
               )}
               <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <MobileFigure label={t.periodSummary.plannedPeriod} value={row.plannedPeriod} />
+                <MobileFigure label={t.periodSummary.actualPeriod} value={row.actualPeriod} />
                 <MobileFigure label={t.periodSummary.plannedCumulative} value={row.plannedCumulative} />
                 <MobileFigure label={t.periodSummary.actualCumulative} value={row.actualCumulative} />
+                <MobileFigure
+                  label={t.periodSummary.deviationPeriod}
+                  value={row.deviationPeriod}
+                  deviation
+                />
                 <MobileFigure
                   label={t.periodSummary.deviationCumulative}
                   value={row.deviationCumulative}
                   deviation
                 />
-                <MobileFigure label={t.periodSummary.actualPeriod} value={row.actualPeriod} />
               </dl>
             </li>
           );
@@ -192,26 +223,13 @@ export default function PeriodSummaryTable({
        * primitive's table-scroll-shadows, both of them cues that columns had
        * been pushed off the side. Fitting removed the thing they pointed at.
        *
-       * Below `sm` the stacked card list above is still the answer — eight
-       * columns do not divide a phone into anything readable.
+       * Below `xl` the stacked card list above is still the answer — nine
+       * columns do not divide a tablet into anything readable.
        */}
-      {/* Below `sm` the card list is what renders, and it carries no
-          checkboxes — so the toolbar is hidden there too rather than offering
-          an action over a selection that cannot be made. */}
-      <div className="hidden px-3 sm:block">
-        <BulkActionsBar count={selection.selectedCount} onClear={selection.clear}>
-          <ToolbarAction
-            icon={<Download />}
-            label={t.periodSummary.exportSelected}
-            onClick={exportSelected}
-          />
-        </BulkActionsBar>
-      </div>
-
-      <div className="hidden sm:block">
+      <div className="hidden xl:block">
           <Table id={id} scrollX={false} className="w-full table-fixed border-collapse">
             {/*
-             * table-fixed plus explicit shares, so the eight columns divide
+              * table-fixed plus explicit shares, so the nine columns divide
              * the card between them instead of each demanding its min-content
              * width. That min-content floor — set by the nowrap headers over
              * "Planned cumulative" and "Cumulative deviation" — is what used
@@ -321,7 +339,7 @@ export default function PeriodSummaryTable({
                     <Figure value={row.plannedCumulative} emphasis />
                     <Figure value={row.actualCumulative} emphasis />
                     <Deviation value={row.deviationPeriod} />
-                    <Deviation value={row.deviationCumulative} emphasis />
+                    <Deviation value={row.deviationCumulative} emphasis className="pr-4" />
                   </TableRow>
                 );
               })}
@@ -329,7 +347,7 @@ export default function PeriodSummaryTable({
           </Table>
       </div>
 
-      <p className="px-3 text-xs text-muted-foreground">
+      <p className="px-4 text-xs text-muted-foreground">
         {dataDateIndex >= 0
           ? `${t.periodSummary.dataDateIs} ${formatDate(dataDate)}. ${t.periodSummary.missingNote}`
           : t.periodSummary.missingNote}
@@ -378,12 +396,21 @@ function MobileFigure({
 }
 
 /** A plain percentage, or the "not reported" dash. */
-function Figure({ value, emphasis }: { value: number | null; emphasis?: boolean }) {
+function Figure({
+  value,
+  emphasis,
+  className,
+}: {
+  value: number | null;
+  emphasis?: boolean;
+  /** For the edge column, which carries the same pr-4 its header does. */
+  className?: string;
+}) {
   const t = useT();
 
   if (value === null) {
     return (
-      <TableCell className="text-right text-muted-foreground">
+      <TableCell className={cn("text-right text-muted-foreground", className)}>
         <span aria-hidden>—</span>
         <span className="sr-only">{t.periodSummary.notReported}</span>
       </TableCell>
@@ -392,7 +419,11 @@ function Figure({ value, emphasis }: { value: number | null; emphasis?: boolean 
 
   return (
     <TableCell
-      className={`text-right tabular-nums ${emphasis ? "font-medium" : "text-muted-foreground"}`}
+      className={cn(
+        "text-right tabular-nums",
+        emphasis ? "font-medium" : "text-muted-foreground",
+        className,
+      )}
     >
       {value.toFixed(2)}
     </TableCell>
@@ -400,12 +431,21 @@ function Figure({ value, emphasis }: { value: number | null; emphasis?: boolean 
 }
 
 /** Deviation, where the sign is the message. */
-function Deviation({ value, emphasis }: { value: number | null; emphasis?: boolean }) {
+function Deviation({
+  value,
+  emphasis,
+  className,
+}: {
+  value: number | null;
+  emphasis?: boolean;
+  /** For the edge column, which carries the same pr-4 its header does. */
+  className?: string;
+}) {
   const t = useT();
 
   if (value === null) {
     return (
-      <TableCell className="text-right text-muted-foreground">
+      <TableCell className={cn("text-right text-muted-foreground", className)}>
         <span aria-hidden>—</span>
         <span className="sr-only">{t.periodSummary.notReported}</span>
       </TableCell>
@@ -417,11 +457,12 @@ function Deviation({ value, emphasis }: { value: number | null; emphasis?: boole
 
   return (
     <TableCell
-      className={[
+      className={cn(
         "text-right tabular-nums",
         emphasis ? "font-medium" : "",
         isBehind ? "text-destructive" : isAhead ? "text-success" : "text-muted-foreground",
-      ].join(" ")}
+        className,
+      )}
     >
       {formatDeviationCell(value)}
       <span className="sr-only">

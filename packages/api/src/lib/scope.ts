@@ -10,6 +10,8 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, eq, exists, isNull, sql } from "drizzle-orm";
 
 import { assertNotArchived } from "./archived";
+import { readCookie } from "./cookies";
+import { type MessageDictionary, tFor } from "./messages/index";
 import { roleOf } from "./permissions";
 
 /**
@@ -24,20 +26,6 @@ import { roleOf } from "./permissions";
 /** Mirrors apps/web/src/lib/company.ts, which writes this cookie. */
 export const COMPANY_COOKIE = "v2.company";
 
-/** Minimal cookie lookup — the API only ever reads this one value. */
-function readCookie(headers: Headers, name: string): string | undefined {
-  const header = headers.get("cookie");
-  if (!header) return undefined;
-  for (const part of header.split(";")) {
-    const index = part.indexOf("=");
-    if (index === -1) continue;
-    if (part.slice(0, index).trim() === name) {
-      return decodeURIComponent(part.slice(index + 1).trim());
-    }
-  }
-  return undefined;
-}
-
 export type SessionUser = { id: string; role?: string | null; companyId?: string | null };
 
 /**
@@ -50,13 +38,14 @@ export async function resolveCompanyIdForSession(
   sessionUser: SessionUser,
   headers: Headers,
 ): Promise<string> {
+  const t = tFor(headers);
   if (roleOf(sessionUser) !== "super_admin") {
     // admin and user are both pinned to one company now — only super_admin
     // gets the cross-tenant cookie-switcher below.
     if (!sessionUser.companyId) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "No company assigned to this account. Ask an admin to set one.",
+        message: t.auth.noCompanyAssigned,
       });
     }
     return sessionUser.companyId;
@@ -81,7 +70,7 @@ export async function resolveCompanyIdForSession(
   if (!first) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: "No companies exist yet. Create one under Admin → Companies.",
+      message: t.auth.noCompaniesYet,
     });
   }
   return first.id;
@@ -94,11 +83,19 @@ export async function resolveCompanyIdForSession(
  * purpose: FORBIDDEN would confirm to another tenant that the row exists.
  */
 
-/** The subset of tRPC context every project-scoped guard/filter needs. */
-export type ProjectScopeCtx = {
+/**
+ * What a *query* needs: who is asking, and on whose behalf. No copy, because a
+ * filter never refuses — it just narrows. apps/server builds one of these from
+ * a session alone (project-export.ts, and the export route in index.ts), which
+ * is why this half exists separately from the one below.
+ */
+export type ProjectScopeQuery = {
   companyId: string;
   session: { user: SessionUser };
 };
+
+/** What a *guard* needs: the query scope, plus the language to refuse in. */
+export type ProjectScopeCtx = ProjectScopeQuery & { t: MessageDictionary };
 
 /**
  * Live projects only. `and()` this into any list that should not show the archive.
@@ -125,10 +122,10 @@ export async function assertProjectAccess(ctx: ProjectScopeCtx, projectId: strin
     .from(project)
     .where(eq(project.id, projectId));
   if (!row || row.companyId !== ctx.companyId) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
   }
   if (roleOf(ctx.session.user) === "user") {
-    await assertMember(projectId, ctx.session.user.id, "Project not found");
+    await assertMember(projectId, ctx.session.user.id, ctx.t.project.notFound);
   }
   return row;
 }
@@ -143,7 +140,7 @@ export async function assertProjectAccess(ctx: ProjectScopeCtx, projectId: strin
  */
 export async function assertProjectWritable(ctx: ProjectScopeCtx, projectId: string) {
   const row = await assertProjectAccess(ctx, projectId);
-  assertNotArchived(row.archivedAt);
+  assertNotArchived(ctx.t, row.archivedAt);
   return row;
 }
 
@@ -168,7 +165,7 @@ export async function assertMember(projectId: string, userId: string, message: s
  * plus a project_member EXISTS clause for role=user. Mirrors assertProjectAccess
  * so a list and a by-id lookup never disagree about what's visible.
  */
-export function projectAccessFilter(ctx: ProjectScopeCtx) {
+export function projectAccessFilter(ctx: ProjectScopeQuery) {
   const inCompany = eq(project.companyId, ctx.companyId);
   if (roleOf(ctx.session.user) !== "user") return inCompany;
   return and(
@@ -199,10 +196,10 @@ export async function assertNoteAccess(ctx: ProjectScopeCtx, noteId: string) {
     .innerJoin(project, eq(projectNote.projectId, project.id))
     .where(eq(projectNote.id, noteId));
   if (!row || row.companyId !== ctx.companyId) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.note.notFound });
   }
   if (roleOf(ctx.session.user) === "user") {
-    await assertMember(row.projectId, ctx.session.user.id, "Note not found");
+    await assertMember(row.projectId, ctx.session.user.id, ctx.t.note.notFound);
   }
   return row;
 }
@@ -210,7 +207,7 @@ export async function assertNoteAccess(ctx: ProjectScopeCtx, noteId: string) {
 /** `assertNoteAccess` plus the archived gate. See `assertProjectWritable`. */
 export async function assertNoteWritable(ctx: ProjectScopeCtx, noteId: string) {
   const row = await assertNoteAccess(ctx, noteId);
-  assertNotArchived(row.archivedAt);
+  assertNotArchived(ctx.t, row.archivedAt, "note");
   return row;
 }
 
@@ -229,6 +226,7 @@ export async function assertNoteWritable(ctx: ProjectScopeCtx, noteId: string) {
  * give the account a companyId.
  */
 export async function assertUserAssignable(
+  t: MessageDictionary,
   companyId: string,
   userId: string,
 ): Promise<{ role: "admin" | "user" }> {
@@ -242,15 +240,15 @@ export async function assertUserAssignable(
     row.companyId !== companyId ||
     (row.role !== "admin" && row.role !== "user")
   ) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: t.user.notFound });
   }
   return { role: row.role as "admin" | "user" };
 }
 
 /** Used by admin.createUser to reject a companyId that does not exist. */
-export async function assertCompanyExists(companyId: string) {
+export async function assertCompanyExists(t: MessageDictionary, companyId: string) {
   const [row] = await db.select({ id: company.id }).from(company).where(eq(company.id, companyId));
   if (!row) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: t.company.notFound });
   }
 }

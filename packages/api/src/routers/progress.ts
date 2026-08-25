@@ -19,6 +19,7 @@ import z from "zod";
 import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { computePctComplete, leafPredicate, serializeItem, serializeVersion } from "../lib/boq";
+import { interpolate, type MessageDictionary, plural } from "../lib/messages/index";
 import { toAmount } from "../lib/money";
 import { hasPermission, roleOf } from "../lib/permissions";
 import {
@@ -67,7 +68,7 @@ async function findPeriod(ctx: ProjectScopeCtx, periodId: string) {
     .where(and(eq(reportingPeriod.id, periodId), eq(project.companyId, ctx.companyId)));
 
   if (!row) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Reporting period not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.progress.periodNotFound });
   }
   return row;
 }
@@ -87,14 +88,16 @@ async function requireEditablePeriod(ctx: ProjectScopeCtx, periodId: string) {
   if (!isEditable(period.status)) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `This report is ${period.status} and can no longer be edited.`,
+      message: interpolate(ctx.t.progress.reportNotEditable, {
+        status: ctx.t.enums.periodStatus[period.status],
+      }),
     });
   }
   return period;
 }
 
 /** The active baseline's leaves, restricted to the ids asked for. */
-async function activeLeaves(projectId: string, itemIds: string[]) {
+async function activeLeaves(t: MessageDictionary, projectId: string, itemIds: string[]) {
   const [active] = await db
     .select({ id: boqVersion.id })
     .from(boqVersion)
@@ -103,7 +106,7 @@ async function activeLeaves(projectId: string, itemIds: string[]) {
   if (!active) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Baseline the BoQ before recording progress against it.",
+      message: t.progress.needsBaseline,
     });
   }
 
@@ -122,7 +125,7 @@ async function activeLeaves(projectId: string, itemIds: string[]) {
   if (leaves.length !== new Set(itemIds).size) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Progress can only be recorded against priced lines of the active baseline.",
+      message: t.progress.onlyPricedLines,
     });
   }
   return leaves;
@@ -222,7 +225,7 @@ export const progressRouter = router({
           .limit(1),
       ]);
       if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
       }
       if (!active) return [];
 
@@ -297,7 +300,7 @@ export const progressRouter = router({
         .where(eq(project.id, input.projectId));
 
       if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
       }
 
       const versions = await db
@@ -310,7 +313,7 @@ export const progressRouter = router({
         ? versions.find((row) => row.id === input.versionId)
         : versions.find((row) => row.status === "active");
       if (input.versionId && !current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "BoQ version not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.versionNotFound });
       }
 
       const [periods, actualSnapshots] = await Promise.all([
@@ -446,13 +449,13 @@ export const progressRouter = router({
       if (!active) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Baseline the BoQ before recording progress against it.",
+          message: ctx.t.progress.needsBaseline,
         });
       }
       if (active.scheduleStatus !== "active") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Activate the schedule before recording progress against it.",
+          message: ctx.t.progress.needsSchedule,
         });
       }
 
@@ -477,7 +480,7 @@ export const progressRouter = router({
       if (byId.size !== itemIds.length) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Progress can only be recorded against priced lines of the active baseline.",
+          message: ctx.t.progress.onlyPricedLines,
         });
       }
 
@@ -489,7 +492,7 @@ export const progressRouter = router({
       const values = input.entries.map((entry) => {
         const item = byId.get(entry.boqItemId);
         if (!item) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown BoQ line" });
+          throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.boq.unknownLine });
         }
 
         const cumulativeQuantity = entry.cumulativeQuantity ?? null;
@@ -601,7 +604,7 @@ export const progressRouter = router({
       if (changed.rows.length !== values.length) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "This period is no longer editable. Refresh and try again.",
+          message: ctx.t.progress.periodNotEditable,
         });
       }
       await recordActivity(ctx, {
@@ -642,7 +645,7 @@ export const progressRouter = router({
     .mutation(async ({ ctx, input }) => {
       const period = await requireEditablePeriod(ctx, input.periodId);
       const leaves = input.boqItemIds
-        ? await activeLeaves(period.projectId, input.boqItemIds)
+        ? await activeLeaves(ctx.t, period.projectId, input.boqItemIds)
         : await unaddressedLeaves(period.projectId, input.periodId);
 
       if (leaves.length === 0) return { marked: 0 };
@@ -705,7 +708,7 @@ export const progressRouter = router({
       if (changed.rows.length === 0) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "This period is no longer editable. Refresh and try again.",
+          message: ctx.t.progress.periodNotEditable,
         });
       }
 
@@ -853,7 +856,10 @@ export const progressRouter = router({
       if (!canTransition(from, input.to)) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `A ${from} report cannot become ${input.to}.`,
+          message: interpolate(ctx.t.progress.invalidTransition, {
+            from: ctx.t.enums.periodStatus[from],
+            to: ctx.t.enums.periodStatus[input.to],
+          }),
         });
       }
 
@@ -863,7 +869,7 @@ export const progressRouter = router({
       if (!hasPermission(roleOf(ctx.session.user), needed)) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "You do not have permission to make that change.",
+          message: ctx.t.auth.noPermission,
         });
       }
 
@@ -885,7 +891,7 @@ export const progressRouter = router({
         if (summary.missing > 0) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `${summary.missing} line(s) have neither a reading nor a "no progress" mark.`,
+            message: plural(ctx.t.progress.missingLines, summary.missing),
           });
         }
       }
@@ -923,7 +929,7 @@ export const progressRouter = router({
       if (changed.rows.length === 0) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "This period changed while you were viewing it. Refresh and try again.",
+          message: ctx.t.progress.periodChangedRefresh,
         });
       }
 

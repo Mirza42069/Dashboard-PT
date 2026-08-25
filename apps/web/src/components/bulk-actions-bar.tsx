@@ -2,6 +2,7 @@
 
 import { Button } from "@DashboardV2/ui/components/button";
 import { X } from "@DashboardV2/ui/components/icons";
+import { cn } from "@DashboardV2/ui/lib/utils";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -18,10 +19,12 @@ export function BulkActionsBar({
   count,
   onClear,
   children,
+  className,
 }: {
   count: number;
   onClear: () => void;
   children?: React.ReactNode;
+  className?: string;
 }) {
   const t = useT();
 
@@ -34,7 +37,10 @@ export function BulkActionsBar({
       // Sticky: a selection stays live while you scroll a full page of rows, so
       // a bar that scrolls away leaves the user holding a selection with no
       // visible way to act on it. Opaque background, or rows show through it.
-      className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm"
+      className={cn(
+        "sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm",
+        className,
+      )}
     >
       <span className="font-medium">{interpolate(t.common.selected, { count })}</span>
       <div className="ml-auto flex flex-wrap items-center gap-2">

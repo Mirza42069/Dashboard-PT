@@ -22,8 +22,13 @@ import {
 import { isBehindDeviation } from "../lib/deviation";
 import { runBatch } from "../lib/batch";
 import { type BoqMetrics, boqMetricsByProject, projectExceptions } from "../lib/boq-metrics";
+import { interpolate, type MessageDictionary, plural } from "../lib/messages/index";
 import { percentOf, toAmount } from "../lib/money";
 import { hasPermission, roleOf } from "../lib/permissions";
+import {
+  PROJECT_MODULE_KEYS,
+  normalizeHiddenProjectModules,
+} from "../lib/project-modules";
 import { canAssignProjectManager, projectMembershipIds } from "../lib/project-manager";
 import {
   assertProjectAccess,
@@ -98,10 +103,10 @@ const createSchema = upsertSchema.omit({ status: true, progress: true });
  * A custom cadence carries a cycle length this router has no field for, so it
  * can only be set where both halves are set together.
  */
-const customCadenceElsewhere = () =>
+const customCadenceElsewhere = (t: MessageDictionary) =>
   new TRPCError({
     code: "BAD_REQUEST",
-    message: "Set a custom reporting cadence from the schedule's baseline timing.",
+    message: t.project.cadenceFromTiming,
   });
 
 /** Tickets remain open until somebody explicitly closes them. */
@@ -131,6 +136,7 @@ function decorate(
   const workCompletedValue = boq?.workCompletedValue ?? null;
   return {
     ...row,
+    hiddenModules: normalizeHiddenProjectModules(row.hiddenModules),
     contractValue,
     workCompletedValue,
     remainingContractValue:
@@ -263,7 +269,7 @@ export const projectRouter = router({
         .from(project)
         .where(and(eq(project.id, input.id), projectAccessFilter(ctx)));
       if (!row) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
       }
 
       const [openTickets, boq, manager] = await Promise.all([
@@ -522,15 +528,15 @@ export const projectRouter = router({
       if (existing) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `Project code ${code} is already in use`,
+          message: interpolate(ctx.t.project.codeInUse, { code }),
         });
       }
       if (input.startDate && input.endDate && input.endDate < input.startDate) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date" });
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.project.endBeforeStart });
       }
-      if (input.periodType === "custom") throw customCadenceElsewhere();
+      if (input.periodType === "custom") throw customCadenceElsewhere(ctx.t);
       const manager = input.managerId
-        ? { id: input.managerId, ...(await assertUserAssignable(ctx.companyId, input.managerId)) }
+        ? { id: input.managerId, ...(await assertUserAssignable(ctx.t, ctx.companyId, input.managerId)) }
         : null;
       if (
         !canAssignProjectManager({
@@ -542,7 +548,7 @@ export const projectRouter = router({
       ) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "You cannot assign this project manager",
+          message: ctx.t.project.cannotAssignManager,
         });
       }
 
@@ -589,7 +595,7 @@ export const projectRouter = router({
       await assertProjectWritable(ctx, projectId);
       const [current] = await db.select().from(project).where(eq(project.id, projectId));
       if (!current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
       }
 
       // `??` would be wrong here now that null means "clear it": an explicit
@@ -598,9 +604,9 @@ export const projectRouter = router({
       const startDate = rest.startDate === undefined ? current.startDate : rest.startDate;
       const endDate = rest.endDate === undefined ? current.endDate : rest.endDate;
       if (startDate && endDate && endDate < startDate) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "End date is before the start date" });
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.project.endBeforeStart });
       }
-      if (rest.periodType === "custom") throw customCadenceElsewhere();
+      if (rest.periodType === "custom") throw customCadenceElsewhere(ctx.t);
       // Only a *change* of manager is checked. The edit form resubmits whatever
       // is stored, so a project left over from when super admins were assignable
       // could not be saved at all: changing only its name re-sent the legacy
@@ -621,11 +627,11 @@ export const projectRouter = router({
         ) {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: "You cannot assign this project manager",
+            message: ctx.t.project.cannotAssignManager,
           });
         }
         if (rest.managerId) {
-          nextManagerRole = (await assertUserAssignable(ctx.companyId, rest.managerId)).role;
+          nextManagerRole = (await assertUserAssignable(ctx.t, ctx.companyId, rest.managerId)).role;
         }
       }
 
@@ -637,7 +643,7 @@ export const projectRouter = router({
             and(eq(project.code, code.toUpperCase()), eq(project.companyId, ctx.companyId)),
           );
         if (clash) {
-          throw new TRPCError({ code: "CONFLICT", message: `Project code ${code} is already in use` });
+          throw new TRPCError({ code: "CONFLICT", message: interpolate(ctx.t.project.codeInUse, { code }) });
         }
       }
 
@@ -671,6 +677,48 @@ export const projectRouter = router({
       return { success: true };
     }),
 
+  setHiddenModules: companyPermissionProcedure("project:update")
+    .input(
+      z.object({
+        projectId: z.string().min(1),
+        hiddenModules: z.array(z.enum(PROJECT_MODULE_KEYS)).max(PROJECT_MODULE_KEYS.length),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertProjectWritable(ctx, input.projectId);
+      const [current] = await db
+        .select({
+          code: project.code,
+          name: project.name,
+          hiddenModules: project.hiddenModules,
+        })
+        .from(project)
+        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
+      if (!current) {
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
+      }
+
+      const previous = normalizeHiddenProjectModules(current.hiddenModules);
+      const hiddenModules = normalizeHiddenProjectModules(input.hiddenModules);
+      if (previous.join("|") === hiddenModules.join("|")) {
+        return { changed: false, hiddenModules };
+      }
+
+      await db
+        .update(project)
+        .set({ hiddenModules })
+        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
+      await recordActivity(ctx, {
+        action: "visibility_changed",
+        entityType: "project",
+        entityId: input.projectId,
+        entityLabel: `${current.code} - ${current.name}`,
+        detail: hiddenModules.join(",") || "none",
+      });
+
+      return { changed: true, hiddenModules };
+    }),
+
   /**
    * Tickets cascade, but that is a lot of history to lose by accident, so
    * deleting a project with tickets requires an explicit confirm.
@@ -685,7 +733,7 @@ export const projectRouter = router({
         .from(project)
         .where(and(eq(project.id, input.id), eq(project.companyId, ctx.companyId)));
       if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
       }
 
       const [tickets] = await db
@@ -698,7 +746,7 @@ export const projectRouter = router({
       if (!input.force && ticketCount > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `This project has ${ticketCount} ticket(s), which will be deleted with it. Confirm to continue.`,
+          message: plural(ctx.t.project.deleteHasTickets, ticketCount),
         });
       }
 
@@ -745,7 +793,7 @@ export const projectRouter = router({
         .from(project)
         .where(and(inArray(project.id, input.ids), eq(project.companyId, ctx.companyId)));
       if (targets.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "No projects found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.noneFound });
       }
 
       const ids = targets.map((row) => row.id);
@@ -779,7 +827,7 @@ export const projectRouter = router({
         .from(project)
         .where(and(inArray(project.id, input.ids), eq(project.companyId, ctx.companyId)));
       if (targets.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "No projects found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.noneFound });
       }
 
       const ids = targets.map((row) => row.id);
@@ -794,7 +842,7 @@ export const projectRouter = router({
       if (!input.force && ticketCount > 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `These projects have ${ticketCount} ticket(s), which will be deleted with them. Confirm to continue.`,
+          message: plural(ctx.t.project.bulkDeleteHasTickets, ticketCount),
         });
       }
 
@@ -882,7 +930,7 @@ export const projectRouter = router({
             ),
           );
         if (eligible.length !== uniqueIds.length) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "One or more users were not found" });
+          throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.someNotFound });
         }
       }
 

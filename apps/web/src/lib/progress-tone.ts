@@ -1,11 +1,9 @@
 /**
  * Which colour a progress bar is drawn in, at a given point along its track.
  *
- * The scale is red → amber → green, defined by --progress-low/mid/high in
- * packages/ui/src/styles/globals.css. A bar samples this along its own length
- * rather than picking one colour for the whole fill, so the tip of the fill
- * states how far along it is: barely started ends red, a third of the way ends
- * amber, finished ends green.
+ * The five-stop scale is defined by --progress-1 through --progress-5 in
+ * packages/ui/src/styles/globals.css. A bar samples it along its own length
+ * rather than picking one colour for the whole fill.
  *
  * This replaced five discrete bands. Bands had one real argument going for them
  * — they refused to make two projects four points apart look different — but
@@ -20,14 +18,13 @@
  * it in words and a number, which is more than a colour could.
  */
 
-/**
- * Where amber sits on the ramp: red→amber below it, amber→green above.
- *
- * 0.4 rather than the midpoint, and this is the one number here worth tuning.
- * At 0.5 a bar around 30% still ends in the oranges; pulling the stop back
- * lands it on yellow, which is where a third-finished bar should read.
- */
-const MID_STOP = 0.4;
+const STOPS = [
+  "--progress-1",
+  "--progress-2",
+  "--progress-3",
+  "--progress-4",
+  "--progress-5",
+] as const;
 
 /**
  * The colour at `position` (0–1) along the track.
@@ -37,9 +34,8 @@ const MID_STOP = 0.4;
  * class names it can see written out.
  *
  * The mix is done in CSS rather than in JS so the ramp stays theme-aware: the
- * three stops are different under .dark, and color-mix() re-resolves against
- * whichever is in scope. Interpolating oklch literals here would bake the light
- * theme into the markup.
+ * tokens re-resolve against whichever theme is in scope. Interpolating oklch
+ * literals here would bake one theme into the markup.
  */
 export function progressRampColor(position: number): string {
   const p = Math.min(1, Math.max(0, Number.isFinite(position) ? position : 0));
@@ -49,10 +45,10 @@ export function progressRampColor(position: number): string {
   // attribute. Nothing about a colour needs finer than a hundredth of a step.
   const mix = (t: number) => `${Math.round(t * 10000) / 100}%`;
 
-  // The percentage is of the *second* colour, so 0% is the first stop unmixed.
-  return p <= MID_STOP
-    ? `color-mix(in oklch, var(--progress-low), var(--progress-mid) ${mix(p / MID_STOP)})`
-    : `color-mix(in oklch, var(--progress-mid), var(--progress-high) ${mix(
-        (p - MID_STOP) / (1 - MID_STOP),
-      )})`;
+  const scaled = p * (STOPS.length - 1);
+  const index = Math.min(Math.floor(scaled), STOPS.length - 2);
+  const localPosition = scaled - index;
+
+  // The percentage is of the second colour, so 0% is the first stop unmixed.
+  return `color-mix(in oklch, var(${STOPS[index]}), var(${STOPS[index + 1]}) ${mix(localPosition)})`;
 }

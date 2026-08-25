@@ -3,7 +3,7 @@
 import type { UIEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { MonthBandCell } from "@/components/month-band-row";
+import { HEADER_RULE, MonthBandCell } from "@/components/month-band-row";
 import type { PeriodHeaderModel, PeriodLike } from "@/lib/period-header";
 import {
   getFullMatrixWindow,
@@ -38,6 +38,20 @@ type UseMatrixWindowOptions = {
    * hundreds of lines and the container still scrolls vertically.
    */
   windowColumns?: boolean;
+  /**
+   * Whether rows are virtualised as well as columns. On by default.
+   *
+   * The mirror of `windowColumns`, and turning it off carries the same
+   * obligation: row windowing reads `scrollTop`, which on a grid whose
+   * container does not scroll vertically is permanently 0, so `rowLimit` would
+   * pin the window to the first `MATRIX_ROW_LIMIT` rows and silently drop every
+   * line past them. A grid that has given up its own vertical scrollbar and
+   * grows to full height inside the page must set this false.
+   *
+   * Columns keep virtualising either way — the container still scrolls
+   * sideways, so `scrollLeft` is still real.
+   */
+  windowRows?: boolean;
 };
 
 const DEFAULT_VIEWPORT_HEIGHT = 576;
@@ -72,6 +86,20 @@ function calculateWindow(
     return {
       rows: calculateRowWindow(options, rowSizes, measuredHeaderHeight, element, scrollTopAdjustment),
       columns: full.columns,
+    };
+  }
+
+  if (options.windowRows === false) {
+    const full = getFullMatrixWindow(options.rowCount, options.columnCount);
+    return {
+      rows: full.rows,
+      columns: calculateFullWindow(
+        options,
+        rowSizes,
+        measuredHeaderHeight,
+        element,
+        scrollTopAdjustment,
+      ).columns,
     };
   }
 
@@ -147,6 +175,25 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
     canScrollRight: false,
   });
 
+  /**
+   * How much of the container's box its own scrollbars occupy.
+   *
+   * The scroll affordance is a sibling of the table, positioned against a
+   * wrapper the size of the container's *border* box — scrollbars included — so
+   * without this its right-hand fade and page button are drawn on top of the
+   * vertical scrollbar, and both fades cover the horizontal one.
+   *
+   * Measured here for the same reason `containerWidth` and `edges` are: this
+   * hook already observes the element, and a second observer on one node is a
+   * second chance to disagree with the first. Zero on a container that scrolls
+   * neither way, and on an overlay-scrollbar platform, which are both the
+   * honest answer.
+   */
+  const [gutter, setGutter] = useState<{ right: number; bottom: number }>({
+    right: 0,
+    bottom: 0,
+  });
+
   const [state, setState] = useState<{
     window: MatrixWindow;
     rowCount: number;
@@ -175,6 +222,17 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
         current.canScrollRight === nextEdges.canScrollRight
           ? current
           : nextEdges,
+      );
+
+      // The container carries no border, so the difference between the two box
+      // widths is the scrollbar (or the gutter `scrollbar-gutter: stable`
+      // reserves for one). Same 1px deadband as the width above.
+      const right = Math.max(0, element.offsetWidth - element.clientWidth);
+      const bottom = Math.max(0, element.offsetHeight - element.clientHeight);
+      setGutter((current) =>
+        Math.abs(current.right - right) > 1 || Math.abs(current.bottom - bottom) > 1
+          ? { right, bottom }
+          : current,
       );
     }
 
@@ -314,6 +372,7 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
     columnWindow: window.columns,
     containerWidth,
     edges,
+    gutter,
     onScroll: (event: UIEvent<HTMLDivElement>) => update(event.currentTarget),
   };
 }
@@ -328,8 +387,16 @@ export function MatrixColumnSpacer({
   if (size <= 0) return null;
   const style = { width: size, minWidth: size, padding: 0 };
 
+  // A header spacer is opaque and carries the header's rule, because the header
+  // is sticky: a transparent cell there is a window the body scrolls through,
+  // and these spacers stand in for whole runs of columns.
   return header ? (
-    <th aria-hidden="true" role="presentation" style={style} />
+    <th
+      aria-hidden="true"
+      role="presentation"
+      className={`bg-card ${HEADER_RULE}`}
+      style={style}
+    />
   ) : (
     <td aria-hidden="true" role="presentation" style={style} />
   );
@@ -367,11 +434,13 @@ export function WindowedMonthBandRow<P extends PeriodLike>({
   if (header.months.length === 0) return null;
 
   return (
-    <tr className="border-b">
+    // No `border-b`, and z-30 on the sticky corner rather than z-10 — see
+    // HEADER_RULE, and the note on the sticky header in progress-tab.tsx.
+    <tr>
       <th
         scope="col"
         colSpan={leadingColSpan}
-        className="sticky left-0 z-10 bg-card px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground"
+        className={`sticky left-0 z-30 bg-card px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground ${HEADER_RULE}`}
       >
         <span className="sr-only">{leadingLabel}</span>
       </th>
@@ -387,7 +456,9 @@ export function WindowedMonthBandRow<P extends PeriodLike>({
         />
       ))}
       <MatrixColumnSpacer size={afterSize} header />
-      {trailingColSpan > 0 && <th aria-hidden="true" colSpan={trailingColSpan} />}
+      {trailingColSpan > 0 && (
+        <th aria-hidden="true" colSpan={trailingColSpan} className={`bg-card ${HEADER_RULE}`} />
+      )}
     </tr>
   );
 }

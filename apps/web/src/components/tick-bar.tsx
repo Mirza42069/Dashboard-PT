@@ -16,8 +16,8 @@ const TICKS = 20;
 /**
  * Two kinds of tone, and the distinction matters.
  *
- * "progress" is the default and paints each pill its own step of the red →
- * amber → green ramp — see lib/progress-tone.ts. Everything else is a
+ * "progress" is the default and paints each pill from the shared five-stop
+ * warm-to-lime ramp — see lib/progress-tone.ts. Everything else is a
  * *category*: the dashboard's filter cards use these bars to draw counts of
  * projects in a state, and the colour there says which state, not how many. A
  * category tone is one flat colour across the whole fill and must never start

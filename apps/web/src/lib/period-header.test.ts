@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   buildMatrixColumns,
   buildPeriodHeader,
+  findPeriodColumnIndex,
   lastPeriodOf,
   periodsOf,
   type PeriodLike,
@@ -76,6 +77,18 @@ test("a folded column reports the last period in the month", () => {
   const [may] = buildMatrixColumns(PERIODS, new Set(["2026-05"]));
 
   expect(lastPeriodOf(may!).id).toBe("p4");
+});
+
+test("finds a selected period in an unfolded column", () => {
+  const columns = buildMatrixColumns(PERIODS, new Set());
+
+  expect(findPeriodColumnIndex(columns, "p6")).toBe(5);
+});
+
+test("finds a selected period inside a folded month column", () => {
+  const columns = buildMatrixColumns(PERIODS, new Set(["2026-05"]));
+
+  expect(findPeriodColumnIndex(columns, "p3")).toBe(0);
 });
 
 test("the band spans columns, not periods", () => {

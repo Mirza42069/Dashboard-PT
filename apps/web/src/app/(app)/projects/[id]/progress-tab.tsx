@@ -36,6 +36,7 @@ import {
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { Hint } from "@/components/hint";
 import { MatrixScrollAffordance } from "@/components/matrix-scroll-affordance";
+import { HEADER_RULE } from "@/components/month-band-row";
 import { QueryError } from "@/components/query-error";
 import { statusLabel } from "@/components/status-badge";
 import { interpolate, plural } from "@/i18n";
@@ -53,7 +54,12 @@ import { isEditable } from "@DashboardV2/api/lib/progress-workflow";
 import { isBehindDeviation } from "@DashboardV2/api/lib/deviation";
 import { COMPACT_CELL_WIDTH, MAX_PERIOD_WIDTH, fitMatrix } from "@/lib/matrix-fit";
 import { toggleFold, type MonthFoldState } from "@/lib/month-fold";
-import { buildMatrixColumns, buildPeriodHeader, lastPeriodOf } from "@/lib/period-header";
+import {
+  buildMatrixColumns,
+  buildPeriodHeader,
+  findPeriodColumnIndex,
+  lastPeriodOf,
+} from "@/lib/period-header";
 import { useFormat } from "@/lib/use-format";
 import { useMatrixKeyboard } from "@/lib/use-matrix-keyboard";
 import { useRowSelection } from "@/lib/use-row-selection";
@@ -137,6 +143,11 @@ export default function ProgressTab({
     state: monthFold,
   });
   const allMatrixColumns = buildMatrixColumns(matrixPeriods, fit.collapsed);
+  const selectedColumnIndex = findPeriodColumnIndex(
+    allMatrixColumns,
+    effectiveSelectedPeriodId,
+  );
+  const collapsedMonthsKey = JSON.stringify([...fit.collapsed].sort());
   const matrixWindow = useMatrixWindow({
     rowCount: matrixRows.length,
     columnCount: allMatrixColumns.length,
@@ -146,22 +157,23 @@ export default function ProgressTab({
     leadingWidth: LEADING_WIDTH,
     stickyLeadingWidth: LEADING_WIDTH,
     windowed: true,
+    // The grid has no vertical scrollbar of its own — it grows to full height
+    // and the page scrolls it. `scrollTop` is therefore always 0, which row
+    // windowing cannot work from; see windowRows in components/matrix-window.tsx.
+    windowRows: false,
   });
   useEffect(() => {
-    if (!effectiveSelectedPeriodId) return;
-    const index = allMatrixColumns.findIndex(
-      (column) => column.kind === "period" && column.period.id === effectiveSelectedPeriodId,
-    );
+    if (!effectiveSelectedPeriodId || selectedColumnIndex < 0) return;
     const element = matrixWindow.scrollRef.current;
-    if (index < 0 || !element) return;
-    const left = index * MAX_PERIOD_WIDTH;
+    if (!element) return;
+    const left = selectedColumnIndex * MAX_PERIOD_WIDTH;
     const right = left + MAX_PERIOD_WIDTH;
     const visibleLeft = element.scrollLeft;
     const visibleRight = visibleLeft + element.clientWidth - LEADING_WIDTH;
     if (left < visibleLeft || right > visibleRight) {
       element.scrollTo({ left: Math.max(0, left - MAX_PERIOD_WIDTH), behavior: "auto" });
     }
-  }, [allMatrixColumns, effectiveSelectedPeriodId, matrixWindow.scrollRef]);
+  }, [collapsedMonthsKey, effectiveSelectedPeriodId, selectedColumnIndex]);
   const matrixKeyboard = useMatrixKeyboard({
     scrollRef: matrixWindow.scrollRef,
     rowCount: matrixRows.length,
@@ -607,7 +619,7 @@ export default function ProgressTab({
                     // This grid draws its own fade and page buttons instead —
                     // see components/matrix-scroll-affordance.tsx.
                     scrollShadows={false}
-                    containerClassName="max-h-[36rem] max-w-[120rem] overflow-y-auto overscroll-contain [overflow-anchor:none] [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
+                    containerClassName="max-w-[120rem] overscroll-x-contain [overflow-anchor:none] focus-visible:outline-2 focus-visible:outline-offset-[-2px]"
                     aria-rowcount={rows.length + 2}
                     aria-colcount={allMatrixColumns.length + 2}
                     className="table-fixed"
@@ -639,7 +651,21 @@ export default function ProgressTab({
                         <col style={{ width: matrixWindow.columnWindow.afterSize }} />
                       )}
                     </colgroup>
-                    <TableHeader>
+                    {/*
+                      * Not sticky any more: the grid gave up its own vertical
+                      * scrollbar, so there is no scrollport for a sticky header
+                      * to stick to — `top-0` here would resolve against a box
+                      * that never scrolls and do nothing.
+                      *
+                      * What the header does still need is to win against the
+                      * body's sticky *left* columns while the grid scrolls
+                      * sideways, which is why its own leading cells are z-30 and
+                      * every cell carries an opaque bg-card. [&_tr]:border-b-0
+                      * cancels the primitive's rule at its own key — cn() is
+                      * tailwind-merge, so the class is dropped rather than
+                      * out-specified — and HEADER_RULE draws it on the cells.
+                      */}
+                    <TableHeader className="bg-card [&_tr]:border-b-0">
                     <WindowedMonthBandRow
                       header={visibleHeader}
                       leadingLabel={t.schedule.line}
@@ -650,7 +676,9 @@ export default function ProgressTab({
                       gridId="progress-matrix-table"
                     />
                     <TableRow>
-                      <TableHead className="sticky left-0 z-10 h-auto bg-card px-2 py-2.5">
+                      <TableHead
+                        className={`sticky left-0 z-30 h-auto bg-card px-2 py-2.5 ${HEADER_RULE}`}
+                      >
                         {canActOnSelection && (
                           <Checkbox
                             aria-label={t.progress.selectAllLines}
@@ -660,7 +688,9 @@ export default function ProgressTab({
                           />
                         )}
                       </TableHead>
-                      <TableHead className="sticky left-10 z-10 h-auto bg-card px-2 py-2.5">
+                      <TableHead
+                        className={`sticky left-[40px] z-30 h-auto bg-card px-2 py-2.5 ${HEADER_RULE}`}
+                      >
                         <span className="sr-only">{t.schedule.line}</span>
                       </TableHead>
                       <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} header />
@@ -693,9 +723,19 @@ export default function ProgressTab({
                             // No w-24 any more. The colgroup owns the width now
                             // and a utility here would fight the fitted value
                             // it puts on the <col>.
-                            className={`h-auto py-2 text-right ${
+                            //
+                            // bg-card because the header is sticky: a
+                            // transparent cell here is a window the body scrolls
+                            // through. The current-period marker stays a border
+                            // — it is on the cell, so it travels — and replaces
+                            // the shadow rule rather than doubling it.
+                            className={`h-auto bg-card py-2 text-right ${
                               compact ? "px-1" : "px-2"
-                            } ${view.isCurrent ? "border-b-2 border-b-[var(--chart-1)]" : ""}`}
+                            } ${
+                              view.isCurrent
+                                ? "border-b-2 border-b-[var(--chart-1)]"
+                                : HEADER_RULE
+                            }`}
                           >
                             {/* A folded column names the periods it swallowed —
                                 "5–8" — rather than repeating the month, which the
@@ -773,7 +813,7 @@ export default function ProgressTab({
                             below is what the windowing scrolls by. */}
                         <th
                           scope="row"
-                          className="sticky left-10 z-10 max-w-52 truncate bg-card px-2 py-2 text-left align-middle font-normal"
+                          className="sticky left-[40px] z-10 max-w-52 truncate bg-card px-2 py-2 text-left align-middle font-normal"
                           title={`${row.section} - ${row.leaf.description}`}
                         >
                           <span className="font-mono text-xs text-muted-foreground">
@@ -887,6 +927,7 @@ export default function ProgressTab({
                   <MatrixScrollAffordance
                     scrollRef={matrixWindow.scrollRef}
                     edges={matrixWindow.edges}
+                    gutter={matrixWindow.gutter}
                     leadingWidth={LEADING_WIDTH}
                     controls="progress-matrix-table"
                   />

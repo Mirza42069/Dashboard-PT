@@ -3,6 +3,7 @@ import { project } from "@DashboardV2/db/schema";
 import { type SQL, inArray, sql } from "drizzle-orm";
 
 import { roundAmount, toAmount } from "./money";
+import { normalizeHiddenProjectModules, type ProjectModuleKey } from "./project-modules";
 
 /**
  * Project-level BoQ metrics: how far along the site actually is, how far along
@@ -311,6 +312,7 @@ export type ProjectException = BoqMetrics & {
   /** Days between the data date and today. Null when nothing has been reported. */
   reportAgeDays: number | null;
   openTickets: number;
+  hiddenModules: ProjectModuleKey[];
 };
 
 /**
@@ -328,6 +330,7 @@ export async function projectExceptions(where: SQL | undefined) {
       code: project.code,
       name: project.name,
       status: project.status,
+      hiddenModules: project.hiddenModules,
       manualProgress: project.progress,
       dataDate: project.dataDate,
       actual: actualPercent,
@@ -361,6 +364,7 @@ export async function projectExceptions(where: SQL | undefined) {
       code: row.code,
       name: row.name,
       status: row.status,
+      hiddenModules: normalizeHiddenProjectModules(row.hiddenModules),
       hasBaseline: row.hasBaseline,
       progress: row.hasBaseline ? progress : Number(row.manualProgress ?? 0),
       planned: row.hasBaseline ? planned : 0,

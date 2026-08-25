@@ -1,5 +1,7 @@
 import { TRPCError } from "@trpc/server";
 
+import type { ArchivedEntity, MessageDictionary } from "./messages/index";
+
 /**
  * The archived gate, in one place because five different resolvers apply it.
  *
@@ -15,11 +17,17 @@ import { TRPCError } from "@trpc/server";
  * is simply not in a state to accept it, and the fix is an action they can
  * take. FORBIDDEN would read as "you lack permission", which is not true and
  * sends them to an admin instead of to the restore button.
+ *
+ * `entity` selects a whole sentence rather than naming a noun to splice into
+ * one. "This ${entity} is archived" only works because English happens to let a
+ * noun drop into that slot untouched; the Indonesian sentence moves both the
+ * demonstrative and the word order, so there is nothing to splice into.
  */
-export function assertNotArchived(archivedAt: Date | null, entity = "project") {
+export function assertNotArchived(
+  t: MessageDictionary,
+  archivedAt: Date | null,
+  entity: ArchivedEntity = "project",
+) {
   if (archivedAt === null) return;
-  throw new TRPCError({
-    code: "CONFLICT",
-    message: `This ${entity} is archived. Restore it to make changes.`,
-  });
+  throw new TRPCError({ code: "CONFLICT", message: t.archived[entity] });
 }

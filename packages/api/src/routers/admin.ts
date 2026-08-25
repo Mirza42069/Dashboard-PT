@@ -10,6 +10,11 @@ import z from "zod";
 import { companyPermissionProcedure, permissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
+import {
+  type AdminAction,
+  interpolate,
+  type MessageDictionary,
+} from "../lib/messages/index";
 import { roleOf } from "../lib/permissions";
 import { assertCompanyExists } from "../lib/scope";
 import {
@@ -60,6 +65,7 @@ const trialInputSchema = z.object({
  * lock must never be able to lock itself out.
  */
 function resolveTrialInput(
+  t: MessageDictionary,
   trial: z.infer<typeof trialInputSchema> | undefined,
   role: z.infer<typeof roleSchema>,
 ) {
@@ -67,7 +73,7 @@ function resolveTrialInput(
   if (role === "super_admin") {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "A System account cannot be put on a trial",
+      message: t.user.systemNoTrial,
     });
   }
   return { trialEndsAt: trialDeadline(trial.days), trialAiCredits: trial.aiCredits };
@@ -145,10 +151,10 @@ async function countSuperAdmins() {
   return row?.value ?? 0;
 }
 
-async function assertUserExists(userId: string) {
+async function assertUserExists(t: MessageDictionary, userId: string) {
   const [target] = await db.select({ id: user.id }).from(user).where(eq(user.id, userId));
   if (!target) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: t.user.notFound });
   }
 }
 
@@ -158,11 +164,15 @@ async function assertUserExists(userId: string) {
  * admin is still fully manageable by any super_admin, so there is no
  * per-tenant lockout to protect against, only a total one.
  */
-async function assertNotLastSuperAdmin(userId: string, action: string) {
+async function assertNotLastSuperAdmin(
+  t: MessageDictionary,
+  userId: string,
+  action: AdminAction,
+) {
   const [target] = await db.select({ role: user.role }).from(user).where(eq(user.id, userId));
 
   if (!target) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: t.user.notFound });
   }
   if (target.role !== "super_admin") {
     return;
@@ -170,7 +180,9 @@ async function assertNotLastSuperAdmin(userId: string, action: string) {
   if ((await countSuperAdmins()) <= 1) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Cannot ${action} the last remaining super admin`,
+      message: interpolate(t.user.notLastSuperAdmin, {
+        action: t.enums.adminAction[action],
+      }),
     });
   }
 }
@@ -182,7 +194,11 @@ async function assertNotLastSuperAdmin(userId: string, action: string) {
  * mismatch, matching the rest of the app's anti-leak convention.
  */
 async function assertTargetManageable(
-  ctx: { companyId: string; session: { user: { role?: string | null } } },
+  ctx: {
+    companyId: string;
+    session: { user: { role?: string | null } };
+    t: MessageDictionary;
+  },
   targetUserId: string,
 ) {
   if (roleOf(ctx.session.user) === "super_admin") return;
@@ -192,7 +208,7 @@ async function assertTargetManageable(
     .from(user)
     .where(eq(user.id, targetUserId));
   if (!target || target.role !== "user" || target.companyId !== ctx.companyId) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
   }
 }
 
@@ -205,9 +221,17 @@ async function userLabel(userId: string): Promise<string> {
   return row ? `${row.name} - ${row.email}` : userId;
 }
 
-function assertNotSelf(actorId: string, targetId: string, action: string) {
+function assertNotSelf(
+  t: MessageDictionary,
+  actorId: string,
+  targetId: string,
+  action: AdminAction,
+) {
   if (actorId === targetId) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: `You cannot ${action} your own account` });
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: interpolate(t.user.notOwnAccount, { action: t.enums.adminAction[action] }),
+    });
   }
 }
 
@@ -297,7 +321,7 @@ export const adminRouter = router({
 
       const [existing] = await db.select({ id: user.id }).from(user).where(eq(user.email, email));
       if (existing) {
-        throw new TRPCError({ code: "CONFLICT", message: "An account with that email exists" });
+        throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.emailExists });
       }
 
       const actorIsSuperAdmin = roleOf(ctx.session.user) === "super_admin";
@@ -309,13 +333,13 @@ export const adminRouter = router({
         if (input.role !== "user") {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: "Only a Super Admin can create admin or super admin accounts",
+            message: ctx.t.user.onlySuperAdminCreatesAdmins,
           });
         }
         if (input.companyId && input.companyId !== ctx.companyId) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: "You can only create users in your own company",
+            message: ctx.t.user.ownCompanyOnly,
           });
         }
         role = "user";
@@ -324,13 +348,13 @@ export const adminRouter = router({
         companyId = null;
       } else {
         if (!input.companyId) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Pick a company for this account" });
+          throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.company.pickOne });
         }
-        await assertCompanyExists(input.companyId);
+        await assertCompanyExists(ctx.t, input.companyId);
         companyId = input.companyId;
       }
 
-      const trial = resolveTrialInput(input.trial, role);
+      const trial = resolveTrialInput(ctx.t, input.trial, role);
       const temporaryPassword = generateTempPassword();
 
       const created = await auth.api.createUser({
@@ -360,7 +384,7 @@ export const adminRouter = router({
           await db.delete(user).where(eq(user.id, created.user.id));
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
-            message: "Could not assign the company — the account was not created. Try again.",
+            message: ctx.t.user.couldNotAssignCompany,
             cause: error,
           });
         }
@@ -389,7 +413,7 @@ export const adminRouter = router({
         .from(user)
         .where(eq(user.id, input.userId));
       if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
       }
       const previousLabel = `${target.name} - ${target.email}`;
 
@@ -437,23 +461,23 @@ export const adminRouter = router({
   /** Moves an account to another company. Super admins stay unpinned. */
   setCompany: permissionProcedure("user:setCompany")
     .input(userIdSchema.extend({ companyId: z.string().min(1) }))
-    .mutation(async ({ input }) => {
-      await assertCompanyExists(input.companyId);
+    .mutation(async ({ ctx, input }) => {
+      await assertCompanyExists(ctx.t, input.companyId);
       const [target] = await db
         .select({ id: user.id, role: user.role })
         .from(user)
         .where(eq(user.id, input.userId));
       if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
       }
       if (target.role === "super_admin") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Super admins are not pinned to a company",
+          message: ctx.t.auth.superAdminNotPinned,
         });
       }
       if (target.role !== "admin" && target.role !== "user") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Unsupported account role" });
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.auth.unsupportedRole });
       }
 
       await reconcileProjectAccess(input.userId, target.role, input.companyId, {
@@ -465,9 +489,9 @@ export const adminRouter = router({
   setRole: companyPermissionProcedure("user:setRole")
     .input(userIdSchema.extend({ role: roleSchema, companyId: z.string().min(1).optional() }))
     .mutation(async ({ ctx, input }) => {
-      await assertUserExists(input.userId);
+      await assertUserExists(ctx.t, input.userId);
       if (input.role !== "super_admin") {
-        await assertNotLastSuperAdmin(input.userId, "demote");
+        await assertNotLastSuperAdmin(ctx.t, input.userId, "demote");
       }
 
       // A pinned account with no company resolves to "No company assigned" on
@@ -481,7 +505,7 @@ export const adminRouter = router({
       let companyId: string | null = null;
       if (input.role !== "super_admin") {
         companyId = input.companyId ?? (await auditCompanyFor(input.userId, ctx.companyId));
-        await assertCompanyExists(companyId);
+        await assertCompanyExists(ctx.t, companyId);
       }
 
       // Promoting to super_admin unpins the account; any other role keeps or assigns one.
@@ -518,7 +542,7 @@ export const adminRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertTargetManageable(ctx, input.userId);
-      assertNotSelf(ctx.session.user.id, input.userId, "put a trial on");
+      assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "trial");
       const auditCompanyId = await auditCompanyFor(input.userId, ctx.companyId);
 
       const [target] = await db
@@ -526,7 +550,7 @@ export const adminRouter = router({
         .from(user)
         .where(eq(user.id, input.userId));
       if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
       }
 
       const wasOnTrial = target.trialEndsAt !== null;
@@ -539,7 +563,7 @@ export const adminRouter = router({
       } else {
         // roleOf, not roleSchema.parse: a row carrying a legacy or unknown role
         // must degrade to the least-privileged one, not 500 the request.
-        const fields = resolveTrialInput(
+        const fields = resolveTrialInput(ctx.t,
           { days: input.days, aiCredits: input.aiCredits },
           roleOf(target),
         );
@@ -572,8 +596,8 @@ export const adminRouter = router({
       const auditCompanyId = await auditCompanyFor(input.userId, ctx.companyId);
 
       if (input.banned) {
-        assertNotSelf(ctx.session.user.id, input.userId, "disable");
-        await assertNotLastSuperAdmin(input.userId, "disable");
+        assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "disable");
+        await assertNotLastSuperAdmin(ctx.t, input.userId, "disable");
 
         await auth.api.banUser({
           headers: ctx.headers,
@@ -609,8 +633,8 @@ export const adminRouter = router({
     .input(userIdSchema)
     .mutation(async ({ ctx, input }) => {
       await assertTargetManageable(ctx, input.userId);
-      assertNotSelf(ctx.session.user.id, input.userId, "delete");
-      await assertNotLastSuperAdmin(input.userId, "delete");
+      assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "delete");
+      await assertNotLastSuperAdmin(ctx.t, input.userId, "delete");
 
       // Read the label and company before removal — afterwards there is nothing
       // left to name the row with, or to file it under.

@@ -28,6 +28,7 @@ import {
   exactCursorTimestamp,
 } from "../lib/created-at-cursor";
 import { pageWithFocus } from "../lib/focused-page";
+import type { MessageDictionary } from "../lib/messages/index";
 import { roleOf } from "../lib/permissions";
 import {
   assertMember,
@@ -134,7 +135,7 @@ async function ticketInScope(ctx: ProjectScopeCtx, ticketId: string) {
     .innerJoin(project, eq(ticket.projectId, project.id))
     .where(and(eq(ticket.id, ticketId), eq(project.companyId, ctx.companyId)));
   if (!row) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Ticket not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.ticket.notFound });
   }
   if (roleOf(ctx.session.user) === "user") {
     await assertMember(row.projectId, ctx.session.user.id, "Ticket not found");
@@ -166,10 +167,10 @@ async function ticketsInScope(ctx: ProjectScopeCtx, ticketIds: string[]) {
     .innerJoin(project, eq(ticket.projectId, project.id))
     .where(and(inArray(ticket.id, ticketIds), eq(project.companyId, ctx.companyId)));
   if (rows.length === 0) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "No tickets found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.ticket.noneFound });
   }
   if (rows.length !== new Set(ticketIds).size) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "One or more tickets were not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.ticket.someNotFound });
   }
   if (roleOf(ctx.session.user) === "user") {
     for (const projectId of new Set(rows.map((row) => row.projectId))) {
@@ -182,7 +183,7 @@ async function ticketsInScope(ctx: ProjectScopeCtx, ticketIds: string[]) {
 /** `ticketInScope` plus the archived gate. See `assertProjectWritable`. */
 async function ticketInScopeForWrite(ctx: ProjectScopeCtx, ticketId: string) {
   const row = await ticketInScope(ctx, ticketId);
-  assertNotArchived(row.archivedAt);
+  assertNotArchived(ctx.t, row.archivedAt);
   return row;
 }
 
@@ -195,11 +196,12 @@ async function ticketInScopeForWrite(ctx: ProjectScopeCtx, ticketId: string) {
  */
 async function ticketsInScopeForWrite(ctx: ProjectScopeCtx, ticketIds: string[]) {
   const rows = await ticketsInScope(ctx, ticketIds);
-  for (const row of rows) assertNotArchived(row.archivedAt);
+  for (const row of rows) assertNotArchived(ctx.t, row.archivedAt);
   return rows;
 }
 
 async function assertReferencesInProject(
+  t: MessageDictionary,
   projectId: string,
   boqItemId: string | null | undefined,
   periodId: string | null | undefined,
@@ -223,12 +225,12 @@ async function assertReferencesInProject(
   ]);
 
   if (boqItemId && linkedItem.length === 0) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "The BOQ item is not part of this project." });
+    throw new TRPCError({ code: "BAD_REQUEST", message: t.ticket.lineNotThisProject });
   }
   if (periodId && linkedPeriod.length === 0) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "The reporting period is not part of this project.",
+      message: t.ticket.periodNotThisProject,
     });
   }
 }
@@ -350,8 +352,8 @@ export const ticketRouter = router({
     .input(fieldsSchema.extend({ projectId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       await assertProjectWritable(ctx, input.projectId);
-      await assertReferencesInProject(input.projectId, input.boqItemId, input.periodId);
-      if (input.assigneeId) await assertUserAssignable(ctx.companyId, input.assigneeId);
+      await assertReferencesInProject(ctx.t, input.projectId, input.boqItemId, input.periodId);
+      if (input.assigneeId) await assertUserAssignable(ctx.t, ctx.companyId, input.assigneeId);
       const [target] = await db
         .select({ code: project.code, name: project.name })
         .from(project)
@@ -399,9 +401,9 @@ export const ticketRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...fields } = input;
       const current = await ticketInScopeForWrite(ctx, id);
-      await assertReferencesInProject(current.projectId, fields.boqItemId, fields.periodId);
+      await assertReferencesInProject(ctx.t, current.projectId, fields.boqItemId, fields.periodId);
       if (fields.assigneeId && fields.assigneeId !== current.ticket.assigneeId) {
-        await assertUserAssignable(ctx.companyId, fields.assigneeId);
+        await assertUserAssignable(ctx.t, ctx.companyId, fields.assigneeId);
       }
 
       // The history rows are computed before the write, from the row that was
@@ -466,7 +468,7 @@ export const ticketRouter = router({
       if (input.status === "closed") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Close the action with a resolution instead of changing its status directly.",
+          message: ctx.t.ticket.closeWithResolution,
         });
       }
       if (current.ticket.status === input.status) return { success: true };
@@ -497,7 +499,7 @@ export const ticketRouter = router({
         if (databaseErrorIncludes(error, "division by zero")) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: "One or more actions changed while you were viewing them. Refresh and try again.",
+            message: ctx.t.ticket.someChangedRefresh,
           });
         }
         throw error;
@@ -505,7 +507,7 @@ export const ticketRouter = router({
       if (changed.rows.length === 0) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "This action changed while you were viewing it. Refresh and try again.",
+          message: ctx.t.ticket.changedRefresh,
         });
       }
       await recordActivity(ctx, {
@@ -571,7 +573,7 @@ export const ticketRouter = router({
         if (databaseErrorIncludes(error, "division by zero")) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: "One or more actions changed while you were viewing them. Refresh and try again.",
+            message: ctx.t.ticket.someChangedRefresh,
           });
         }
         throw error;
@@ -579,7 +581,7 @@ export const ticketRouter = router({
       if (changed.rows.length !== changes.length) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "One or more actions changed while you were viewing them. Refresh and try again.",
+          message: ctx.t.ticket.someChangedRefresh,
         });
       }
       await recordActivities(
@@ -730,7 +732,7 @@ export const ticketRouter = router({
     .mutation(async ({ ctx, input }) => {
       const current = await ticketInScopeForWrite(ctx, input.id);
       if (current.ticket.status === "closed") {
-        throw new TRPCError({ code: "CONFLICT", message: "This action is already closed." });
+        throw new TRPCError({ code: "CONFLICT", message: ctx.t.ticket.alreadyClosed });
       }
       const now = new Date();
 
@@ -756,7 +758,7 @@ export const ticketRouter = router({
       if (changed.rows.length !== 2) {
         throw new TRPCError({
           code: "CONFLICT",
-          message: "This action changed while you were viewing it. Refresh and try again.",
+          message: ctx.t.ticket.changedRefresh,
         });
       }
 

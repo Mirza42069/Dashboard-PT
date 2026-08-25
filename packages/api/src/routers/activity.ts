@@ -1,6 +1,6 @@
 import { db } from "@DashboardV2/db";
 import { activityLog } from "@DashboardV2/db/schema";
-import { count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, ne } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
@@ -14,7 +14,10 @@ export const activityRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      const inCompany = eq(activityLog.companyId, ctx.companyId);
+      const inCompany = and(
+        eq(activityLog.companyId, ctx.companyId),
+        ne(activityLog.entityType, "daily_report"),
+      );
       const [entries, [total]] = await Promise.all([
         db
           .select()

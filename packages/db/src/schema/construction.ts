@@ -177,6 +177,11 @@ export const project = pgTable(
      * Null is the live state, so every existing row is live without a backfill.
      */
     archivedAt: timestamp("archived_at"),
+    /** Project-wide navigation modules hidden from the primary project tabs. */
+    hiddenModules: text("hidden_modules")
+      .array()
+      .default(sql`'{}'::text[]`)
+      .notNull(),
     startDate: date("start_date"),
     endDate: date("end_date"),
     /**
@@ -817,6 +822,7 @@ export const ACTIVITY_ACTIONS = [
   "trial_cleared",
   "archived",
   "restored",
+  "visibility_changed",
 ] as const;
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
 

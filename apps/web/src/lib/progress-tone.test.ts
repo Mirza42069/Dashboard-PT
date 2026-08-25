@@ -5,32 +5,31 @@ import { progressRampColor } from "./progress-tone";
 describe("progressRampColor", () => {
   test("the endpoints are the outer stops, unmixed", () => {
     expect(progressRampColor(0)).toBe(
-      "color-mix(in oklch, var(--progress-low), var(--progress-mid) 0%)",
+      "color-mix(in oklch, var(--progress-1), var(--progress-2) 0%)",
     );
     expect(progressRampColor(1)).toBe(
-      "color-mix(in oklch, var(--progress-mid), var(--progress-high) 100%)",
+      "color-mix(in oklch, var(--progress-4), var(--progress-5) 100%)",
     );
   });
 
-  test("the mid stop is amber, unmixed from either side", () => {
-    // 0.4 is the boundary and belongs to the lower half, so it comes out as
-    // 100% of the second colour there rather than 0% of it in the upper half.
-    expect(progressRampColor(0.4)).toBe(
-      "color-mix(in oklch, var(--progress-low), var(--progress-mid) 100%)",
+  test("each supplied colour is an evenly spaced stop", () => {
+    expect(progressRampColor(0.25)).toBe(
+      "color-mix(in oklch, var(--progress-2), var(--progress-3) 0%)",
+    );
+    expect(progressRampColor(0.5)).toBe(
+      "color-mix(in oklch, var(--progress-3), var(--progress-4) 0%)",
+    );
+    expect(progressRampColor(0.75)).toBe(
+      "color-mix(in oklch, var(--progress-4), var(--progress-5) 0%)",
     );
   });
 
-  test("a third of the way along is most of the way to amber", () => {
-    // The reason MID_STOP is 0.4: a bar at ~30% has to read yellowish, not
-    // orange. At a 0.5 stop this would be 60%.
-    expect(progressRampColor(0.3)).toBe(
-      "color-mix(in oklch, var(--progress-low), var(--progress-mid) 75%)",
+  test("interpolates within each adjacent pair", () => {
+    expect(progressRampColor(0.125)).toBe(
+      "color-mix(in oklch, var(--progress-1), var(--progress-2) 50%)",
     );
-  });
-
-  test("the upper half walks amber to green", () => {
-    expect(progressRampColor(0.7)).toBe(
-      "color-mix(in oklch, var(--progress-mid), var(--progress-high) 50%)",
+    expect(progressRampColor(0.625)).toBe(
+      "color-mix(in oklch, var(--progress-3), var(--progress-4) 50%)",
     );
   });
 

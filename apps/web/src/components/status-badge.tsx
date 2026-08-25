@@ -62,14 +62,6 @@ const STYLES: Record<string, Record<string, Descriptor>> = {
     locked: { variant: "ghost", icon: Lock },
     returned: { variant: "destructive", icon: CircleAlert },
   },
-  /** A daily report's five states. Same glyphs as the period workflow. */
-  dailyReport: {
-    draft: { variant: "outline", icon: Pencil },
-    submitted: { variant: "default", icon: Send },
-    reviewed: { variant: "default", icon: CircleDot },
-    approved: { variant: "secondary", icon: CircleCheck },
-    returned: { variant: "destructive", icon: CircleAlert },
-  },
 };
 
 type Kind = keyof Dictionary["status"];

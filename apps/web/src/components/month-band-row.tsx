@@ -8,6 +8,24 @@ import { useT } from "@/i18n/provider";
 import type { MonthBand, PeriodHeaderModel, PeriodLike } from "@/lib/period-header";
 
 /**
+ * The rules inside a grid header, as inset shadows rather than borders.
+ *
+ * The grids that draw this row stick their `<thead>`, and the tables are
+ * `border-collapse: collapse` — under which a border belongs to the *table*, not
+ * to the cell that declared it, so it stays behind when the header translates.
+ * The header ends up ruleless and a stray line floats in the body. A shadow is
+ * painted by the cell itself, so it travels.
+ *
+ * `border-separate` would fix the same thing and cannot be used here: in the
+ * separate-borders model a `<tr>` may not have a border at all, which would
+ * delete every row divider in the grid below.
+ *
+ * Exported because the windowed band row and the period header row in the grids
+ * themselves have to draw the identical rule — see components/matrix-window.tsx.
+ */
+export const HEADER_RULE = "shadow-[inset_0_-1px_0_var(--border)]";
+
+/**
  * The month band that runs above a schedule grid's period columns.
  *
  * A separate header row whose cells span their run of periods, exactly as the
@@ -46,11 +64,12 @@ export function MonthBandRow<P extends PeriodLike>({
   if (header.months.length === 0) return null;
 
   return (
-    <tr className="border-b">
+    // No `border-b` on the row: see HEADER_RULE above.
+    <tr>
       <th
         scope="col"
         colSpan={leadingColSpan}
-        className="sticky left-0 z-10 bg-card px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground"
+        className={`sticky left-0 z-30 bg-card px-4 py-1.5 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground ${HEADER_RULE}`}
       >
         <span className="sr-only">{leadingLabel}</span>
       </th>
@@ -62,7 +81,9 @@ export function MonthBandRow<P extends PeriodLike>({
           gridId={gridId}
         />
       ))}
-      {trailingColSpan > 0 && <th aria-hidden colSpan={trailingColSpan} />}
+      {trailingColSpan > 0 && (
+        <th aria-hidden colSpan={trailingColSpan} className={`bg-card ${HEADER_RULE}`} />
+      )}
     </tr>
   );
 }
@@ -93,7 +114,19 @@ export function MonthBandCell({
       colSpan={month.span}
       // Centred over its run and ruled off from the next month, which is
       // what makes the grouping readable without a background per month.
-      className="border-l px-2 py-1.5 text-center text-xs font-medium uppercase tracking-wide text-muted-foreground first:border-l-0"
+      //
+      // Opaque, and ruled with a shadow rather than a border, because the grids
+      // stick this row — see HEADER_RULE. A transparent header cell lets the
+      // body scroll through it, which is what it used to do.
+      //
+      // The two shadows are written out rather than composed from HEADER_RULE:
+      // Tailwind scans source text for class names, so a variant assembled at
+      // runtime is one it never generates.
+      className={cn(
+        "bg-card px-2 py-1.5 text-center text-xs font-medium uppercase tracking-wide text-muted-foreground",
+        "shadow-[inset_0_-1px_0_var(--border),inset_1px_0_0_var(--border)]",
+        "first:shadow-[inset_0_-1px_0_var(--border)]",
+      )}
     >
       {interactive ? (
         <button

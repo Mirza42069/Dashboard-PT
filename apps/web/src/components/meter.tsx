@@ -8,10 +8,9 @@ import { progressRampColor } from "@/lib/progress-tone";
 /**
  * A horizontal magnitude meter for one value against one maximum.
  *
- * Colour comes from position along the track by default — the red → amber →
- * green ramp in lib/progress-tone.ts, shared with TickBar so the app's two bar
- * idioms agree. It used to be one fixed step of the chart ramp, which meant
- * every meter in the product was the same blue whatever it said.
+ * Colour comes from position along the track by default — the shared five-stop
+ * warm-to-lime ramp in lib/progress-tone.ts, also used by TickBar. It used to be
+ * one fixed step of the chart ramp, which made every meter the same blue.
  *
  * The "magnitude" tone opts back out of that, for meters whose value is not
  * progress towards something good. Share-of-delay is the case that forced it:

@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 
 import { BRAND_NAME } from "@/components/brand";
 import { getDictionary, getLocale } from "@/i18n";
+import { resolveProjectTab } from "@/lib/project-navigation";
 import { requireSession } from "@/lib/session";
 import { getQueryClient, getTRPC, HydrateClient } from "@/utils/trpc-server";
 
@@ -26,18 +27,18 @@ export default async function ProjectDetailPage({
   const canManageMembers = hasPermission(role, "member:manage");
   const requested = await searchParams;
   const requestedTab = Array.isArray(requested.tab) ? requested.tab[0] : requested.tab;
-  // Mirrors PROJECT_TABS in ./project-detail.tsx.
-  const tabs = ["overview", "tickets", "baseline", "boq", "schedule", "progress", "daily", "notes", "team"];
-  const activeTab =
-    requestedTab && tabs.includes(requestedTab) && (requestedTab !== "team" || canManageMembers)
-      ? requestedTab
-      : "overview";
   const actionValue = Array.isArray(requested.action) ? requested.action[0] : requested.action;
   const queryClient = getQueryClient();
   const trpc = getTRPC();
-  const prefetches: Promise<void>[] = [
-    queryClient.prefetchQuery(trpc.project.get.queryOptions({ id })),
-  ];
+  const projectOptions = trpc.project.get.queryOptions({ id });
+  await queryClient.prefetchQuery(projectOptions);
+  const project = queryClient.getQueryData(projectOptions.queryKey);
+  const activeTab = resolveProjectTab(
+    requestedTab,
+    project?.hiddenModules ?? [],
+    canManageMembers,
+  );
+  const prefetches: Promise<void>[] = [];
 
   if (activeTab === "overview") {
     prefetches.push(
@@ -62,19 +63,6 @@ export default async function ProjectDetailPage({
     // All three render BaselineTab, which opens on listVersions either way.
     prefetches.push(
       queryClient.prefetchQuery(trpc.boq.listVersions.queryOptions({ projectId: id })),
-    );
-  } else if (activeTab === "daily") {
-    prefetches.push(
-      queryClient.prefetchQuery(
-        trpc.dailyReport.list.queryOptions({
-          projectId: id,
-          status: undefined,
-          from: undefined,
-          to: undefined,
-          limit: 30,
-          offset: 0,
-        }),
-      ),
     );
   }
 

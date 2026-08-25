@@ -1,6 +1,7 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 
 import type { Context } from "./context";
+import type { MessageDictionary } from "./lib/messages/index";
 import { hasPermission, roleOf, type Permission } from "./lib/permissions";
 import { trialHasEnded } from "./lib/trial";
 
@@ -14,7 +15,7 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   if (!ctx.session) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
-      message: "Authentication required",
+      message: ctx.t.auth.required,
       cause: "No session",
     });
   }
@@ -24,7 +25,7 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   if (trialHasEnded(ctx.session.user)) {
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: "This trial has ended",
+      message: ctx.t.auth.trialEnded,
       cause: "Trial ended",
     });
   }
@@ -54,11 +55,15 @@ export const companyProcedure = protectedProcedure.use(async ({ ctx, next }) => 
   return next({ ctx: { ...ctx, companyId } });
 });
 
-function assertPermission(permission: Permission, user: { role?: string | null }) {
+function assertPermission(
+  permission: Permission,
+  user: { role?: string | null },
+  t: MessageDictionary,
+) {
   if (!hasPermission(roleOf(user), permission)) {
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: "Insufficient role",
+      message: t.auth.insufficientRole,
       cause: "Missing permission",
     });
   }
@@ -73,13 +78,13 @@ function assertPermission(permission: Permission, user: { role?: string | null }
  */
 export const permissionProcedure = (permission: Permission) =>
   protectedProcedure.use(({ ctx, next }) => {
-    assertPermission(permission, ctx.session.user);
+    assertPermission(permission, ctx.session.user, ctx.t);
     return next({ ctx });
   });
 
 /** Permission check + ctx.companyId — the workhorse for tenant-scoped data. */
 export const companyPermissionProcedure = (permission: Permission) =>
   companyProcedure.use(({ ctx, next }) => {
-    assertPermission(permission, ctx.session.user);
+    assertPermission(permission, ctx.session.user, ctx.t);
     return next({ ctx });
   });

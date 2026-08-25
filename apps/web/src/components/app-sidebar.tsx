@@ -52,7 +52,9 @@ export default function AppSidebar({
           exactly where the previous collapsed layout landed it via w-10 and
           justify-center (8 + (40-16)/2). Identical in both states, so there is
           nothing left for a padding transition to do. */}
-      <div className="flex-1 overflow-y-auto px-3 py-3">
+      {/* min-h-0: same reason as <main> in app-shell.tsx — without it this
+          item cannot shrink below its content and the rail grows past h-svh. */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         <AppNav role={role} collapsed={collapsed} />
       </div>
       <div className="shrink-0 border-t px-3 py-3">

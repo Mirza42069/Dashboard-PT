@@ -1,6 +1,6 @@
 /**
  * A full sample portfolio: ten projects with real baselines, schedules,
- * progress history, actions and daily reports.
+ * progress history and actions.
  *
  * Run with: bun run db:seed-portfolio [--dry-run] [--company=SKN] [--user=box@papa.com]
  *
@@ -47,10 +47,6 @@ import {
   boqItemDistribution,
   boqVersion,
   company,
-  dailyReport,
-  dailyReportDelivery,
-  dailyReportEquipment,
-  dailyReportManpower,
   progressEntry,
   project,
   projectMember,
@@ -66,7 +62,6 @@ import type {
   PeriodType,
   ProjectStatus,
   TicketStatus,
-  WeatherCondition,
 } from "@DashboardV2/db/schema";
 import { and, asc, eq, inArray } from "drizzle-orm";
 
@@ -524,8 +519,6 @@ type Blueprint = {
   /** Quantities are scaled so the portfolio holds contracts of different sizes. */
   scale: number;
   sections: SectionSpec[];
-  /** Whether this project gets a run of daily reports. */
-  dailyReports?: boolean;
 };
 
 /**
@@ -565,7 +558,6 @@ const BLUEPRINTS: Blueprint[] = [
     performance: 1,
     scale: 1,
     sections: ROAD,
-    dailyReports: true,
   },
   {
     code: "PRJ-103",
@@ -594,7 +586,6 @@ const BLUEPRINTS: Blueprint[] = [
     performance: 0.71,
     scale: 0.85,
     sections: INDUSTRIAL,
-    dailyReports: true,
   },
   {
     code: "PRJ-105",
@@ -637,7 +628,6 @@ const BLUEPRINTS: Blueprint[] = [
     performance: 0.98,
     scale: 0.58,
     sections: BUILDING,
-    dailyReports: true,
   },
   {
     code: "PRJ-108",
@@ -668,7 +658,6 @@ const BLUEPRINTS: Blueprint[] = [
     performance: 0.96,
     scale: 0.95,
     sections: REFURB,
-    dailyReports: true,
   },
   {
     code: "PRJ-110",
@@ -745,41 +734,6 @@ const ACTION_POOL: {
   },
 ];
 
-const TRADES = [
-  "Tukang besi",
-  "Tukang batu",
-  "Operator alat berat",
-  "Tukang kayu dan bekisting",
-  "Instalatur mekanikal elektrikal",
-  "Helper umum",
-] as const;
-
-const EQUIPMENT = [
-  "Excavator 20 ton",
-  "Tower crane",
-  "Concrete pump",
-  "Truk mixer",
-  "Vibro roller",
-  "Genset 250 kVA",
-] as const;
-
-const MATERIALS: { material: string; unit: string; supplier: string }[] = [
-  { material: "Beton ready mix K-350", unit: "m3", supplier: "PT Beton Sarana Jaya" },
-  { material: "Besi beton ulir D16", unit: "kg", supplier: "PT Baja Prima Mandiri" },
-  { material: "Bata ringan", unit: "m3", supplier: "PT Material Andalan" },
-  { material: "Semen PCC 50 kg", unit: "sak", supplier: "PT Semen Nusantara Niaga" },
-  { material: "Agregat kasar 2/3", unit: "m3", supplier: "CV Tambang Sejahtera" },
-];
-
-const WEATHER: WeatherCondition[] = [
-  "clear",
-  "cloudy",
-  "light_rain",
-  "cloudy",
-  "heavy_rain",
-  "clear",
-];
-
 // -------------------------------------------------------------- building --
 
 type Ctx = {
@@ -815,10 +769,6 @@ type Built = {
     distribution: (typeof boqItemDistribution.$inferInsert)[];
     progress: (typeof progressEntry.$inferInsert)[];
     tickets: (typeof ticket.$inferInsert)[];
-    dailyReports: (typeof dailyReport.$inferInsert)[];
-    manpower: (typeof dailyReportManpower.$inferInsert)[];
-    equipment: (typeof dailyReportEquipment.$inferInsert)[];
-    deliveries: (typeof dailyReportDelivery.$inferInsert)[];
     activity: (typeof activityLog.$inferInsert)[];
   };
   summary: {
@@ -1201,96 +1151,6 @@ function buildProject(blueprint: Blueprint, ctx: Ctx, order: number): Built {
     });
   }
 
-  // --- daily reports, for the projects that run them.
-  const dailyReports: (typeof dailyReport.$inferInsert)[] = [];
-  const manpower: (typeof dailyReportManpower.$inferInsert)[] = [];
-  const equipment: (typeof dailyReportEquipment.$inferInsert)[] = [];
-  const deliveries: (typeof dailyReportDelivery.$inferInsert)[] = [];
-
-  if (blueprint.dailyReports && dataDate) {
-    for (let back = 0; back < 8; back++) {
-      const reportDate = shiftIso(dataDate, -back);
-      if (reportDate < startDate) break;
-      const reportId = uuidFrom(projectId, "daily", back);
-      const owning = generated.find(
-        (period) => period.startDate <= reportDate && reportDate <= period.endDate,
-      );
-      const weather = WEATHER[(order + back) % WEATHER.length]!;
-      const wet = weather === "light_rain" || weather === "heavy_rain";
-
-      dailyReports.push({
-        id: reportId,
-        projectId,
-        reportDate,
-        periodId: owning ? periodIds[owning.periodIndex - 1]! : null,
-        weather,
-        weatherNote: wet ? "Hujan turun sejak siang, pekerjaan luar dihentikan sementara." : null,
-        rainfallHours: wet ? dec(1.5 + back * 0.25, 2) : null,
-        workPerformed:
-          "Pengecoran struktur zona 2, pemasangan bekisting zona 3, dan pekerjaan pasangan dinding lantai bawah.",
-        delays: wet ? "Kehilangan 2 jam kerja akibat hujan pada pekerjaan luar." : null,
-        safetyObservations: "Toolbox meeting pagi diikuti seluruh pekerja. Tidak ada insiden.",
-        qualityObservations: "Slump test beton sesuai spesifikasi. Sampel kubus diambil 3 buah.",
-        visitors: back % 3 === 0 ? "Konsultan pengawas dan perwakilan pemilik proyek." : null,
-        status: back === 0 ? "submitted" : "approved",
-        preparedById: ctx.actorId,
-        preparedByName: ctx.actorName,
-        submittedAt: stamp(reportDate, 18),
-        ...(back === 0
-          ? {}
-          : {
-              reviewedById: ctx.reviewerId,
-              reviewedAt: stamp(shiftIso(reportDate, 1), 9),
-              approvedById: ctx.reviewerId,
-              approvedAt: stamp(shiftIso(reportDate, 1), 14),
-            }),
-        createdAt: stamp(reportDate, 18),
-      });
-
-      for (const [index, trade] of TRADES.entries()) {
-        const headcount = 6 + Math.floor(random() * 26);
-        manpower.push({
-          id: uuidFrom(reportId, "manpower", index),
-          reportId,
-          trade,
-          headcount,
-          hours: dec(headcount * (wet ? 6 : 8), 2),
-          sortOrder: index,
-        });
-      }
-
-      for (let index = 0; index < 3; index++) {
-        const name = EQUIPMENT[(back + index) % EQUIPMENT.length]!;
-        const idle = wet && index === 2;
-        equipment.push({
-          id: uuidFrom(reportId, "equipment", index),
-          reportId,
-          name,
-          quantity: 1 + (index % 2),
-          hoursUsed: dec(idle ? 0 : 6 + index, 2),
-          idle,
-          note: idle ? "Standby karena hujan." : null,
-          sortOrder: index,
-        });
-      }
-
-      for (let index = 0; index < 2; index++) {
-        const material = MATERIALS[(back * 2 + index) % MATERIALS.length]!;
-        deliveries.push({
-          id: uuidFrom(reportId, "delivery", index),
-          reportId,
-          material: material.material,
-          quantity: dec(40 + Math.floor(random() * 160), 4),
-          unit: material.unit,
-          supplier: material.supplier,
-          reference: `DO-${blueprint.code}-${String(back * 2 + index + 1).padStart(4, "0")}`,
-          boqItemId: leafRows[(back + index) % leafRows.length]!.id!,
-          sortOrder: index,
-        });
-      }
-    }
-  }
-
   // --- the audit feed. Only ids this script can regenerate are used, because
   //     activityLog has no foreign key and so never cascades on delete.
   const activity: (typeof activityLog.$inferInsert)[] = [
@@ -1410,10 +1270,6 @@ function buildProject(blueprint: Blueprint, ctx: Ctx, order: number): Built {
       distribution,
       progress,
       tickets,
-      dailyReports,
-      manpower,
-      equipment,
-      deliveries,
       activity,
     },
     summary: {
@@ -1537,10 +1393,9 @@ async function main() {
       cells: sum.cells + item.rows.distribution.length,
       readings: sum.readings + item.rows.progress.length,
       actions: sum.actions + item.rows.tickets.length,
-      reports: sum.reports + item.rows.dailyReports.length,
       value: sum.value + item.summary.contractValue,
     }),
-    { periods: 0, leaves: 0, cells: 0, readings: 0, actions: 0, reports: 0, value: 0 },
+    { periods: 0, leaves: 0, cells: 0, readings: 0, actions: 0, value: 0 },
   );
 
   console.log("\nCode     Status     Periods  Lines  Contract      Planned  Actual   Deviation");
@@ -1570,7 +1425,7 @@ async function main() {
   }
 
   console.log(
-    `\nTotals: ${built.length} projects, ${totals.periods} periods, ${totals.leaves} lines, ${totals.cells} planned cells, ${totals.readings} readings, ${totals.actions} actions, ${totals.reports} daily reports, ${rupiah(totals.value)} contract value.`,
+    `\nTotals: ${built.length} projects, ${totals.periods} periods, ${totals.leaves} lines, ${totals.cells} planned cells, ${totals.readings} readings, ${totals.actions} actions, ${rupiah(totals.value)} contract value.`,
   );
 
   if (isDryRun) {
@@ -1614,10 +1469,6 @@ async function main() {
       ),
       ...chunk(rows.progress, CHUNK).map((batch) => db.insert(progressEntry).values(batch)),
       ...chunk(rows.tickets, CHUNK).map((batch) => db.insert(ticket).values(batch)),
-      ...chunk(rows.dailyReports, CHUNK).map((batch) => db.insert(dailyReport).values(batch)),
-      ...chunk(rows.manpower, CHUNK).map((batch) => db.insert(dailyReportManpower).values(batch)),
-      ...chunk(rows.equipment, CHUNK).map((batch) => db.insert(dailyReportEquipment).values(batch)),
-      ...chunk(rows.deliveries, CHUNK).map((batch) => db.insert(dailyReportDelivery).values(batch)),
       ...chunk(rows.activity, CHUNK).map((batch) => db.insert(activityLog).values(batch)),
     ];
 
