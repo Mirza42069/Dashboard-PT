@@ -333,6 +333,8 @@ type WorkbookPlanIdentity = {
   profile: WorkbookPlan["profile"];
   sheetName: string;
   headerRow: number;
+  dataStartRow: number;
+  dataEndRow: number;
 };
 
 export function workbookPlanIdentitySignature(identity: WorkbookPlanIdentity) {
@@ -352,6 +354,8 @@ function hasValidPlanIdentity(plan: WorkbookPlan) {
       profile: plan.profile,
       sheetName: plan.sheetName,
       headerRow: plan.headerRow,
+      dataStartRow: plan.dataStartRow,
+      dataEndRow: plan.dataEndRow,
     }),
     "hex",
   );
@@ -538,14 +542,14 @@ function referencePlan(
       profile: "reference-s-curve" as const,
       sheetName: sheet.name,
       headerRow: bounds.headerRow,
+      dataStartRow,
+      dataEndRow,
     };
 
     return {
       version: 2,
       ...identity,
       analysisSignature: workbookPlanIdentitySignature(identity),
-      dataStartRow,
-      dataEndRow,
       sectionRows,
       excludedRows: [],
       mandatoryExcludedRows: [],
@@ -581,11 +585,22 @@ function referencePlan(
   return null;
 }
 
-function workbookSummary(
+const DISCOVERY_SUMMARY_ROW_LIMIT = 40;
+const DISCOVERY_SUMMARY_CHARACTER_LIMIT = 30_000;
+const SELECTED_SHEET_SUMMARY_ROW_LIMIT = 1_000;
+const SELECTED_SHEET_SUMMARY_CHARACTER_LIMIT = 120_000;
+
+export function workbookSummary(
   workbook: Awaited<ReturnType<typeof loadWorkbook>>,
   selectedSheetName?: string,
 ) {
-  let remainingCharacters = 30_000;
+  const selectedSheetOnly = Boolean(selectedSheetName);
+  const rowLimit = selectedSheetOnly
+    ? SELECTED_SHEET_SUMMARY_ROW_LIMIT
+    : DISCOVERY_SUMMARY_ROW_LIMIT;
+  let remainingCharacters = selectedSheetOnly
+    ? SELECTED_SHEET_SUMMARY_CHARACTER_LIMIT
+    : DISCOVERY_SUMMARY_CHARACTER_LIMIT;
   const sheets = selectedSheetName
     ? workbook.worksheets.filter((sheet) => sheet.name === selectedSheetName)
     : workbook.worksheets;
@@ -594,11 +609,13 @@ function workbookSummary(
     selectedSheet: selectedSheetName ?? null,
     sheets: sheets.map((sheet) => {
       const nonemptyRows: { row: number; cells: { column: number; value: string }[] }[] = [];
+      let scannedThroughRow = 0;
       for (
         let row = 1;
-        row <= sheet.rowCount && nonemptyRows.length < 40 && remainingCharacters > 0;
+        row <= sheet.rowCount && nonemptyRows.length < rowLimit && remainingCharacters > 0;
         row++
       ) {
+        scannedThroughRow = row;
         const cells: { column: number; value: string }[] = [];
         for (
           let column = 1;
@@ -613,7 +630,14 @@ function workbookSummary(
         }
         if (cells.length > 0) nonemptyRows.push({ row, cells });
       }
-      return { name: sheet.name, rowCount: sheet.rowCount, columnCount: sheet.columnCount, rows: nonemptyRows };
+      return {
+        name: sheet.name,
+        rowCount: sheet.rowCount,
+        columnCount: sheet.columnCount,
+        sampledThroughRow: scannedThroughRow,
+        samplingComplete: scannedThroughRow >= sheet.rowCount,
+        rows: nonemptyRows,
+      };
     }),
   };
 }
@@ -792,7 +816,7 @@ export async function analyzeProjectWorkbook(
 
   if (!plan) {
     onStage("interpreting");
-    const { interpretWorkbook } = await import("./openrouter");
+    const { interpretWorkbook } = await import("./workbook-ai");
     const interpreted = await interpretWorkbook(
       workbookSummary(workbook, selectedSheetName),
       onModelAnswer,
@@ -811,7 +835,10 @@ export async function analyzeProjectWorkbook(
       throw new ProjectWorkbookError("No description column could be identified.", "invalid");
     }
     const headerRow = Math.min(Math.max(interpreted?.headerRow ?? preview.headerRow, 1), selected.rowCount);
-    const dataStartRow = Math.min(headerRow + 1, selected.rowCount);
+    const firstPossibleDataRow = Math.min(headerRow + 1, selected.rowCount);
+    const dataStartRow = interpreted
+      ? Math.min(Math.max(interpreted.dataStartRow, firstPossibleDataRow), selected.rowCount)
+      : firstPossibleDataRow;
     const mapping = {
       fields: {
         description,
@@ -827,7 +854,10 @@ export async function analyzeProjectWorkbook(
         finish: interpreted?.finishColumn ?? guessColumn(preview.columns, ["selesai", "finish", "akhir", "end"]),
       },
     };
-    const dataEndRow = lastMappedRow(selected, headerRow, mapping.fields);
+    const lastAvailableDataRow = lastMappedRow(selected, dataStartRow - 1, mapping.fields);
+    const dataEndRow = interpreted
+      ? Math.min(Math.max(interpreted.dataEndRow, dataStartRow), lastAvailableDataRow)
+      : lastAvailableDataRow;
     const proposedSections = boundedRows(interpreted?.sectionRows ?? [], dataStartRow, dataEndRow).filter(
       (row) => !rowCarriesLineData(selected, row, mapping.fields),
     );
@@ -835,7 +865,10 @@ export async function analyzeProjectWorkbook(
       interpreted?.excludedRows ?? [],
       dataStartRow,
       dataEndRow,
-    ).filter((row) => !rowCarriesLineData(selected, row, mapping.fields));
+    ).filter((row) => {
+      const descriptionText = cellValue(selected.getRow(row).getCell(description).value).trim();
+      return !descriptionText || !rowCarriesLineData(selected, row, mapping.fields);
+    });
     const sectionSet = new Set(proposedSections);
     const deterministicExclusions: number[] = [];
     for (let row = dataStartRow; row <= dataEndRow; row++) {
@@ -873,6 +906,8 @@ export async function analyzeProjectWorkbook(
         profile: interpreted ? "generic-ai" : "generic-deterministic",
         sheetName: selected.name,
         headerRow,
+        dataStartRow,
+        dataEndRow,
       }),
       dataStartRow,
       dataEndRow,
@@ -891,7 +926,7 @@ export async function analyzeProjectWorkbook(
       suggestedScheduleStartDate: interpreted?.startDate ?? null,
       suggestedEndDate: interpreted?.endDate ?? null,
       periodType: interpreted?.periodType ?? "weekly",
-      // The model never proposes "custom" (see openrouter.ts), so an AI plan
+      // The model never proposes "custom" (see workbook-ai.ts), so an AI plan
       // never arrives with a cycle length. The wizard sets both if the reader
       // overrides the cadence.
       periodLengthDays: null,
@@ -927,10 +962,19 @@ function assertSafeRowScope(
     ) {
       throw new ProjectWorkbookError("The reference workbook import scope was changed.", "invalid");
     }
-  } else {
+  } else if (plan.profile === "generic-deterministic") {
     const expectedEnd = lastMappedRow(sheet, plan.headerRow, plan.mapping.fields);
     if (plan.dataStartRow !== plan.headerRow + 1 || plan.dataEndRow !== expectedEnd) {
       throw new ProjectWorkbookError("The workbook row range no longer matches its analyzed table.", "invalid");
+    }
+  } else {
+    const lastAvailableRow = lastMappedRow(sheet, plan.dataStartRow - 1, plan.mapping.fields);
+    if (
+      plan.dataStartRow <= plan.headerRow ||
+      plan.dataEndRow < plan.dataStartRow ||
+      plan.dataEndRow > lastAvailableRow
+    ) {
+      throw new ProjectWorkbookError("The AI workbook row range is outside its analyzed table.", "invalid");
     }
   }
   for (const row of plan.excludedRows) {
@@ -939,6 +983,7 @@ function assertSafeRowScope(
     ).trim();
     if (
       rowCarriesLineData(sheet, row, plan.mapping.fields) &&
+      description &&
       !SUMMARY_ROW.test(description) &&
       !plan.userExcludedRows.includes(row)
     ) {
@@ -1000,31 +1045,36 @@ export async function reviewProjectWorkbook(
   assertPlanCoordinates(sheet, parsedPlan);
   let scopedPlan = parsedPlan;
   if (parsedPlan.profile !== "reference-s-curve") {
-    const dataEndRow = lastMappedRow(sheet, parsedPlan.headerRow, parsedPlan.mapping.fields);
+    const dataStartRow =
+      parsedPlan.profile === "generic-ai" ? parsedPlan.dataStartRow : parsedPlan.headerRow + 1;
+    const dataEndRow =
+      parsedPlan.profile === "generic-ai"
+        ? parsedPlan.dataEndRow
+        : lastMappedRow(sheet, parsedPlan.headerRow, parsedPlan.mapping.fields);
     const mandatoryExcludedRows = mandatorySummaryRows(
       sheet,
-      parsedPlan.headerRow + 1,
+      dataStartRow,
       dataEndRow,
       parsedPlan.mapping.fields.description,
     );
     scopedPlan = {
       ...parsedPlan,
-      dataStartRow: parsedPlan.headerRow + 1,
+      dataStartRow,
       dataEndRow,
-      sectionRows: boundedRows(parsedPlan.sectionRows, parsedPlan.headerRow + 1, dataEndRow),
+      sectionRows: boundedRows(parsedPlan.sectionRows, dataStartRow, dataEndRow),
       excludedRows: boundedRows(
         [...parsedPlan.excludedRows, ...mandatoryExcludedRows],
-        parsedPlan.headerRow + 1,
+        dataStartRow,
         dataEndRow,
       ),
       mandatoryExcludedRows,
       userExcludedRows: boundedRows(
         parsedPlan.userExcludedRows,
-        parsedPlan.headerRow + 1,
+        dataStartRow,
         dataEndRow,
       ).filter((row) => !mandatoryExcludedRows.includes(row)),
       parentAssignments: parsedPlan.parentAssignments.filter(
-        (assignment) => assignment.row > parsedPlan.headerRow && assignment.row <= dataEndRow,
+        (assignment) => assignment.row >= dataStartRow && assignment.row <= dataEndRow,
       ),
     };
   }

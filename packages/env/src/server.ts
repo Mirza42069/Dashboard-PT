@@ -51,13 +51,7 @@ export const env = createEnv({
     ADMIN_PASSWORD: z.string().optional(),
     ADMIN_NAME: z.string().optional(),
     // Optional so unrelated API routes still boot when AI import is not configured.
-    OPENROUTER_API_KEY: z.string().min(1).optional(),
-    OPENROUTER_MODEL: z.string().min(1).optional(),
-    OPENROUTER_PROVIDER: z
-      .string()
-      .regex(/^[a-z0-9-]+(?:\/[a-z0-9-]+)?$/)
-      .optional(),
-    OPENROUTER_REASONING_EFFORT: z.enum(["low", "medium", "high"]).optional(),
+    AI_GATEWAY_API_KEY: z.string().min(1).optional(),
     // Static token is required only to mint direct browser-upload tokens.
     // Reads and deletes use Vercel OIDC when it is available.
     BLOB_READ_WRITE_TOKEN: z.string().min(1).optional(),

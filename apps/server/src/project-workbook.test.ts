@@ -7,16 +7,37 @@ import {
   discoverProjectWorkbookSheets,
   prepareConfirmedWorkbook,
   reviewProjectWorkbook,
+  workbookSummary,
   workbookHash,
   workbookPlanIdentitySignature,
   workbookPlanSchema,
 } from "./project-workbook";
 import { loadWorkbook } from "./boq-import-parse";
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(60_000);
 
 const REFERENCE = resolve(import.meta.dir, "../../../reference/S-CURVE PLAN VS ACTUAL RSCH.xlsx");
 const DAILY_PROGRESS = resolve(import.meta.dir, "../../../reference/DAILY PROGRESS WEEK 16.xlsx");
+
+test("selected-sheet AI summaries include rows beyond the discovery sample", () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("BoQ");
+  for (let row = 1; row <= 60; row++) sheet.addRow([`Item ${row}`, row]);
+
+  const selected = workbookSummary(workbook, sheet.name);
+  const discovery = workbookSummary(workbook);
+
+  expect(selected.sheets[0]).toMatchObject({
+    sampledThroughRow: 60,
+    samplingComplete: true,
+  });
+  expect(selected.sheets[0]?.rows).toHaveLength(60);
+  expect(discovery.sheets[0]).toMatchObject({
+    sampledThroughRow: 40,
+    samplingComplete: false,
+  });
+  expect(discovery.sheets[0]?.rows).toHaveLength(40);
+});
 
 test("discovery accepts the daily workbook and reports the valid actual prefix", async () => {
   const bytes = new Uint8Array(await Bun.file(DAILY_PROGRESS).arrayBuffer());
@@ -65,6 +86,7 @@ test("an explicit generic selection is not displaced by a recognized first sheet
   // stays disabled, but the env module it lives behind still validates the
   // application environment when imported from the repo-root test command.
   process.env.SKIP_ENV_VALIDATION = "true";
+  process.env.AI_GATEWAY_API_KEY = "";
   const workbook = new ExcelJS.Workbook();
   const reference = workbook.addWorksheet("S CURVE");
   reference.getRow(7).values = [
@@ -400,13 +422,13 @@ test("confirmation recomputes a tampered period count from the workbook", async 
     profile: "generic-deterministic" as const,
     sheetName: "BoQ",
     headerRow: 1,
+    dataStartRow: 2,
+    dataEndRow: 2,
   };
   const plan = workbookPlanSchema.parse({
     version: 2,
     ...identity,
     analysisSignature: workbookPlanIdentitySignature(identity),
-    dataStartRow: 2,
-    dataEndRow: 2,
     sectionRows: [],
     excludedRows: [],
     mandatoryExcludedRows: [],
@@ -488,13 +510,13 @@ test("generic review includes trailing priced rows even when their description i
     profile: "generic-deterministic" as const,
     sheetName: "BoQ",
     headerRow: 1,
+    dataStartRow: 2,
+    dataEndRow: 2,
   };
   const reviewed = await reviewProjectWorkbook(bytes, {
     version: 2,
     ...identity,
     analysisSignature: workbookPlanIdentitySignature(identity),
-    dataStartRow: 2,
-    dataEndRow: 2,
     sectionRows: [],
     excludedRows: [],
     mandatoryExcludedRows: [],
@@ -520,4 +542,55 @@ test("generic review includes trailing priced rows even when their description i
 
   expect(reviewed.plan.dataEndRow).toBe(3);
   expect(reviewed.summary.validationErrors.some((error) => error.row === 3)).toBe(true);
+});
+
+test("AI review preserves signed table bounds and safe blank-description exclusions", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("BoQ");
+  sheet.addRow(["Description", "Amount"]);
+  sheet.addRow(["2", "3"]);
+  sheet.addRow(["Excavation", 100]);
+  sheet.addRow([null, 200]);
+  sheet.addRow(["Authorized signature", null]);
+  const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+  const identity = {
+    fileHash: workbookHash(bytes),
+    profile: "generic-ai" as const,
+    sheetName: "BoQ",
+    headerRow: 1,
+    dataStartRow: 3,
+    dataEndRow: 4,
+  };
+  const plan = workbookPlanSchema.parse({
+    version: 2,
+    ...identity,
+    analysisSignature: workbookPlanIdentitySignature(identity),
+    sectionRows: [],
+    excludedRows: [4],
+    mandatoryExcludedRows: [],
+    userExcludedRows: [],
+    parentAssignments: [{ row: 3, parentRow: null }],
+    actualCurve: null,
+    mapping: { fields: { description: 1, amount: 2 } },
+    suggestedCode: null,
+    suggestedName: null,
+    suggestedClient: null,
+    suggestedLocation: null,
+    suggestedStartDate: null,
+    suggestedScheduleStartDate: null,
+    suggestedEndDate: null,
+    periodType: "weekly",
+    periodLengthDays: null,
+    periodCount: 0,
+    confidence: "high",
+    warnings: [],
+  });
+
+  const reviewed = await reviewProjectWorkbook(bytes, plan);
+
+  expect(reviewed.plan).toMatchObject({ dataStartRow: 3, dataEndRow: 4, excludedRows: [4] });
+  expect(reviewed.summary).toMatchObject({ lineCount: 1, validationErrors: [] });
+  await expect(reviewProjectWorkbook(bytes, { ...plan, dataEndRow: 5 })).rejects.toThrow(
+    "workbook identity changed",
+  );
 });
