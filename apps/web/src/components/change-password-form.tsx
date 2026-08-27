@@ -41,8 +41,8 @@ export default function ChangePasswordForm() {
         router.push("/dashboard");
         router.refresh();
       },
-      onError: (error) => {
-        toast.error(error.message);
+      onError: () => {
+        toast.error(t.password.updateFailed);
       },
     }),
   );

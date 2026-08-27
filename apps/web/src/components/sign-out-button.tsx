@@ -11,7 +11,7 @@ import { authClient } from "@/lib/auth-client";
 /**
  * Reused by /change-password's forced state — the one place in the app that
  * has no AppShell (and so no UserMenu) to sign out from, which is exactly
- * where a user who lost their temporary password gets stuck otherwise.
+ * where a user waiting for password setup gets stuck otherwise.
  */
 export default function SignOutButton({ className }: { className?: string }) {
   const t = useT();

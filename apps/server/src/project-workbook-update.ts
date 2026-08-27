@@ -14,6 +14,7 @@ import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { prepareBoqRevision } from "./boq-import";
+import { relevantProjectStateChanged } from "./project-workbook-review";
 import {
   prepareConfirmedWorkbook,
   projectWorkbookCommitSchema,
@@ -54,7 +55,17 @@ const projectDetailsSchema = z.object({
   location: confirmedProjectSchema.shape.location,
 });
 const reviewStateSchema = z.object({
-  projectUpdatedAt: z.iso.datetime(),
+  project: z.object({
+    code: z.string(),
+    name: z.string(),
+    client: z.string().nullable(),
+    location: z.string().nullable(),
+    startDate: z.string().nullable(),
+    scheduleStart: z.string().nullable(),
+    endDate: z.string().nullable(),
+    periodType: z.string(),
+    periodLengthDays: z.number().int().nullable(),
+  }),
   existingActualSnapshots: z.array(
     z.object({
       periodIndex: z.number().int().positive(),
@@ -117,7 +128,6 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
       endDate: project.endDate,
       periodType: project.periodType,
       periodLengthDays: project.periodLengthDays,
-      updatedAt: project.updatedAt,
     })
     .from(project)
     .where(and(eq(project.id, input.projectId), eq(project.companyId, input.companyId)))
@@ -168,7 +178,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
   const importsBoqAndSchedule = input.sections.boq || input.sections.schedule;
   const existingDraft = versions.find((version) => version.status === "draft");
   const activeVersion = versions.find((version) => version.status === "active") ?? null;
-  if (current.updatedAt.toISOString() !== reviewState.projectUpdatedAt) {
+  if (relevantProjectStateChanged(current, reviewState.project, input.sections)) {
     invalid("The project changed after this workbook was reviewed. Analyze it again.", "review_stale");
   }
   if (input.sections.progress) {
@@ -618,7 +628,10 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
             updated_at = now()
           where id = ${input.projectId}
             and company_id = ${input.companyId}
-            and date_trunc('milliseconds', updated_at) = ${current.updatedAt}
+            and code = ${reviewState.project.code}
+            and name = ${reviewState.project.name}
+            and client is not distinct from ${reviewState.project.client}
+            and location is not distinct from ${reviewState.project.location}
             and not exists (
               select 1 from project duplicate
               where duplicate.company_id = ${input.companyId}

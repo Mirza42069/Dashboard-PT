@@ -11,6 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@DashboardV2/ui/components/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@DashboardV2/ui/components/alert";
 import { Badge } from "@DashboardV2/ui/components/badge";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent } from "@DashboardV2/ui/components/card";
@@ -63,7 +64,6 @@ import { trpc } from "@/utils/trpc";
 import CreateUserDialog from "./create-user-dialog";
 import SetTrialDialog, { type TrialTarget } from "./set-trial-dialog";
 import RenameUserDialog, { type RenameTarget } from "./rename-user-dialog";
-import TempPasswordDialog, { type TempPasswordResult } from "./temp-password-dialog";
 
 const PAGE_SIZE = 25;
 
@@ -82,7 +82,6 @@ export default function UsersTable({
 
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
-  const [tempPassword, setTempPassword] = useState<TempPasswordResult | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [companyTarget, setCompanyTarget] = useState<{ id: string; name: string } | null>(null);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
@@ -140,6 +139,7 @@ export default function UsersTable({
 
   const users = usersQuery.data?.users ?? [];
   const total = usersQuery.data?.total ?? 0;
+  const accountEmailEnabled = usersQuery.data?.accountEmailEnabled === true;
   const hasNextPage = (page + 1) * PAGE_SIZE < total;
 
   return (
@@ -155,8 +155,21 @@ export default function UsersTable({
           className="w-full sm:max-w-xs"
           aria-label={t.common.search}
         />
-        <CreateUserDialog actorRole={actorRole} onCreated={setTempPassword} />
+        <CreateUserDialog
+          actorRole={actorRole}
+          accountEmailEnabled={accountEmailEnabled}
+        />
       </div>
+
+      {usersQuery.data && !accountEmailEnabled && (
+        <Alert role="status">
+          <Lock />
+          <AlertTitle>{t.users.accountEmailDisabledTitle}</AlertTitle>
+          <AlertDescription id="account-email-disabled-description">
+            {t.users.accountEmailDisabledDescription}
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardContent className="px-0">
@@ -165,6 +178,7 @@ export default function UsersTable({
               <TableRow>
                 <TableHead className="pl-4">{t.users.name}</TableHead>
                 <TableHead>{t.users.email}</TableHead>
+                <TableHead>{t.users.username}</TableHead>
                 <TableHead>{t.users.role}</TableHead>
                 <TableHead>{t.company.label}</TableHead>
                 <TableHead>{t.users.statusColumn}</TableHead>
@@ -176,7 +190,7 @@ export default function UsersTable({
               {usersQuery.isPending &&
                 Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={7} className="pl-4">
+                    <TableCell colSpan={8} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -184,7 +198,7 @@ export default function UsersTable({
 
               {!usersQuery.isPending && users.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
+                  <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
                     {debouncedSearch
                       ? interpolate(t.users.noMatch, { search: debouncedSearch })
                       : t.users.empty}
@@ -215,6 +229,7 @@ export default function UsersTable({
                         wrapping alone does nothing for it, so it would set the
                         table's minimum width on its own. */}
                     <TableCell className="break-words text-muted-foreground">{user.email}</TableCell>
+                    <TableCell className="text-muted-foreground">{user.username}</TableCell>
                     <TableCell>
                       <Badge variant={isSuperAdmin ? "default" : isRowAdmin ? "secondary" : "outline"}>
                         {isSuperAdmin
@@ -280,16 +295,21 @@ export default function UsersTable({
                           )}
 
                           <DropdownMenuItem
-                            disabled={!manageable}
+                            disabled={
+                              !accountEmailEnabled || !manageable || isSelf || isSuperAdmin
+                            }
+                            aria-describedby={
+                              accountEmailEnabled
+                                ? undefined
+                                : "account-email-disabled-description"
+                            }
                             onClick={() =>
                               run(async () => {
                                 const data = await resetPassword.mutateAsync({ userId: user.id });
-                                setTempPassword({
-                                  email: user.email,
-                                  password: data.temporaryPassword,
-                                  isNewAccount: false,
-                                });
-                              }, t.users.passwordResetToast)
+                                if (!data.invitationSent) {
+                                  throw new Error(t.users.passwordSetupFailed);
+                                }
+                              }, t.users.passwordSetupSent)
                             }
                           >
                             <KeyRound />
@@ -451,8 +471,6 @@ export default function UsersTable({
           </Button>
         </div>
       </div>
-
-      <TempPasswordDialog result={tempPassword} onClose={() => setTempPassword(null)} />
 
       {trialTarget && (
         <SetTrialDialog target={trialTarget} onClose={() => setTrialTarget(null)} />

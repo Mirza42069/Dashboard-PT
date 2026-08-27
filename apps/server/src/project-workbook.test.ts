@@ -5,6 +5,8 @@ import { resolve } from "node:path";
 import {
   analyzeProjectWorkbook,
   discoverProjectWorkbookSheets,
+  recommendProjectWorkbookSheet,
+  visibleProjectWorkbookSheets,
   prepareConfirmedWorkbook,
   reviewProjectWorkbook,
   workbookSummary,
@@ -63,6 +65,68 @@ test("discovery accepts the daily workbook and reports the valid actual prefix",
   ).toBe(true);
 });
 
+test("workbook selection shows visible sheets and recommends the matching S-curve", async () => {
+  const bytes = new Uint8Array(await Bun.file(DAILY_PROGRESS).arrayBuffer());
+  const workbook = await loadWorkbook(bytes);
+  const candidates = discoverProjectWorkbookSheets(workbook);
+  const visible = visibleProjectWorkbookSheets(candidates);
+
+  expect(visible.map((sheet) => sheet.sheetName)).toEqual([
+    "16 AGUSTUS 2026",
+    "17 AGUSTUS 2026",
+    "18 AGUSTUS 2026",
+    "19 AGUSTUS 2026",
+    "20 AGUSTUS 2026",
+    "21 AGUSTUS 2026",
+    "22 AGUSTUS 2026",
+    "S CURVE (5)",
+  ]);
+  expect(recommendProjectWorkbookSheet(visible)?.sheetName).toBe("S CURVE (5)");
+  expect(
+    recommendProjectWorkbookSheet(visible, {
+      name: "PEKERJAAN STRUCTURE RSU CITRA HARAPAN",
+      startDate: "2026-05-02",
+      scheduleStart: "2026-05-03",
+      endDate: "2026-08-29",
+    })?.sheetName,
+  ).toBe("S CURVE (5)");
+});
+
+test("missing project dates do not count as worksheet matches", () => {
+  const generic = {
+    sheetName: "Daily report",
+    state: "visible" as const,
+    rowCount: 20,
+    columnCount: 10,
+    knownSCurve: false,
+    warnings: [],
+    actualSnapshotCount: 0,
+    latestActualPeriodIndex: null,
+    latestActualPercent: null,
+    suggestedName: null,
+    suggestedStartDate: null,
+    suggestedScheduleStartDate: null,
+    suggestedEndDate: null,
+  };
+  const recognized = {
+    ...generic,
+    sheetName: "S CURVE",
+    knownSCurve: true,
+    suggestedStartDate: "2026-01-01",
+    suggestedScheduleStartDate: "2026-01-02",
+    suggestedEndDate: "2026-04-30",
+  };
+
+  expect(
+    recommendProjectWorkbookSheet([generic, recognized], {
+      name: "Unscheduled project",
+      startDate: null,
+      scheduleStart: null,
+      endDate: null,
+    })?.sheetName,
+  ).toBe("S CURVE");
+});
+
 test("analysis honors an explicitly selected reference worksheet", async () => {
   const bytes = new Uint8Array(await Bun.file(DAILY_PROGRESS).arrayBuffer());
   const analysis = await analyzeProjectWorkbook(bytes, undefined, "S CURVE NOV");
@@ -79,6 +143,32 @@ test("analysis honors an explicitly selected reference worksheet", async () => {
       (error) => error.row === 50 && error.column === "V" && error.message.includes("#REF!"),
     ),
   ).toBe(true);
+});
+
+test("the daily workbook matching S-curve can update the reference project calendar", async () => {
+  const [reference, daily] = await Promise.all([
+    analyzeProjectWorkbook(
+      new Uint8Array(await Bun.file(REFERENCE).arrayBuffer()),
+      undefined,
+      "S CURVE (5)",
+    ),
+    analyzeProjectWorkbook(
+      new Uint8Array(await Bun.file(DAILY_PROGRESS).arrayBuffer()),
+      undefined,
+      "S CURVE (5)",
+    ),
+  ]);
+
+  expect(daily.plan).toMatchObject({
+    suggestedStartDate: reference.plan.suggestedStartDate,
+    suggestedScheduleStartDate: reference.plan.suggestedScheduleStartDate,
+    suggestedEndDate: reference.plan.suggestedEndDate,
+    periodCount: reference.plan.periodCount,
+  });
+  expect(daily.summary.validationErrors).toEqual([]);
+  expect(daily.actualSnapshots).toHaveLength(14);
+  expect(daily.actualSnapshots.at(-1)?.periodIndex).toBe(16);
+  expect(daily.actualSnapshots.at(-1)?.cumulativePercent).toBeCloseTo(56.9230209578, 8);
 });
 
 test("an explicit generic selection is not displaced by a recognized first sheet", async () => {
@@ -254,9 +344,10 @@ test("confirmation regenerates and validates the complete weekly schedule", asyn
 test("reference actuals cannot be attached to a shifted reporting calendar", async () => {
   const bytes = new Uint8Array(await Bun.file(REFERENCE).arrayBuffer());
   const analysis = await analyzeProjectWorkbook(bytes);
+  let caught: unknown;
 
-  await expect(
-    prepareConfirmedWorkbook(bytes, {
+  try {
+    await prepareConfirmedWorkbook(bytes, {
       plan: analysis.plan,
       project: {
         code: "RSCH-02",
@@ -269,8 +360,20 @@ test("reference actuals cannot be attached to a shifted reporting calendar", asy
         periodType: "weekly",
         periodLengthDays: null,
       },
-    }),
-  ).rejects.toThrow("do not match the calendar");
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toMatchObject({
+    code: "workbook_calendar_mismatch",
+    details: {
+      differences: ["startDate", "scheduleStart", "endDate"],
+      suggestedStartDate: "2026-05-02",
+      suggestedScheduleStartDate: "2026-05-03",
+      suggestedEndDate: "2026-08-29",
+    },
+  });
 });
 
 test("a short confirmed calendar reports the period mismatch and suggested end date", async () => {

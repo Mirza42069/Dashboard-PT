@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 /** Routes reachable without a session. Everything else is gated. */
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", "/set-password"];
 
 export default function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;

@@ -263,6 +263,17 @@ export type WorkbookSheetCandidate = {
   actualSnapshotCount: number;
   latestActualPeriodIndex: number | null;
   latestActualPercent: number | null;
+  suggestedName: string | null;
+  suggestedStartDate: string | null;
+  suggestedScheduleStartDate: string | null;
+  suggestedEndDate: string | null;
+};
+
+export type WorkbookSheetTarget = {
+  name: string;
+  startDate: string | null;
+  scheduleStart: string | null;
+  endDate: string | null;
 };
 
 export const projectWorkbookCommitSchema = z.object({
@@ -312,7 +323,7 @@ export class ProjectWorkbookError extends Error {
     readonly kind: "invalid" | "conflict",
     readonly errors: { row: number; column: string | null; message: string }[] = [],
     readonly code: string | null = null,
-    readonly details: Record<string, string | number | null> | null = null,
+    readonly details: Record<string, unknown> | null = null,
   ) {
     super(message);
   }
@@ -779,8 +790,55 @@ export function discoverProjectWorkbookSheets(
       actualSnapshotCount: actual.snapshots.length,
       latestActualPeriodIndex: latest?.periodIndex ?? null,
       latestActualPercent: latest?.cumulativePercent ?? null,
+      suggestedName: bounds
+        ? cellValue(sheet.getRow(bounds.titleRow).getCell(3).value).trim() || null
+        : null,
+      suggestedStartDate: bounds?.contractStartDate ?? null,
+      suggestedScheduleStartDate: bounds?.scheduleStartDate ?? null,
+      suggestedEndDate: bounds?.endDate ?? null,
     };
   });
+}
+
+export function visibleProjectWorkbookSheets(candidates: WorkbookSheetCandidate[]) {
+  return candidates.filter((candidate) => candidate.state === "visible");
+}
+
+function normalizedProjectName(value: string | null) {
+  return value?.trim().replace(/\s+/g, " ").toLocaleUpperCase("en-US") ?? "";
+}
+
+/** Chooses one safe, visible worksheet when the reader selects the whole workbook. */
+export function recommendProjectWorkbookSheet(
+  candidates: WorkbookSheetCandidate[],
+  target?: WorkbookSheetTarget,
+) {
+  const targetName = normalizedProjectName(target?.name ?? null);
+  return candidates
+    .filter((candidate) => candidate.state === "visible")
+    .map((candidate, index) => {
+      let score = candidate.knownSCurve ? 100 : 0;
+      if (candidate.warnings.length === 0) score += 25;
+      score += Math.min(candidate.actualSnapshotCount, 20) * 2;
+      if (target) {
+        if (
+          targetName &&
+          normalizedProjectName(candidate.suggestedName) === targetName
+        ) {
+          score += 500;
+        }
+        if (target.startDate && candidate.suggestedStartDate === target.startDate) score += 150;
+        if (
+          target.scheduleStart &&
+          candidate.suggestedScheduleStartDate === target.scheduleStart
+        ) {
+          score += 150;
+        }
+        if (target.endDate && candidate.suggestedEndDate === target.endDate) score += 150;
+      }
+      return { candidate, index, score };
+    })
+    .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.candidate;
 }
 
 /**
@@ -1272,6 +1330,12 @@ export async function validateWorkbookCalendar(
       project.endDate !== bounds.endDate ||
       project.periodType !== "weekly"
     ) {
+      const differences = [
+        project.startDate !== bounds.contractStartDate ? "startDate" : null,
+        project.scheduleStart !== bounds.scheduleStartDate ? "scheduleStart" : null,
+        project.endDate !== bounds.endDate ? "endDate" : null,
+        project.periodType !== "weekly" ? "periodType" : null,
+      ].filter((field): field is string => field !== null);
       throw new ProjectWorkbookError(
         "The selected dates do not match the calendar found in the workbook.",
         "invalid",
@@ -1281,6 +1345,7 @@ export async function validateWorkbookCalendar(
           suggestedStartDate: bounds.contractStartDate,
           suggestedScheduleStartDate: bounds.scheduleStartDate,
           suggestedEndDate: bounds.endDate,
+          differences,
         },
       );
     }

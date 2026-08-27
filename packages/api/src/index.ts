@@ -11,7 +11,7 @@ export const router = t.router;
 
 export const publicProcedure = t.procedure;
 
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+const authenticatedProcedure = t.procedure.use(({ ctx, next }) => {
   if (!ctx.session) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
@@ -35,6 +35,17 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
       session: ctx.session,
     },
   });
+});
+
+export const protectedProcedure = authenticatedProcedure.use(({ ctx, next }) => {
+  if (ctx.session.user.mustChangePassword) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: ctx.t.auth.passwordChangeRequired,
+      cause: "Password change required",
+    });
+  }
+  return next({ ctx });
 });
 
 /**

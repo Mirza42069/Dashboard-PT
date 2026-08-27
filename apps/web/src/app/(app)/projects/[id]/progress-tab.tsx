@@ -14,7 +14,7 @@ import { Input } from "@DashboardV2/ui/components/input";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, Save, Trash2 } from "@DashboardV2/ui/components/icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
@@ -147,7 +147,7 @@ export default function ProgressTab({
     allMatrixColumns,
     effectiveSelectedPeriodId,
   );
-  const collapsedMonthsKey = JSON.stringify([...fit.collapsed].sort());
+  const lastRevealedPeriodId = useRef("");
   const matrixWindow = useMatrixWindow({
     rowCount: matrixRows.length,
     columnCount: allMatrixColumns.length,
@@ -163,6 +163,7 @@ export default function ProgressTab({
     windowRows: false,
   });
   useEffect(() => {
+    if (lastRevealedPeriodId.current === effectiveSelectedPeriodId) return;
     if (!effectiveSelectedPeriodId || selectedColumnIndex < 0) return;
     const element = matrixWindow.scrollRef.current;
     if (!element) return;
@@ -173,7 +174,8 @@ export default function ProgressTab({
     if (left < visibleLeft || right > visibleRight) {
       element.scrollTo({ left: Math.max(0, left - MAX_PERIOD_WIDTH), behavior: "auto" });
     }
-  }, [collapsedMonthsKey, effectiveSelectedPeriodId, selectedColumnIndex]);
+    lastRevealedPeriodId.current = effectiveSelectedPeriodId;
+  }, [effectiveSelectedPeriodId, matrixWindow.scrollRef, selectedColumnIndex]);
   const matrixKeyboard = useMatrixKeyboard({
     scrollRef: matrixWindow.scrollRef,
     rowCount: matrixRows.length,

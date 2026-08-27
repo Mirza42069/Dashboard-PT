@@ -1,7 +1,7 @@
 "use client";
 
 import { env } from "@DashboardV2/env/web";
-import { endDateForPeriodCount, generatePeriods } from "@DashboardV2/api/lib/periods";
+import { endDateForPeriodCount } from "@DashboardV2/api/lib/periods";
 import { Alert, AlertDescription, AlertTitle } from "@DashboardV2/ui/components/alert";
 import { Button } from "@DashboardV2/ui/components/button";
 import {
@@ -23,7 +23,6 @@ import {
   SelectValue,
 } from "@DashboardV2/ui/components/select";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { upload } from "@vercel/blob/client";
 import { useRef, useState } from "react";
 
 import { StepRunner } from "@/components/step-runner";
@@ -35,7 +34,12 @@ import { PERIOD_TYPES, type PeriodType } from "@DashboardV2/db/schema";
 
 import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { uploadPrivateBlob } from "@/lib/client-blob-upload";
 import { getServerUrl } from "@/lib/server-url";
+import {
+  getWorkbookScheduleIssue,
+  type ScheduleIssue,
+} from "@/lib/project-workbook-schedule";
 import { useDebounced } from "@/lib/use-debounced";
 import { cadenceLabel } from "@/lib/cadence";
 import { useFormat } from "@/lib/use-format";
@@ -174,6 +178,16 @@ function cadenceReady(answers: Answers): boolean {
   return answers.periodType !== "custom" || cycleLength(answers) !== null;
 }
 
+function scheduleAnswers(answers: Answers) {
+  return {
+    startDate: answers.startDate,
+    scheduleStart: answers.scheduleStart,
+    endDate: answers.endDate,
+    periodType: answers.periodType,
+    periodLengthDays: cycleLength(answers),
+  };
+}
+
 const QUESTIONS = [
   "name",
   "code",
@@ -185,111 +199,23 @@ const QUESTIONS = [
   "endDate",
 ] as const;
 type Question = (typeof QUESTIONS)[number];
+type CalendarDifference = "startDate" | "scheduleStart" | "endDate" | "periodType";
+
+function isCalendarDifference(value: unknown): value is CalendarDifference {
+  return (
+    value === "startDate" ||
+    value === "scheduleStart" ||
+    value === "endDate" ||
+    value === "periodType"
+  );
+}
+
 const CODE_QUESTION_INDEX = QUESTIONS.indexOf("code");
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const XLSX_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-
-function preferredSheet(sheets: SheetCandidate[]) {
-  return (
-    sheets.find((sheet) => sheet.sheetName.trim().toUpperCase() === "S CURVE NOV") ??
-    sheets.find((sheet) => sheet.knownSCurve && sheet.actualSnapshotCount > 0) ??
-    sheets.find((sheet) => sheet.knownSCurve) ??
-    sheets[0]
-  );
-}
-
-type PeriodCountIssue = {
-  code: "period_count_mismatch";
-  workbookPeriodCount: number;
-  confirmedPeriodCount: number;
-  suggestedEndDate: string;
-};
-
-type WorkbookCalendarIssue = {
-  code: "workbook_calendar_mismatch";
-  suggestedStartDate: string;
-  suggestedScheduleStartDate: string;
-  suggestedEndDate: string;
-};
-
-type ScheduleRangeIssue = {
-  code: "schedule_range_exceeded";
-  workbookPeriodCount: number;
-  suggestedEndDate: string;
-};
-
-type ScheduleIssue = PeriodCountIssue | WorkbookCalendarIssue | ScheduleRangeIssue;
-
-function getPeriodCountIssue(
-  answers: Answers,
-  plan: Plan,
-): PeriodCountIssue | ScheduleRangeIssue | null {
-  if (!answers.scheduleStart || !answers.endDate || plan.periodCount < 1) return null;
-  try {
-    const confirmedPeriodCount = generatePeriods(
-      answers.scheduleStart,
-      answers.endDate,
-      answers.periodType,
-      cycleLength(answers),
-    ).length;
-    if (confirmedPeriodCount === plan.periodCount) return null;
-    return {
-      code: "period_count_mismatch",
-      workbookPeriodCount: plan.periodCount,
-      confirmedPeriodCount,
-      suggestedEndDate: endDateForPeriodCount(
-        answers.scheduleStart,
-        plan.periodCount,
-        answers.periodType,
-        cycleLength(answers),
-      ),
-    };
-  } catch {
-    try {
-      return {
-        code: "schedule_range_exceeded",
-        workbookPeriodCount: plan.periodCount,
-        suggestedEndDate: endDateForPeriodCount(
-          answers.scheduleStart,
-          plan.periodCount,
-          answers.periodType,
-          cycleLength(answers),
-        ),
-      };
-    } catch {
-      return null;
-    }
-  }
-}
-
-function getWorkbookCalendarIssue(
-  answers: Answers,
-  plan: Plan,
-): WorkbookCalendarIssue | null {
-  if (
-    plan.profile !== "reference-s-curve" ||
-    !plan.suggestedStartDate ||
-    !plan.suggestedScheduleStartDate ||
-    !plan.suggestedEndDate
-  ) {
-    return null;
-  }
-  if (
-    answers.startDate === plan.suggestedStartDate &&
-    answers.scheduleStart === plan.suggestedScheduleStartDate &&
-    answers.endDate === plan.suggestedEndDate &&
-    answers.periodType === plan.periodType
-  ) {
-    return null;
-  }
-  return {
-    code: "workbook_calendar_mismatch",
-    suggestedStartDate: plan.suggestedStartDate,
-    suggestedScheduleStartDate: plan.suggestedScheduleStartDate,
-    suggestedEndDate: plan.suggestedEndDate,
-  };
-}
+// A colon is forbidden in Excel worksheet names, so this cannot collide with a real sheet.
+const AUTO_SHEET = ":entire-workbook";
 
 async function readJson<T>(response: Response): Promise<T | null> {
   try {
@@ -304,16 +230,12 @@ async function uploadWorkbook(
   currentUserId: string,
   metadata: Record<string, unknown> = {},
 ): Promise<string> {
-  const blob = await upload(
-    `temporary-workbooks/project-import/${currentUserId}/${crypto.randomUUID()}.xlsx`,
+  const blob = await uploadPrivateBlob({
+    pathname: `temporary-workbooks/project-import/${currentUserId}/${crypto.randomUUID()}.xlsx`,
     file,
-    {
-      access: "private",
-      handleUploadUrl: `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/upload`,
-      contentType: XLSX_CONTENT_TYPE,
-      multipart: false,
-    },
-  );
+    handleUploadUrl: `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/project-import/upload`,
+    contentType: XLSX_CONTENT_TYPE,
+  });
   return JSON.stringify({ pathname: blob.pathname, filename: file.name, ...metadata });
 }
 
@@ -405,7 +327,8 @@ export default function ProjectWorkbookImportDialog({
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<SheetCandidate[] | null>(null);
-  const [selectedSheetName, setSelectedSheetName] = useState("");
+  const [sheetChoice, setSheetChoice] = useState("");
+  const [recommendedSheetName, setRecommendedSheetName] = useState("");
   const [discovering, setDiscovering] = useState(false);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [answers, setAnswers] = useState<Answers>(EMPTY);
@@ -463,7 +386,8 @@ export default function ProjectWorkbookImportDialog({
   function reset() {
     setFile(null);
     setSheets(null);
-    setSelectedSheetName("");
+    setSheetChoice("");
+    setRecommendedSheetName("");
     setDiscovering(false);
     setAnalysis(null);
     setAnswers(EMPTY);
@@ -497,7 +421,8 @@ export default function ProjectWorkbookImportDialog({
     }
     setFile(chosen);
     setSheets(null);
-    setSelectedSheetName("");
+    setSheetChoice("");
+    setRecommendedSheetName("");
     setError(null);
     setAiExhausted(false);
     setDiscovering(true);
@@ -512,12 +437,18 @@ export default function ProjectWorkbookImportDialog({
           body: data,
         },
       );
-      const body = await readJson<{ sheets?: SheetCandidate[]; error?: string }>(response);
+      const body = await readJson<{
+        sheets?: SheetCandidate[];
+        recommendedSheetName?: string | null;
+        error?: string;
+      }>(response);
       if (!response.ok || !body?.sheets) {
         throw new Error(body?.error ?? t.projectUpdate.discoveryFailed);
       }
       setSheets(body.sheets);
-      setSelectedSheetName(preferredSheet(body.sheets)?.sheetName ?? "");
+      const recommended = body.recommendedSheetName ?? body.sheets[0]?.sheetName ?? "";
+      setRecommendedSheetName(recommended);
+      setSheetChoice(recommended ? AUTO_SHEET : "");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t.projectUpdate.discoveryFailed);
     } finally {
@@ -836,16 +767,17 @@ export default function ProjectWorkbookImportDialog({
 
   async function createProject() {
     if (!file || !analysis) return;
-    const scheduleProblem =
-      getWorkbookCalendarIssue(answers, analysis.plan) ??
-      getPeriodCountIssue(answers, analysis.plan);
+    if (reviewStale) {
+      setError(t.projectImport.revalidateRequired);
+      return;
+    }
+    const scheduleProblem = getWorkbookScheduleIssue(
+      scheduleAnswers(answers),
+      analysis.plan,
+    );
     if (scheduleProblem) {
       setServerScheduleIssue(scheduleProblem);
       setError(null);
-      return;
-    }
-    if (reviewStale) {
-      setError(t.projectImport.revalidateRequired);
       return;
     }
     if (analysis.summary.validationErrors.length > 0) {
@@ -904,7 +836,7 @@ export default function ProjectWorkbookImportDialog({
         projectId?: string;
         error?: string;
         code?: string | null;
-        details?: Record<string, string | number | null> | null;
+        details?: Record<string, unknown> | null;
         errors?: Analysis["summary"]["validationErrors"];
       }>(response);
       if (!response.ok || !body?.projectId) {
@@ -956,6 +888,9 @@ export default function ProjectWorkbookImportDialog({
             suggestedStartDate: body.details.suggestedStartDate,
             suggestedScheduleStartDate: body.details.suggestedScheduleStartDate,
             suggestedEndDate: body.details.suggestedEndDate,
+            differences: Array.isArray(body.details.differences)
+              ? body.details.differences.filter(isCalendarDifference)
+              : undefined,
           });
           return;
         }
@@ -983,12 +918,12 @@ export default function ProjectWorkbookImportDialog({
   };
   const availableSections =
     analysis?.rowPreview.filter((row) => row.kind === "section") ?? [];
+  const selectedSheetName =
+    sheetChoice === AUTO_SHEET ? recommendedSheetName : sheetChoice;
   const selectedSheet =
     sheets?.find((candidate) => candidate.sheetName === selectedSheetName) ?? null;
-  const scheduleIssue = analysis
-    ? getWorkbookCalendarIssue(answers, analysis.plan) ??
-      getPeriodCountIssue(answers, analysis.plan) ??
-      serverScheduleIssue
+  const scheduleIssue = analysis && reviewing
+    ? getWorkbookScheduleIssue(scheduleAnswers(answers), analysis.plan) ?? serverScheduleIssue
     : null;
 
   function useRecommendedSchedule() {
@@ -1044,6 +979,17 @@ export default function ProjectWorkbookImportDialog({
         <AlertTitle>{t.projectImport.scheduleMismatchTitle}</AlertTitle>
         <AlertDescription>
           <p>{description}</p>
+          {scheduleIssue.code === "workbook_calendar_mismatch" &&
+            scheduleIssue.differences &&
+            scheduleIssue.differences.length > 0 && (
+              <p className="mt-1">
+                {interpolate(t.projectImport.calendarMismatchFields, {
+                  fields: scheduleIssue.differences
+                    .map((field) => questionLabels[field])
+                    .join(", "),
+                })}
+              </p>
+            )}
           <p className="mt-1">{t.projectImport.scheduleMismatchHelp}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button size="sm" onClick={useRecommendedSchedule}>
@@ -1142,22 +1088,41 @@ export default function ProjectWorkbookImportDialog({
                 <div className="space-y-2">
                   <Label htmlFor="project-import-sheet">{t.projectUpdate.sheetLabel}</Label>
                   <Select
-                    items={sheets.map((candidate) => ({
-                      value: candidate.sheetName,
-                      label: interpolate(t.projectUpdate.sheetOption, {
-                        name: candidate.sheetName,
-                        state: t.projectUpdate.sheetStates[candidate.state],
-                        rows: candidate.rowCount,
-                        columns: candidate.columnCount,
-                      }),
-                    }))}
-                    value={selectedSheetName}
-                    onValueChange={(value) => setSelectedSheetName(value ?? "")}
+                    items={[
+                      ...(recommendedSheetName
+                        ? [
+                            {
+                              value: AUTO_SHEET,
+                              label: interpolate(t.projectUpdate.entireWorkbook, {
+                                sheet: recommendedSheetName,
+                              }),
+                            },
+                          ]
+                        : []),
+                      ...sheets.map((candidate) => ({
+                        value: candidate.sheetName,
+                        label: interpolate(t.projectUpdate.sheetOption, {
+                          name: candidate.sheetName,
+                          state: t.projectUpdate.sheetStates[candidate.state],
+                          rows: candidate.rowCount,
+                          columns: candidate.columnCount,
+                        }),
+                      })),
+                    ]}
+                    value={sheetChoice}
+                    onValueChange={(value) => setSheetChoice(value ?? "")}
                   >
                     <SelectTrigger id="project-import-sheet" className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      {recommendedSheetName && (
+                        <SelectItem value={AUTO_SHEET}>
+                          {interpolate(t.projectUpdate.entireWorkbook, {
+                            sheet: recommendedSheetName,
+                          })}
+                        </SelectItem>
+                      )}
                       {sheets.map((candidate) => (
                         <SelectItem key={candidate.sheetName} value={candidate.sheetName}>
                           {interpolate(t.projectUpdate.sheetOption, {
@@ -1388,9 +1353,6 @@ export default function ProjectWorkbookImportDialog({
               )}
               {(question === "client" || question === "location") && (
                 <p className="mt-2 text-muted-foreground">{t.projectImport.optionalHint}</p>
-              )}
-              {question === "endDate" && scheduleIssue && (
-                <div className="mt-3">{scheduleIssueAlert()}</div>
               )}
             </div>
           </div>

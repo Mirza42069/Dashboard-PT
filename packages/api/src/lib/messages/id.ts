@@ -19,6 +19,7 @@ export const id = {
     required: "Perlu masuk terlebih dahulu",
     insufficientRole: "Peran Anda tidak mencukupi",
     trialEnded: "Masa uji coba ini telah berakhir",
+    passwordChangeRequired: "Atur kata sandi baru sebelum melanjutkan.",
     noCompanyAssigned:
       "Akun ini belum terhubung ke perusahaan mana pun. Minta administrator untuk mengaturnya.",
     noCompaniesYet: "Belum ada perusahaan. Buat satu di Admin → Perusahaan.",
@@ -60,11 +61,19 @@ export const id = {
     notFound: "Pengguna tidak ditemukan",
     someNotFound: "Satu atau beberapa pengguna tidak ditemukan",
     emailExists: "Sudah ada akun dengan email tersebut",
+    usernameExists: "Sudah ada akun dengan nama pengguna tersebut",
+    usernameInvalid: "Gunakan 3–30 huruf, angka, titik, atau garis bawah",
     onlySuperAdminCreatesAdmins:
       "Hanya akun System yang dapat membuat akun admin atau System",
     ownCompanyOnly: "Anda hanya dapat membuat pengguna di perusahaan Anda sendiri",
     couldNotAssignCompany:
       "Perusahaan tidak dapat ditetapkan — akun tidak jadi dibuat. Silakan coba lagi.",
+    accountEmailNotConfigured: "Pengiriman email akun sedang dinonaktifkan.",
+    currentPasswordRequired: "Kata sandi saat ini wajib diisi",
+    passwordTooShort: "Kata sandi minimal 12 karakter",
+    passwordMustDiffer: "Pilih kata sandi yang berbeda dari yang sekarang",
+    systemPasswordResetNotAllowed:
+      "Kata sandi akun System tidak dapat diatur ulang dari akun lain. Gunakan prosedur pemulihan operator.",
     systemNoTrial: "Akun System tidak dapat diberi uji coba",
     notLastSuperAdmin: "Akun System terakhir yang tersisa tidak dapat {action}.",
     notOwnAccount: "Akun Anda sendiri tidak dapat {action}.",
@@ -217,6 +226,7 @@ export const id = {
       disable: "dinonaktifkan",
       delete: "dihapus",
       trial: "diberi uji coba",
+      resetPassword: "diatur ulang kata sandinya",
     },
     workbookOperation: {
       uploads: "pengunggahan",

@@ -239,6 +239,20 @@
       "when": 1787582265285,
       "tag": "0033_violet_captain_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1787811910033,
+      "tag": "0034_milky_exiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1787834601160,
+      "tag": "0035_true_nighthawk",
+      "breakpoints": true
     }
   ]
 }

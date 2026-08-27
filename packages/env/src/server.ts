@@ -52,6 +52,12 @@ export const env = createEnv({
     ADMIN_NAME: z.string().optional(),
     // Optional so unrelated API routes still boot when AI import is not configured.
     AI_GATEWAY_API_KEY: z.string().min(1).optional(),
+    ACCOUNT_EMAIL_ENABLED: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    RESEND_API_KEY: z.string().min(1).optional(),
+    ACCOUNT_EMAIL_FROM: z.string().min(1).default("Fushin AI <noreply@fushin.ai>"),
     // Static token is required only to mint direct browser-upload tokens.
     // Reads and deletes use Vercel OIDC when it is available.
     BLOB_READ_WRITE_TOKEN: z.string().min(1).optional(),

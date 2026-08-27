@@ -1,4 +1,12 @@
-import { auth } from "@DashboardV2/auth";
+import {
+  accountEmailConfigured,
+  auth,
+  sendPasswordSetupLink,
+} from "@DashboardV2/auth";
+import {
+  isValidUsername,
+  normalizeUsername,
+} from "@DashboardV2/auth/username";
 import { db } from "@DashboardV2/db";
 import { user } from "@DashboardV2/db/schema/auth";
 import { company } from "@DashboardV2/db/schema/company";
@@ -26,19 +34,40 @@ import {
 } from "../lib/trial";
 import { planProjectAccessReconciliation } from "../lib/user-project-access";
 
-/**
- * Ambiguous glyphs (0/O, 1/l/I) are excluded — these passwords get read aloud
- * or copied off a screen.
- */
-const PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-const TEMP_PASSWORD_LENGTH = 16;
+const PASSWORD_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const LOCKED_PASSWORD_LENGTH = 32;
 
-function generateTempPassword() {
-  const values = new Uint32Array(TEMP_PASSWORD_LENGTH);
+/** A valid credential that is never shown or sent; only the setup link can replace it. */
+function generateLockedPassword() {
+  const values = new Uint32Array(LOCKED_PASSWORD_LENGTH);
   crypto.getRandomValues(values);
   return Array.from(values, (value) =>
     PASSWORD_ALPHABET.charAt(value % PASSWORD_ALPHABET.length),
   ).join("");
+}
+
+function assertAccountEmailConfigured(t: MessageDictionary) {
+  if (!accountEmailConfigured()) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: t.user.accountEmailNotConfigured });
+  }
+}
+
+async function trySendPasswordSetupLink({
+  userId,
+  email,
+  headers,
+}: {
+  userId: string;
+  email: string;
+  headers: Headers;
+}) {
+  try {
+    await sendPasswordSetupLink({ userId, email, headers });
+    return true;
+  } catch (error) {
+    console.error("Failed to send password setup email", { userId, error });
+    return false;
+  }
 }
 
 const roleSchema = z.enum(["super_admin", "admin", "user"]);
@@ -267,7 +296,13 @@ export const adminRouter = router({
       // not manageable) and excludes every super_admin (companyId is null).
       const isSuperAdmin = roleOf(ctx.session.user) === "super_admin";
       const filters = [
-        input.search ? or(ilike(user.name, `%${input.search}%`), ilike(user.email, `%${input.search}%`)) : undefined,
+        input.search
+          ? or(
+              ilike(user.name, `%${input.search}%`),
+              ilike(user.email, `%${input.search}%`),
+              ilike(user.username, `%${input.search}%`),
+            )
+          : undefined,
         isSuperAdmin ? undefined : eq(user.companyId, ctx.companyId),
       ].filter(Boolean);
       const where = filters.length > 0 ? and(...filters) : undefined;
@@ -278,6 +313,7 @@ export const adminRouter = router({
             id: user.id,
             name: user.name,
             email: user.email,
+            username: user.username,
             role: user.role,
             banned: user.banned,
             mustChangePassword: user.mustChangePassword,
@@ -297,7 +333,11 @@ export const adminRouter = router({
         db.select({ value: count() }).from(user).where(where),
       ]);
 
-      return { users: rows, total: total?.value ?? 0 };
+      return {
+        users: rows,
+        total: total?.value ?? 0,
+        accountEmailEnabled: accountEmailConfigured(),
+      };
     }),
 
   /**
@@ -309,6 +349,7 @@ export const adminRouter = router({
       z.object({
         name: z.string().trim().min(1, "Name is required").max(120),
         email: z.email("Invalid email address"),
+        username: z.string(),
         role: roleSchema.default("user"),
         /** Required for admin and user accounts — null (ignored) for super_admin, who is unpinned. */
         companyId: z.string().min(1).optional(),
@@ -317,11 +358,22 @@ export const adminRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      assertAccountEmailConfigured(ctx.t);
       const email = input.email.toLowerCase();
+      const username = normalizeUsername(input.username);
+      if (!isValidUsername(username)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.usernameInvalid });
+      }
 
-      const [existing] = await db.select({ id: user.id }).from(user).where(eq(user.email, email));
-      if (existing) {
+      const existing = await db
+        .select({ email: user.email, username: user.username })
+        .from(user)
+        .where(or(eq(user.email, email), eq(user.username, username)));
+      if (existing.some((account) => account.email === email)) {
         throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.emailExists });
+      }
+      if (existing.some((account) => account.username === username)) {
+        throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.usernameExists });
       }
 
       const actorIsSuperAdmin = roleOf(ctx.session.user) === "super_admin";
@@ -355,15 +407,19 @@ export const adminRouter = router({
       }
 
       const trial = resolveTrialInput(ctx.t, input.trial, role);
-      const temporaryPassword = generateTempPassword();
+      const lockedPassword = generateLockedPassword();
 
       const created = await auth.api.createUser({
         headers: ctx.headers,
         body: {
           email,
-          password: temporaryPassword,
+          password: lockedPassword,
           name: input.name,
           role,
+          data: {
+            username,
+            displayUsername: input.username.trim(),
+          },
         },
       });
 
@@ -390,6 +446,12 @@ export const adminRouter = router({
         }
       }
 
+      const invitationSent = await trySendPasswordSetupLink({
+        userId: created.user.id,
+        email,
+        headers: ctx.headers,
+      });
+
       await recordActivity({ session: ctx.session, companyId: companyId ?? ctx.companyId }, {
         action: "created",
         entityType: "user",
@@ -398,7 +460,7 @@ export const adminRouter = router({
         detail: trial ? `${role} (trial)` : role,
       });
 
-      return { user: created.user, temporaryPassword };
+      return { user: created.user, invitationSent };
     }),
 
   renameUser: companyPermissionProcedure("user:rename")
@@ -441,21 +503,62 @@ export const adminRouter = router({
   resetPassword: companyPermissionProcedure("user:manage")
     .input(userIdSchema)
     .mutation(async ({ ctx, input }) => {
+      assertAccountEmailConfigured(ctx.t);
+      assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "resetPassword");
       await assertTargetManageable(ctx, input.userId);
 
-      const temporaryPassword = generateTempPassword();
+      const [target] = await db
+        .select({
+          email: user.email,
+          name: user.name,
+          companyId: user.companyId,
+          role: user.role,
+        })
+        .from(user)
+        .where(eq(user.id, input.userId));
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
+      }
+      if (target.role === "super_admin") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: ctx.t.user.systemPasswordResetNotAllowed,
+        });
+      }
+
+      await db
+        .update(user)
+        .set({ mustChangePassword: true, passwordSetupTokenHash: null })
+        .where(eq(user.id, input.userId));
 
       await auth.api.setUserPassword({
         headers: ctx.headers,
-        body: { userId: input.userId, newPassword: temporaryPassword },
+        body: { userId: input.userId, newPassword: generateLockedPassword() },
       });
-      // setUserPassword does not touch additional fields, so re-arm the flag here.
-      await db
-        .update(user)
-        .set({ mustChangePassword: true })
-        .where(eq(user.id, input.userId));
+      await auth.api.revokeUserSessions({
+        headers: ctx.headers,
+        body: { userId: input.userId },
+      });
+      const invitationSent = await trySendPasswordSetupLink({
+        userId: input.userId,
+        email: target.email,
+        headers: ctx.headers,
+      });
 
-      return { temporaryPassword };
+      if (target.companyId) {
+        await recordActivity(
+          { session: ctx.session, companyId: target.companyId },
+          {
+            action: "updated",
+            entityType: "user",
+            entityId: input.userId,
+            entityLabel: `${target.name} - ${target.email}`,
+            detail: invitationSent ? "Password setup email sent" : "Password setup email failed",
+          },
+        );
+      }
+
+      return { invitationSent };
     }),
 
   /** Moves an account to another company. Super admins stay unpinned. */

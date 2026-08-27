@@ -38,10 +38,7 @@ export default async function ArchivePage() {
   return (
     <HydrateClient>
       <div className="space-y-4 p-4 md:p-6">
-        <div>
-          <h1 className="text-lg font-medium">{dict.archive.title}</h1>
-          <p className="text-sm text-muted-foreground">{dict.archive.description}</p>
-        </div>
+        <h1 className="sr-only">{dict.archive.title}</h1>
 
         <ArchiveTable canDelete={hasPermission(role, "project:delete")} />
       </div>

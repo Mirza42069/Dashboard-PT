@@ -1,25 +1,31 @@
 import { auth } from "@DashboardV2/auth";
-import { db } from "@DashboardV2/db";
-import { user } from "@DashboardV2/db/schema/auth";
-import { eq } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import z from "zod";
 
 import { protectedProcedure, router } from "../index";
 
 export const accountRouter = router({
   /**
-   * The only path that clears `mustChangePassword`. better-auth verifies the
-   * current password before accepting the new one, so a hijacked session
-   * cannot silently take over the account.
+   * Changes an active account's password after verifying the current one.
+   * Accounts waiting for setup use the emailed one-time token instead.
    */
   changePassword: protectedProcedure
     .input(
       z.object({
-        currentPassword: z.string().min(1, "Current password is required"),
-        newPassword: z.string().min(12, "Password must be at least 12 characters"),
+        currentPassword: z.string(),
+        newPassword: z.string(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (!input.currentPassword) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.currentPasswordRequired });
+      }
+      if (input.newPassword.length < 12) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.passwordTooShort });
+      }
+      if (input.currentPassword === input.newPassword) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.passwordMustDiffer });
+      }
       await auth.api.changePassword({
         headers: ctx.headers,
         body: {
@@ -28,11 +34,6 @@ export const accountRouter = router({
           revokeOtherSessions: true,
         },
       });
-
-      await db
-        .update(user)
-        .set({ mustChangePassword: false })
-        .where(eq(user.id, ctx.session.user.id));
 
       return { success: true };
     }),

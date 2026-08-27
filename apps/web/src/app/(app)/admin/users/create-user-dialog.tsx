@@ -36,18 +36,17 @@ import z from "zod";
 import { FieldError, fieldError, focusFirstInvalid } from "@/components/field-error";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { isValidUsername } from "@DashboardV2/auth/username";
 import { trpc } from "@/utils/trpc";
-
-import type { TempPasswordResult } from "./temp-password-dialog";
 
 type CreateRole = "super_admin" | "admin" | "user";
 
 export default function CreateUserDialog({
   actorRole,
-  onCreated,
+  accountEmailEnabled,
 }: {
   actorRole: Role;
-  onCreated: (result: TempPasswordResult) => void;
+  accountEmailEnabled: boolean;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -58,7 +57,10 @@ export default function CreateUserDialog({
   const createUser = useMutation(trpc.admin.createUser.mutationOptions());
   // company.list is super-admin-only server-side; a company admin creates
   // Users in their own company only, so there is nothing to pick from.
-  const companies = useQuery({ ...trpc.company.list.queryOptions(), enabled: isSuperAdmin });
+  const companies = useQuery({
+    ...trpc.company.list.queryOptions(),
+    enabled: isSuperAdmin && accountEmailEnabled,
+  });
   const roleItems = isSuperAdmin
     ? [
         { value: "user", label: t.users.roleUser },
@@ -82,6 +84,7 @@ export default function CreateUserDialog({
     .object({
       name: z.string().trim().min(1, t.users.nameRequired).max(120),
       email: z.email(t.auth.invalidEmail),
+      username: z.string().trim().refine(isValidUsername, t.users.usernameInvalid),
       role: z.enum(["super_admin", "admin", "user"]),
       companyId: z.string(),
       trial: z.boolean(),
@@ -117,6 +120,7 @@ export default function CreateUserDialog({
     defaultValues: {
       name: "",
       email: "",
+      username: "",
       role: "user" as CreateRole,
       companyId: "",
       trial: false,
@@ -128,6 +132,7 @@ export default function CreateUserDialog({
         const data = await createUser.mutateAsync({
           name: value.name,
           email: value.email,
+          username: value.username,
           role: value.role,
           companyId: value.companyId === "" ? undefined : value.companyId,
           trial: value.trial
@@ -137,7 +142,8 @@ export default function CreateUserDialog({
         await queryClient.invalidateQueries(trpc.admin.pathFilter());
         setOpen(false);
         formApi.reset();
-        onCreated({ email: value.email, password: data.temporaryPassword, isNewAccount: true });
+        if (data.invitationSent) toast.success(t.users.createdInviteSent);
+        else toast.error(t.users.createdInviteFailed, { duration: 8000 });
       } catch (error) {
         toast.error(error instanceof Error ? error.message : t.users.createFailed);
       }
@@ -146,6 +152,15 @@ export default function CreateUserDialog({
       onSubmit: schema,
     },
   });
+
+  if (!accountEmailEnabled) {
+    return (
+      <Button size="sm" disabled aria-describedby="account-email-disabled-description">
+        <UserPlus />
+        {t.users.newUser}
+      </Button>
+    );
+  }
 
   return (
     <Dialog
@@ -209,6 +224,30 @@ export default function CreateUserDialog({
                     onBlur={field.handleBlur}
                     onChange={(e) => field.handleChange(e.target.value)}
                   />
+                  <FieldError {...error} />
+                </div>
+              );
+            }}
+          </form.Field>
+
+          <form.Field name="username">
+            {(field) => {
+              const error = fieldError(field.name, field.state.meta.errors);
+              return (
+                <div className="space-y-2">
+                  <Label htmlFor={field.name}>{t.users.username}</Label>
+                  <Input
+                    {...error.control}
+                    name={field.name}
+                    type="text"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">{t.users.usernameHint}</p>
                   <FieldError {...error} />
                 </div>
               );

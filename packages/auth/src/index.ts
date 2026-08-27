@@ -6,7 +6,28 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, defaultStatements, userAc } from "better-auth/plugins/admin/access";
 import { admin } from "better-auth/plugins";
+import { username } from "better-auth/plugins/username";
 import { APIError } from "better-auth/api";
+import { hashPassword } from "better-auth/crypto";
+import { and, eq, like } from "drizzle-orm";
+import { Resend } from "resend";
+
+import { passwordSetupEmail } from "./password-setup-email";
+import { USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH, USERNAME_PATTERN } from "./username";
+
+const PASSWORD_SETUP_HASH_HEADER = "x-fushin-password-setup-hash";
+
+async function hashPasswordSetupToken(token: string) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.BETTER_AUTH_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(token));
+  return Buffer.from(signed).toString("hex");
+}
 
 /**
  * Without a `roles` map, better-auth's admin plugin types createUser/setRole
@@ -59,11 +80,78 @@ export function createAuth(opts: CreateAuthOptions = {}) {
     emailAndPassword: {
       enabled: true,
       disableSignUp: !opts.allowSignUp,
+      minPasswordLength: 12,
+      maxPasswordLength: 128,
+      resetPasswordTokenExpiresIn: 24 * 60 * 60,
+      revokeSessionsOnPasswordReset: true,
+      async sendResetPassword({ user, url, token }) {
+        if (!env.RESEND_API_KEY) {
+          throw new Error("Account email delivery is not configured.");
+        }
+        const armed = await db
+          .update(schema.user)
+          .set({ passwordSetupTokenHash: await hashPasswordSetupToken(token) })
+          .where(
+            and(
+              eq(schema.user.id, user.id),
+              eq(schema.user.mustChangePassword, true),
+            ),
+          )
+          .returning({ id: schema.user.id });
+        if (armed.length === 0) {
+          throw new Error("This account no longer requires password setup.");
+        }
+        const message = passwordSetupEmail({ name: user.name, email: user.email, url });
+        const result = await new Resend(env.RESEND_API_KEY).emails.send({
+          from: env.ACCOUNT_EMAIL_FROM,
+          to: user.email,
+          ...message,
+        });
+        if (result.error) throw new Error(result.error.message);
+      },
+      async onPasswordReset({ user }, request) {
+        const tokenHash = request?.headers.get(PASSWORD_SETUP_HASH_HEADER);
+        if (!tokenHash) {
+          throw APIError.from("BAD_REQUEST", {
+            code: "INVALID_TOKEN",
+            message: "The password setup link is invalid or has expired.",
+          });
+        }
+        const unlocked = await db
+          .update(schema.user)
+          .set({ mustChangePassword: false, passwordSetupTokenHash: null })
+          .where(
+            and(
+              eq(schema.user.id, user.id),
+              eq(schema.user.passwordSetupTokenHash, tokenHash),
+            ),
+          )
+          .returning({ id: schema.user.id });
+        if (unlocked.length === 0) {
+          const replacement = await hashPassword(`${crypto.randomUUID()}${crypto.randomUUID()}`);
+          await Promise.all([
+            db
+              .update(schema.account)
+              .set({ password: replacement })
+              .where(
+                and(
+                  eq(schema.account.userId, user.id),
+                  eq(schema.account.providerId, "credential"),
+                ),
+              ),
+            db.delete(schema.session).where(eq(schema.session.userId, user.id)),
+          ]);
+          throw APIError.from("BAD_REQUEST", {
+            code: "INVALID_TOKEN",
+            message: "A newer password setup link has been issued.",
+          });
+        }
+      },
     },
     user: {
       additionalFields: {
-        // Set when an admin issues a temporary password; cleared once the user
-        // picks their own. `input: false` keeps it out of every request body —
+        // Set while an account is waiting for password setup; cleared once the
+        // one-time link succeeds. `input: false` keeps it out of every request body —
         // it is only ever written server-side.
         mustChangePassword: {
           type: "boolean",
@@ -147,6 +235,11 @@ export function createAuth(opts: CreateAuthOptions = {}) {
       },
     },
     plugins: [
+      username({
+        minUsernameLength: USERNAME_MIN_LENGTH,
+        maxUsernameLength: USERNAME_MAX_LENGTH,
+        usernameValidator: (value) => USERNAME_PATTERN.test(value),
+      }),
       admin({
         defaultRole: "user",
         // "admin" is here, not just "super_admin", because packages/api's
@@ -166,5 +259,54 @@ export function createAuth(opts: CreateAuthOptions = {}) {
 }
 
 export const auth = createAuth();
+
+export function accountEmailConfigured() {
+  return env.ACCOUNT_EMAIL_ENABLED && Boolean(env.RESEND_API_KEY);
+}
+
+export async function verifyPasswordSetupToken(token: string) {
+  const db = createDb();
+  const [verification] = await db
+    .select({ expiresAt: schema.verification.expiresAt, userId: schema.verification.value })
+    .from(schema.verification)
+    .where(eq(schema.verification.identifier, `reset-password:${token}`));
+  if (!verification || verification.expiresAt <= new Date()) return null;
+
+  const [account] = await db
+    .select({ tokenHash: schema.user.passwordSetupTokenHash })
+    .from(schema.user)
+    .where(eq(schema.user.id, verification.userId));
+  const tokenHash = await hashPasswordSetupToken(token);
+  if (!account?.tokenHash || account.tokenHash !== tokenHash) return null;
+  return tokenHash;
+}
+
+export { PASSWORD_SETUP_HASH_HEADER };
+
+export async function sendPasswordSetupLink({
+  userId,
+  email,
+  headers,
+}: {
+  userId: string;
+  email: string;
+  headers: Headers;
+}) {
+  if (!accountEmailConfigured()) {
+    throw new Error("Account email delivery is not configured.");
+  }
+  await createDb()
+    .delete(schema.verification)
+    .where(
+      and(
+        eq(schema.verification.value, userId),
+        like(schema.verification.identifier, "reset-password:%"),
+      ),
+    );
+  await auth.api.requestPasswordReset({
+    headers,
+    body: { email, redirectTo: `${env.CORS_ORIGIN}/set-password` },
+  });
+}
 
 export type Auth = ReturnType<typeof createAuth>;

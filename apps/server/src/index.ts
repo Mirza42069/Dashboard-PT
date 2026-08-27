@@ -8,13 +8,18 @@ import {
 import { recordActivity } from "@DashboardV2/api/lib/activity";
 import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
-import { auth } from "@DashboardV2/auth";
+import {
+  auth,
+  PASSWORD_SETUP_HASH_HEADER,
+  verifyPasswordSetupToken,
+} from "@DashboardV2/auth";
 import { projectAccessFilter, resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
 import { MAX_AI_WORKBOOK_BYTES } from "@DashboardV2/api/lib/workbook-limits";
 import { TRIAL_AI_EXHAUSTED, trialHasEnded } from "@DashboardV2/api/lib/trial";
 import { db } from "@DashboardV2/db";
 import {
   notePhoto,
+  type PeriodType,
   project,
   projectActualCurve,
   projectMember,
@@ -90,10 +95,59 @@ app.use(
  */
 app.use("/api/auth/admin/*", async (c, next) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  if (roleOf(session?.user ?? {}) !== "super_admin") {
+  if (roleOf(session?.user ?? {}) !== "super_admin" || session?.user.mustChangePassword) {
     return c.json({ error: "Not found" }, 404);
   }
   await next();
+});
+// In-app profile administration goes through tenant-scoped tRPC procedures.
+// Closing the generic raw update route also keeps usernames immutable.
+app.use("/api/auth/admin/update-user", async (c) => c.json({ error: "Not found" }, 404));
+
+// Password setup emails are admin-issued. Keeping this raw endpoint closed
+// prevents unauthenticated visitors from using it to send account email.
+app.use("/api/auth/request-password-reset", async (c) => c.json({ error: "Not found" }, 404));
+// The in-app account procedure owns current-password verification, password
+// policy, session revocation, and clearing the forced-change flag as one flow.
+app.use("/api/auth/change-password", async (c) => c.json({ error: "Not found" }, 404));
+// Usernames are immutable administrator-issued credentials. Better Auth's
+// username plugin otherwise exposes them through the generic update-user route.
+app.use("/api/auth/update-user", async (c) => c.json({ error: "Not found" }, 404));
+
+app.post("/api/auth/reset-password", async (c) => {
+  let token: string | undefined;
+  try {
+    const body = (await c.req.raw.clone().json()) as { token?: unknown };
+    token = typeof body.token === "string" ? body.token : undefined;
+  } catch {
+    return c.json({ error: "Invalid password setup request" }, 400);
+  }
+  if (!token) token = new URL(c.req.url).searchParams.get("token") ?? undefined;
+  const tokenHash = token ? await verifyPasswordSetupToken(token) : null;
+  if (!tokenHash) return c.json({ error: "Invalid or expired password setup link" }, 400);
+
+  const headers = new Headers(c.req.raw.headers);
+  headers.set(PASSWORD_SETUP_HASH_HEADER, tokenHash);
+  return auth.handler(new Request(c.req.raw, { headers }));
+});
+
+app.use("/api/auth/*", async (c, next) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session?.user.mustChangePassword) {
+    await next();
+    return;
+  }
+  const path = c.req.path;
+  if (
+    path === "/api/auth/get-session" ||
+    path === "/api/auth/sign-out" ||
+    path === "/api/auth/reset-password" ||
+    path.startsWith("/api/auth/reset-password/")
+  ) {
+    await next();
+    return;
+  }
+  return c.json({ error: "Password setup required" }, 403);
 });
 
 app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
@@ -123,7 +177,7 @@ const PHOTO_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 async function activeSession(c: HonoRequestContext) {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   if (!session?.user) return null;
-  return trialHasEnded(session.user) ? null : session;
+  return trialHasEnded(session.user) || session.user.mustChangePassword ? null : session;
 }
 
 /**
@@ -390,6 +444,11 @@ type ProjectWriteAccess =
         name: string;
         client: string | null;
         location: string | null;
+        startDate: string | null;
+        scheduleStart: string | null;
+        endDate: string | null;
+        periodType: PeriodType;
+        periodLengthDays: number | null;
         updatedAt: Date;
         archivedAt: Date | null;
       };
@@ -414,6 +473,11 @@ async function requireProjectAccess(
       name: project.name,
       client: project.client,
       location: project.location,
+      startDate: project.startDate,
+      scheduleStart: project.scheduleStart,
+      endDate: project.endDate,
+      periodType: project.periodType,
+      periodLengthDays: project.periodLengthDays,
       updatedAt: project.updatedAt,
       archivedAt: project.archivedAt,
     })
@@ -784,9 +848,18 @@ app.post("/projects/:id/workbook-update/discover", async (c) => {
         projectId: owner,
         run: async ({ bytes }) => {
           const { loadWorkbook } = await import("./boq-import-parse");
-          const { discoverProjectWorkbookSheets } = await import("./project-workbook");
+          const {
+            discoverProjectWorkbookSheets,
+            recommendProjectWorkbookSheet,
+            visibleProjectWorkbookSheets,
+          } = await import("./project-workbook");
           const workbook = await loadWorkbook(bytes);
-          return { sheets: discoverProjectWorkbookSheets(workbook) };
+          const sheets = visibleProjectWorkbookSheets(discoverProjectWorkbookSheets(workbook));
+          return {
+            sheets,
+            recommendedSheetName:
+              recommendProjectWorkbookSheet(sheets, access.project)?.sheetName ?? null,
+          };
         },
       }),
     );
@@ -895,7 +968,17 @@ app.post("/projects/:id/workbook-update/analyze", async (c) => {
       currentProject,
       existingActualSnapshots,
       reviewState: {
-        projectUpdatedAt: updatedAt.toISOString(),
+        project: {
+          code: currentProject.code,
+          name: currentProject.name,
+          client: currentProject.client,
+          location: currentProject.location,
+          startDate: currentProject.startDate,
+          scheduleStart: currentProject.scheduleStart,
+          endDate: currentProject.endDate,
+          periodType: currentProject.periodType,
+          periodLengthDays: currentProject.periodLengthDays,
+        },
         existingActualSnapshots,
         activeVersionId: progressReview.activeVersionId,
         progressEntryCount: Number(progressReview.progressEntryCount),
@@ -1022,9 +1105,17 @@ app.post("/project-import/discover", async (c) => {
 
   try {
     const { loadWorkbook } = await import("./boq-import-parse");
-    const { discoverProjectWorkbookSheets } = await import("./project-workbook");
+    const {
+      discoverProjectWorkbookSheets,
+      recommendProjectWorkbookSheet,
+      visibleProjectWorkbookSheets,
+    } = await import("./project-workbook");
     const workbook = await loadWorkbook(upload.bytes);
-    return c.json({ sheets: discoverProjectWorkbookSheets(workbook) });
+    const sheets = visibleProjectWorkbookSheets(discoverProjectWorkbookSheets(workbook));
+    return c.json({
+      sheets,
+      recommendedSheetName: recommendProjectWorkbookSheet(sheets)?.sheetName ?? null,
+    });
   } catch (error) {
     const invalidRequest = isInvalidImportRequest(error);
     if (!isPublicImportError(error) && !invalidRequest) logUnexpectedImportError(error);

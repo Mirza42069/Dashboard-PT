@@ -7,6 +7,8 @@ export const user = pgTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
+  username: text("username").unique(),
+  displayUsername: text("display_username"),
   emailVerified: boolean("email_verified").default(false).notNull(),
   image: text("image"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -19,8 +21,10 @@ export const user = pgTable("user", {
   banned: boolean("banned").default(false).notNull(),
   banReason: text("ban_reason"),
   banExpires: timestamp("ban_expires"),
-  // Forces the /change-password flow after an admin issues a temporary password
+  // Blocks product access until the account's one-time setup link succeeds.
   mustChangePassword: boolean("must_change_password").default(true).notNull(),
+  // HMAC of the only password-setup token currently allowed to clear the lock.
+  passwordSetupTokenHash: text("password_setup_token_hash"),
   /**
    * Trial accounts: two limits that expire independently.
    *

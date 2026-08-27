@@ -65,6 +65,7 @@
         "drizzle-orm": "^0.45.2",
         "exceljs": "^4.4.0",
         "hono": "catalog:",
+        "resend": "^6.0.2",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -141,6 +142,8 @@
         "@DashboardV2/env": "workspace:*",
         "better-auth": "catalog:",
         "dotenv": "catalog:",
+        "drizzle-orm": "^0.45.2",
+        "resend": "^6.0.2",
         "zod": "catalog:",
       },
       "devDependencies": {

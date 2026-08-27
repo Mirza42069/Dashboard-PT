@@ -23,11 +23,11 @@ import {
   SelectValue,
 } from "@DashboardV2/ui/components/select";
 import { useQueryClient } from "@tanstack/react-query";
-import { upload } from "@vercel/blob/client";
 import { useState } from "react";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
+import { uploadPrivateBlob } from "@/lib/client-blob-upload";
 import { getServerUrl } from "@/lib/server-url";
 import { toast } from "@/lib/toast";
 import { useFormat } from "@/lib/use-format";
@@ -36,6 +36,8 @@ import { trpc } from "@/utils/trpc";
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const XLSX_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+// A colon is forbidden in Excel worksheet names, so this cannot collide with a real sheet.
+const AUTO_SHEET = ":entire-workbook";
 
 type ValidationError = { row: number; column: string | null; message: string };
 
@@ -98,13 +100,28 @@ type WorkbookAnalysis = {
     name: string;
     client: string | null;
     location: string | null;
+    startDate: string | null;
+    scheduleStart: string | null;
+    endDate: string | null;
+    periodType: string;
+    periodLengthDays: number | null;
   };
   existingActualSnapshots: {
     periodIndex: number;
     cumulativePercent: number;
   }[];
   reviewState: {
-    projectUpdatedAt: string;
+    project: {
+      code: string;
+      name: string;
+      client: string | null;
+      location: string | null;
+      startDate: string | null;
+      scheduleStart: string | null;
+      endDate: string | null;
+      periodType: string;
+      periodLengthDays: number | null;
+    };
     existingActualSnapshots: {
       periodIndex: number;
       cumulativePercent: number;
@@ -134,6 +151,12 @@ type Sections = {
 
 type ApiError = { error?: string; code?: string | null };
 
+class WorkbookRequestError extends Error {
+  constructor(message: string, readonly code: string | null) {
+    super(message);
+  }
+}
+
 function uploadErrorPath(error: unknown): string | null {
   if (!error || typeof error !== "object") return null;
   if ("pathname" in error && typeof error.pathname === "string") return error.pathname;
@@ -154,15 +177,6 @@ async function responseJson<T>(response: Response): Promise<T & ApiError> {
   }
 }
 
-function preferredSheet(sheets: SheetCandidate[]) {
-  return (
-    sheets.find((sheet) => sheet.sheetName.trim().toUpperCase() === "S CURVE NOV") ??
-    sheets.find((sheet) => sheet.knownSCurve && sheet.actualSnapshotCount > 0) ??
-    sheets.find((sheet) => sheet.knownSCurve) ??
-    sheets[0]
-  );
-}
-
 export default function ProjectWorkbookUpdateDialog({
   open,
   onOpenChange,
@@ -181,7 +195,8 @@ export default function ProjectWorkbookUpdateDialog({
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<SheetCandidate[] | null>(null);
-  const [selectedSheetName, setSelectedSheetName] = useState("");
+  const [sheetChoice, setSheetChoice] = useState("");
+  const [recommendedSheetName, setRecommendedSheetName] = useState("");
   const [analysis, setAnalysis] = useState<WorkbookAnalysis | null>(null);
   const [sections, setSections] = useState<Sections>({
     projectDetails: false,
@@ -194,6 +209,8 @@ export default function ProjectWorkbookUpdateDialog({
   const [error, setError] = useState<string | null>(null);
 
   const baseUrl = `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/projects/${projectId}/workbook-update`;
+  const selectedSheetName =
+    sheetChoice === AUTO_SHEET ? recommendedSheetName : sheetChoice;
   const selectedSheet =
     sheets?.find((candidate) => candidate.sheetName === selectedSheetName) ?? null;
   const draftBlocked = (analysis?.summary.validationErrors.length ?? 0) > 0;
@@ -222,12 +239,12 @@ export default function ProjectWorkbookUpdateDialog({
     const requestedPath = `temporary-workbooks/${projectId}/${currentUserId}/${crypto.randomUUID()}.xlsx`;
     let pathname: string;
     try {
-      const blob = await upload(requestedPath, chosen, {
-        access: "private",
+      const blob = await uploadPrivateBlob({
+        pathname: requestedPath,
+        file: chosen,
         handleUploadUrl: `${baseUrl}/upload`,
-        clientPayload: JSON.stringify({ projectId }),
+        clientPayload: { projectId },
         contentType: XLSX_CONTENT_TYPE,
-        multipart: false,
       });
       pathname = blob.pathname;
     } catch (caught) {
@@ -246,28 +263,38 @@ export default function ProjectWorkbookUpdateDialog({
       body: JSON.stringify({ pathname, filename: chosen.name, ...body }),
     });
     const result = await responseJson<T>(response);
-    if (!response.ok) throw new Error(result.error ?? t.projectUpdate.requestFailed);
+    if (!response.ok) {
+      throw new WorkbookRequestError(
+        result.error ?? t.projectUpdate.requestFailed,
+        result.code ?? null,
+      );
+    }
     return result;
   }
 
   async function discover(chosen: File) {
     setFile(chosen);
     setSheets(null);
-    setSelectedSheetName("");
+    setSheetChoice("");
+    setRecommendedSheetName("");
     setAnalysis(null);
     setError(null);
     setBusy("discover");
     setStatus(t.projectUpdate.uploadingDiscover);
     try {
-      const result = await uploadAndProcess<{ sheets?: SheetCandidate[] }>(
+      const result = await uploadAndProcess<{
+        sheets?: SheetCandidate[];
+        recommendedSheetName?: string | null;
+      }>(
         chosen,
         "discover",
         {},
       );
       if (!result.sheets?.length) throw new Error(t.projectUpdate.noSheets);
-      const preferred = preferredSheet(result.sheets);
       setSheets(result.sheets);
-      setSelectedSheetName(preferred?.sheetName ?? "");
+      const recommended = result.recommendedSheetName ?? result.sheets[0]?.sheetName ?? "";
+      setRecommendedSheetName(recommended);
+      setSheetChoice(recommended ? AUTO_SHEET : "");
       setStatus(t.projectUpdate.discoveryReady);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t.projectUpdate.requestFailed);
@@ -336,8 +363,23 @@ export default function ProjectWorkbookUpdateDialog({
       onOpenChange(false);
       onUpdated(result);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t.projectUpdate.updateFailed);
-      setStatus(t.projectUpdate.updateFailed);
+      const outdated =
+        caught instanceof WorkbookRequestError &&
+        (caught.code === "review_stale" || caught.code === "project_update_conflict");
+      if (outdated) {
+        setAnalysis(null);
+        setSections({
+          projectDetails: false,
+          boq: false,
+          schedule: false,
+          progress: false,
+        });
+        setError(t.projectUpdate.analysisOutdated);
+        setStatus(t.projectUpdate.analysisOutdated);
+      } else {
+        setError(caught instanceof Error ? caught.message : t.projectUpdate.updateFailed);
+        setStatus(t.projectUpdate.updateFailed);
+      }
     } finally {
       setBusy(null);
     }
@@ -347,15 +389,27 @@ export default function ProjectWorkbookUpdateDialog({
     setSections((current) => ({ ...current, boq: checked, schedule: checked }));
   }
 
-  const sheetItems = (sheets ?? []).map((candidate) => ({
-    value: candidate.sheetName,
-    label: interpolate(t.projectUpdate.sheetOption, {
-      name: candidate.sheetName,
-      state: t.projectUpdate.sheetStates[candidate.state],
-      rows: candidate.rowCount,
-      columns: candidate.columnCount,
-    }),
-  }));
+  const sheetItems = [
+    ...(recommendedSheetName
+      ? [
+          {
+            value: AUTO_SHEET,
+            label: interpolate(t.projectUpdate.entireWorkbook, {
+              sheet: recommendedSheetName,
+            }),
+          },
+        ]
+      : []),
+    ...(sheets ?? []).map((candidate) => ({
+      value: candidate.sheetName,
+      label: interpolate(t.projectUpdate.sheetOption, {
+        name: candidate.sheetName,
+        state: t.projectUpdate.sheetStates[candidate.state],
+        rows: candidate.rowCount,
+        columns: candidate.columnCount,
+      }),
+    })),
+  ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -389,7 +443,8 @@ export default function ProjectWorkbookUpdateDialog({
                 if (!chosen) return;
                 setFile(null);
                 setSheets(null);
-                setSelectedSheetName("");
+                setSheetChoice("");
+                setRecommendedSheetName("");
                 setAnalysis(null);
                 setSections({
                   projectDetails: false,
@@ -437,10 +492,10 @@ export default function ProjectWorkbookUpdateDialog({
                 <Label htmlFor="workbook-update-sheet">{t.projectUpdate.sheetLabel}</Label>
                 <Select
                   items={sheetItems}
-                  value={selectedSheetName}
+                  value={sheetChoice}
                   disabled={busy !== null}
                   onValueChange={(value) => {
-                    setSelectedSheetName(value ?? "");
+                    setSheetChoice(value ?? "");
                     setAnalysis(null);
                     setSections({
                       projectDetails: false,
@@ -456,6 +511,13 @@ export default function ProjectWorkbookUpdateDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    {recommendedSheetName && (
+                      <SelectItem value={AUTO_SHEET}>
+                        {interpolate(t.projectUpdate.entireWorkbook, {
+                          sheet: recommendedSheetName,
+                        })}
+                      </SelectItem>
+                    )}
                     {sheets.map((candidate) => (
                       <SelectItem key={candidate.sheetName} value={candidate.sheetName}>
                         {interpolate(t.projectUpdate.sheetOption, {

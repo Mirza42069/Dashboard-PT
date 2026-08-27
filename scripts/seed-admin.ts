@@ -17,6 +17,7 @@ import { createAuth } from "@DashboardV2/auth";
 import { db } from "@DashboardV2/db";
 import { user } from "@DashboardV2/db/schema/auth";
 import { env } from "@DashboardV2/env/server";
+import { usernameFromEmail } from "@DashboardV2/auth/username";
 import { eq } from "drizzle-orm";
 import z from "zod";
 
@@ -62,7 +63,9 @@ async function main() {
   if (existing.length === 0) {
     // Sign-up is closed on the shared `auth` instance, so use a local one.
     const seedAuth = createAuth({ allowSignUp: true });
-    await seedAuth.api.signUpEmail({ body: { email, password, name } });
+    await seedAuth.api.signUpEmail({
+      body: { email, password, name, username: usernameFromEmail(email) },
+    });
     console.log(`Created account ${email}`);
   } else {
     console.log(`Account ${email} already exists — re-asserting super admin role`);

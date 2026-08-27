@@ -1,5 +1,5 @@
 import { env } from "@DashboardV2/env/web";
-import { adminClient, inferAdditionalFields } from "better-auth/client/plugins";
+import { adminClient, inferAdditionalFields, usernameClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
 
 import { getServerUrl } from "./server-url";
@@ -9,6 +9,7 @@ export const authClient = createAuthClient({
   // public auth path must equal the server-side mount (/api/auth everywhere)
   baseURL: new URL("/api/auth", getServerUrl(env.NEXT_PUBLIC_SERVER_URL)).toString(),
   plugins: [
+    usernameClient(),
     adminClient(),
     // Declared explicitly rather than inferred from the server `auth` instance,
     // so no server module is reachable from the client bundle. Keep in sync

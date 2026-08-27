@@ -1,0 +1,1 @@
+ALTER TABLE "user" ADD COLUMN "password_setup_token_hash" text;

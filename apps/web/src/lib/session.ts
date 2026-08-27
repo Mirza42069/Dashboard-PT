@@ -36,8 +36,6 @@ export const getSession = cache(async () => {
 });
 
 type RequireSessionOptions = {
-  /** Set on /change-password itself, which would otherwise redirect to itself. */
-  skipPasswordChangeRedirect?: boolean;
   /** Set on /trial-ended itself, for the same reason. */
   skipTrialEndedRedirect?: boolean;
 };
@@ -49,8 +47,8 @@ export async function requireSession(options: RequireSessionOptions = {}) {
     redirect("/login");
   }
 
-  if (!options.skipPasswordChangeRedirect && session.user.mustChangePassword) {
-    redirect("/change-password");
+  if (session.user.mustChangePassword) {
+    redirect("/set-password?error=SETUP_REQUIRED");
   }
 
   // Sign-in is already refused for a lapsed trial in packages/auth, but that

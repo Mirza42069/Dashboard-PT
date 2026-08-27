@@ -16,6 +16,13 @@ import { useT } from "@/i18n/provider";
 import { writeCompanyCookie } from "@/lib/company";
 import { trpc } from "@/utils/trpc";
 
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+function companyLabel(company: { id: string; name: string }, fallback: string) {
+  const name = company.name.trim();
+  return name && name !== company.id && !UUID.test(name) ? name : fallback;
+}
+
 /**
  * Which company the dashboard is currently showing.
  *
@@ -34,8 +41,12 @@ export default function CompanySwitcher() {
   const canSwitch = options.data?.canSwitch ?? false;
   const companyItems = companies.map((company) => ({
     value: company.id,
-    label: company.name,
+    label: companyLabel(company, t.company.placeholder),
   }));
+  const activeCompany = companies.find((company) => company.id === activeId);
+  const activeLabel = activeCompany
+    ? companyLabel(activeCompany, t.company.placeholder)
+    : t.company.placeholder;
 
   async function select(companyId: string) {
     if (!companyId || companyId === activeId) return;
@@ -55,14 +66,16 @@ export default function CompanySwitcher() {
   }
 
   if (!canSwitch) {
-    const name = companies[0]?.name;
-    if (!name) return null;
+    const company = companies[0];
+    if (!company) return null;
     return (
       // Same w-44 box as the admin trigger and the placeholder, so the header
       // lays out identically for both roles and across the loading swap.
       <div className="flex h-8 w-44 items-center gap-1.5 text-xs text-muted-foreground">
         <Building2 className="size-3.5 shrink-0" />
-        <span className="truncate font-medium text-foreground">{name}</span>
+        <span className="truncate font-medium text-foreground">
+          {companyLabel(company, t.company.placeholder)}
+        </span>
       </div>
     );
   }
@@ -70,22 +83,18 @@ export default function CompanySwitcher() {
   return (
     <Select
       items={companyItems}
-      value={activeId}
+      value={activeCompany ? activeId : null}
       onValueChange={(value) => void select(value ?? "")}
       disabled={pending}
     >
       <SelectTrigger size="sm" className="w-44" aria-label={t.company.switcherLabel}>
         <Building2 className="size-3.5 shrink-0 text-muted-foreground" />
-        <SelectValue>
-          {(value) =>
-            companyItems.find((item) => item.value === value)?.label ?? t.company.placeholder
-          }
-        </SelectValue>
+        <SelectValue>{activeLabel}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         {companies.map((item) => (
           <SelectItem key={item.id} value={item.id}>
-            {item.name}
+            {companyLabel(item, t.company.placeholder)}
           </SelectItem>
         ))}
       </SelectContent>

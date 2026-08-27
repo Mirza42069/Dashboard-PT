@@ -648,6 +648,10 @@ export const projectRouter = router({
       }
 
       await runBatch([
+        // Workbook commits use the same transaction-scoped lock. Keeping all
+        // project edits behind it prevents a calendar edit from landing between
+        // a workbook's final state guard and its writes.
+        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${projectId}, 0))`),
         db
           .update(project)
           .set({
