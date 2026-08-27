@@ -253,6 +253,34 @@
       "when": 1787834601160,
       "tag": "0035_true_nighthawk",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1787868845893,
+      "tag": "0036_fancy_eddie_brock",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1787869606306,
+      "tag": "0037_account_name_repair",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1787870509298,
+      "tag": "0038_account_name_normalization",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1787870930537,
+      "tag": "0039_account_name_ascii_casefold",
+      "breakpoints": true
     }
   ]
 }

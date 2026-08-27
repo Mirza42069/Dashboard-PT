@@ -24,6 +24,7 @@
  */
 import { db } from "@DashboardV2/db";
 import { activityLog, project, user } from "@DashboardV2/db/schema";
+import { normalizeUsername } from "@DashboardV2/auth/username";
 import { and, eq, inArray, ne } from "drizzle-orm";
 
 /** Matches recordActivity's own fallback for an action with no session. */
@@ -31,10 +32,17 @@ const SYSTEM_NAME = "System";
 
 const dryRun = process.argv.includes("--dry-run");
 
-const superAdmins = await db
-  .select({ id: user.id, name: user.name, email: user.email })
-  .from(user)
-  .where(eq(user.role, "super_admin"));
+const accounts = await db.select({
+  id: user.id,
+  name: user.name,
+  email: user.email,
+  username: user.username,
+  displayUsername: user.displayUsername,
+  role: user.role,
+}).from(user);
+const superAdmins = accounts
+  .filter((account) => account.role === "super_admin")
+  .sort((left, right) => left.id.localeCompare(right.id));
 
 if (superAdmins.length === 0) {
   console.log("No super admin accounts. Nothing to do.");
@@ -53,13 +61,44 @@ const ids = superAdmins.map((row) => row.id);
 // 1. The account name itself. The email is left alone: it is the login, and it
 //    is no longer exposed anywhere a company can read now that (2) and the
 //    manager picker are fixed.
-const needsRename = superAdmins.filter((row) => row.name !== SYSTEM_NAME);
-console.log(`\n1. names to change: ${needsRename.length}`);
+const systemAliasPattern = /^System(?: (?:[2-9]|\d{2,}))?$/;
+const reservedNames = new Set(
+  accounts
+    .filter((account) => account.role !== "super_admin")
+    .map((account) => account.username),
+);
+for (const account of superAdmins) {
+  if (systemAliasPattern.test(account.name)) reservedNames.add(normalizeUsername(account.name));
+}
+
+let aliasNumber = 1;
+function nextSystemAlias() {
+  while (true) {
+    const name = aliasNumber === 1 ? SYSTEM_NAME : `${SYSTEM_NAME} ${aliasNumber}`;
+    aliasNumber += 1;
+    if (!reservedNames.has(normalizeUsername(name))) return name;
+  }
+}
+
+const aliases = new Map<string, string>();
+for (const account of superAdmins) {
+  const name = systemAliasPattern.test(account.name) ? account.name : nextSystemAlias();
+  aliases.set(account.id, name);
+  reservedNames.add(normalizeUsername(name));
+}
+const needsRename = superAdmins.filter((account) => {
+  const name = aliases.get(account.id)!;
+  return account.name !== name || account.username !== normalizeUsername(name) || account.displayUsername !== name;
+});
+console.log(`\n1. account identities to redact: ${needsRename.length}`);
 if (!dryRun && needsRename.length > 0) {
-  await db
-    .update(user)
-    .set({ name: SYSTEM_NAME })
-    .where(and(inArray(user.id, ids), ne(user.name, SYSTEM_NAME)));
+  for (const account of needsRename) {
+    const name = aliases.get(account.id)!;
+    await db
+      .update(user)
+      .set({ name, username: normalizeUsername(name), displayUsername: name })
+      .where(eq(user.id, account.id));
+  }
 }
 
 // 2. Project manager assignments. Cleared rather than reassigned — there is no
@@ -78,7 +117,7 @@ if (!dryRun && managed.length > 0) {
 }
 
 // 3. Historical activity rows. Going forward recordActivity copies the session
-//    name, which step 1 has made "System" — so this is only the backlog.
+//    redacted alias, while the feed always uses the generic System label.
 const staleActivity = await db
   .select({ id: activityLog.id })
   .from(activityLog)
@@ -97,10 +136,10 @@ if (dryRun) {
 }
 
 // Read back rather than trusting the writes.
-const [remainingName] = await db
-  .select({ name: user.name })
+const redactedAccounts = await db
+  .select({ id: user.id, name: user.name, username: user.username, displayUsername: user.displayUsername })
   .from(user)
-  .where(and(inArray(user.id, ids), ne(user.name, SYSTEM_NAME)));
+  .where(inArray(user.id, ids));
 const stillManaged = await db
   .select({ id: project.id })
   .from(project)
@@ -110,10 +149,14 @@ const stillNamed = await db
   .from(activityLog)
   .where(and(inArray(activityLog.actorId, ids), ne(activityLog.actorName, SYSTEM_NAME)));
 
-const clean = !remainingName && stillManaged.length === 0 && stillNamed.length === 0;
+const remainingIdentity = redactedAccounts.find((account) => {
+  const name = aliases.get(account.id);
+  return !name || account.name !== name || account.username !== normalizeUsername(name) || account.displayUsername !== name;
+});
+const clean = !remainingIdentity && stillManaged.length === 0 && stillNamed.length === 0;
 console.log(
   clean
     ? "\nDone. No company-visible record names a super admin."
-    : `\nINCOMPLETE: name=${remainingName?.name ?? "ok"} projects=${stillManaged.length} activity=${stillNamed.length}`,
+    : `\nINCOMPLETE: name=${remainingIdentity?.name ?? "ok"} projects=${stillManaged.length} activity=${stillNamed.length}`,
 );
 process.exit(clean ? 0 : 1);

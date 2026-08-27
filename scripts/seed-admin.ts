@@ -17,7 +17,11 @@ import { createAuth } from "@DashboardV2/auth";
 import { db } from "@DashboardV2/db";
 import { user } from "@DashboardV2/db/schema/auth";
 import { env } from "@DashboardV2/env/server";
-import { usernameFromEmail } from "@DashboardV2/auth/username";
+import {
+  isValidAccountName,
+  normalizeAccountName,
+  usernameFromName,
+} from "@DashboardV2/auth/username";
 import { eq } from "drizzle-orm";
 import z from "zod";
 
@@ -32,7 +36,7 @@ const credentialsSchema = z.object({
   password: z
     .string()
     .min(MIN_PASSWORD_LENGTH, `ADMIN_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters`),
-  name: z.string().min(1),
+  name: z.string().refine(isValidAccountName, "ADMIN_NAME must be a valid unique account name"),
 });
 
 async function main() {
@@ -56,7 +60,8 @@ async function main() {
     process.exit(1);
   }
 
-  const { email, password, name } = parsed.data;
+  const { email, password } = parsed.data;
+  const name = normalizeAccountName(parsed.data.name);
 
   const existing = await db.select({ id: user.id }).from(user).where(eq(user.email, email));
 
@@ -64,7 +69,13 @@ async function main() {
     // Sign-up is closed on the shared `auth` instance, so use a local one.
     const seedAuth = createAuth({ allowSignUp: true });
     await seedAuth.api.signUpEmail({
-      body: { email, password, name, username: usernameFromEmail(email) },
+      body: {
+        email,
+        password,
+        name,
+        username: usernameFromName(name),
+        displayUsername: name,
+      },
     });
     console.log(`Created account ${email}`);
   } else {
@@ -73,7 +84,15 @@ async function main() {
 
   await db
     .update(user)
-    .set({ role: "super_admin", mustChangePassword: false, emailVerified: true, companyId: null })
+    .set({
+      name,
+      username: usernameFromName(name),
+      displayUsername: name,
+      role: "super_admin",
+      mustChangePassword: false,
+      emailVerified: true,
+      companyId: null,
+    })
     .where(eq(user.email, email));
 
   console.log(`${email} is a super admin. Sign in at http://localhost:3001/login`);

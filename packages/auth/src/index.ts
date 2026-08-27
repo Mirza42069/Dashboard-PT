@@ -13,7 +13,13 @@ import { and, eq, like } from "drizzle-orm";
 import { Resend } from "resend";
 
 import { passwordSetupEmail } from "./password-setup-email";
-import { USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH, USERNAME_PATTERN } from "./username";
+import {
+  isValidAccountName,
+  normalizeAccountName,
+  normalizeUsername,
+  USERNAME_MAX_LENGTH,
+  USERNAME_MIN_LENGTH,
+} from "./username";
 
 const PASSWORD_SETUP_HASH_HEADER = "x-fushin-password-setup-hash";
 
@@ -238,7 +244,10 @@ export function createAuth(opts: CreateAuthOptions = {}) {
       username({
         minUsernameLength: USERNAME_MIN_LENGTH,
         maxUsernameLength: USERNAME_MAX_LENGTH,
-        usernameValidator: (value) => USERNAME_PATTERN.test(value),
+        usernameNormalization: normalizeUsername,
+        displayUsernameNormalization: normalizeAccountName,
+        usernameValidator: isValidAccountName,
+        displayUsernameValidator: isValidAccountName,
       }),
       admin({
         defaultRole: "user",

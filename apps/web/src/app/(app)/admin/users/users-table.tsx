@@ -178,7 +178,6 @@ export default function UsersTable({
               <TableRow>
                 <TableHead className="pl-4">{t.users.name}</TableHead>
                 <TableHead>{t.users.email}</TableHead>
-                <TableHead>{t.users.username}</TableHead>
                 <TableHead>{t.users.role}</TableHead>
                 <TableHead>{t.company.label}</TableHead>
                 <TableHead>{t.users.statusColumn}</TableHead>
@@ -190,7 +189,7 @@ export default function UsersTable({
               {usersQuery.isPending &&
                 Array.from({ length: PAGE_SIZE }, (_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={8} className="pl-4">
+                    <TableCell colSpan={7} className="pl-4">
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
@@ -198,7 +197,7 @@ export default function UsersTable({
 
               {!usersQuery.isPending && users.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} className="py-10 text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
                     {debouncedSearch
                       ? interpolate(t.users.noMatch, { search: debouncedSearch })
                       : t.users.empty}
@@ -229,7 +228,6 @@ export default function UsersTable({
                         wrapping alone does nothing for it, so it would set the
                         table's minimum width on its own. */}
                     <TableCell className="break-words text-muted-foreground">{user.email}</TableCell>
-                    <TableCell className="text-muted-foreground">{user.username}</TableCell>
                     <TableCell>
                       <Badge variant={isSuperAdmin ? "default" : isRowAdmin ? "secondary" : "outline"}>
                         {isSuperAdmin

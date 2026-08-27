@@ -20,6 +20,7 @@ import { FieldError, fieldError, focusFirstInvalid } from "@/components/field-er
 import { useT } from "@/i18n/provider";
 import { toast } from "@/lib/toast";
 import { trpc } from "@/utils/trpc";
+import { isValidAccountName } from "@DashboardV2/auth/username";
 
 export type RenameTarget = { id: string; name: string; isSelf: boolean };
 
@@ -36,7 +37,7 @@ export default function RenameUserDialog({
   const formRef = useRef<HTMLFormElement>(null);
   const renameUser = useMutation(trpc.admin.renameUser.mutationOptions());
   const schema = z.object({
-    name: z.string().trim().min(1, t.users.nameRequired).max(120),
+    name: z.string().refine(isValidAccountName, t.users.nameInvalid),
   });
   const form = useForm({
     defaultValues: { name: target.name },
@@ -89,6 +90,7 @@ export default function RenameUserDialog({
                     onBlur={field.handleBlur}
                     onChange={(event) => field.handleChange(event.target.value)}
                   />
+                  <p className="text-xs text-muted-foreground">{t.users.nameHint}</p>
                   <FieldError {...error} />
                 </div>
               );

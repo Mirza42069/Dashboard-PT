@@ -4,7 +4,8 @@ import {
   sendPasswordSetupLink,
 } from "@DashboardV2/auth";
 import {
-  isValidUsername,
+  isValidAccountName,
+  normalizeAccountName,
   normalizeUsername,
 } from "@DashboardV2/auth/username";
 import { db } from "@DashboardV2/db";
@@ -50,6 +51,42 @@ function assertAccountEmailConfigured(t: MessageDictionary) {
   if (!accountEmailConfigured()) {
     throw new TRPCError({ code: "PRECONDITION_FAILED", message: t.user.accountEmailNotConfigured });
   }
+}
+
+function accountConflictField(error: unknown): "email" | "name" | null {
+  const values: string[] = [];
+  const pending: unknown[] = [error];
+  const seen = new Set<object>();
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+
+    const details = current as {
+      body?: unknown;
+      cause?: unknown;
+      code?: unknown;
+      constraint?: unknown;
+      message?: unknown;
+    };
+    for (const value of [details.code, details.constraint, details.message]) {
+      if (typeof value === "string") values.push(value);
+    }
+    pending.push(details.body, details.cause);
+  }
+
+  const marker = values.join(" ");
+  if (marker.includes("USERNAME_IS_ALREADY_TAKEN") || marker.includes("user_username_unique")) {
+    return "name";
+  }
+  if (
+    marker.includes("USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL") ||
+    marker.includes("user_email_unique")
+  ) {
+    return "email";
+  }
+  return null;
 }
 
 async function trySendPasswordSetupLink({
@@ -300,7 +337,6 @@ export const adminRouter = router({
           ? or(
               ilike(user.name, `%${input.search}%`),
               ilike(user.email, `%${input.search}%`),
-              ilike(user.username, `%${input.search}%`),
             )
           : undefined,
         isSuperAdmin ? undefined : eq(user.companyId, ctx.companyId),
@@ -313,7 +349,6 @@ export const adminRouter = router({
             id: user.id,
             name: user.name,
             email: user.email,
-            username: user.username,
             role: user.role,
             banned: user.banned,
             mustChangePassword: user.mustChangePassword,
@@ -347,9 +382,8 @@ export const adminRouter = router({
   createUser: companyPermissionProcedure("user:manage")
     .input(
       z.object({
-        name: z.string().trim().min(1, "Name is required").max(120),
+        name: z.string(),
         email: z.email("Invalid email address"),
-        username: z.string(),
         role: roleSchema.default("user"),
         /** Required for admin and user accounts — null (ignored) for super_admin, who is unpinned. */
         companyId: z.string().min(1).optional(),
@@ -360,10 +394,11 @@ export const adminRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertAccountEmailConfigured(ctx.t);
       const email = input.email.toLowerCase();
-      const username = normalizeUsername(input.username);
-      if (!isValidUsername(username)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.usernameInvalid });
+      if (!isValidAccountName(input.name)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.nameInvalid });
       }
+      const name = normalizeAccountName(input.name);
+      const username = normalizeUsername(name);
 
       const existing = await db
         .select({ email: user.email, username: user.username })
@@ -373,7 +408,7 @@ export const adminRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.emailExists });
       }
       if (existing.some((account) => account.username === username)) {
-        throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.usernameExists });
+        throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists });
       }
 
       const actorIsSuperAdmin = roleOf(ctx.session.user) === "super_admin";
@@ -409,19 +444,30 @@ export const adminRouter = router({
       const trial = resolveTrialInput(ctx.t, input.trial, role);
       const lockedPassword = generateLockedPassword();
 
-      const created = await auth.api.createUser({
-        headers: ctx.headers,
-        body: {
-          email,
-          password: lockedPassword,
-          name: input.name,
-          role,
-          data: {
-            username,
-            displayUsername: input.username.trim(),
+      const created = await auth.api
+        .createUser({
+          headers: ctx.headers,
+          body: {
+            email,
+            password: lockedPassword,
+            name,
+            role,
+            data: {
+              username,
+              displayUsername: name,
+            },
           },
-        },
-      });
+        })
+        .catch((error: unknown) => {
+          const conflict = accountConflictField(error);
+          if (conflict === "name") {
+            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists, cause: error });
+          }
+          if (conflict === "email") {
+            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.emailExists, cause: error });
+          }
+          throw error;
+        });
 
       // companyId is `input: false` on the auth side — it must never come in on
       // a request body — so it is written here rather than passed to createUser.
@@ -456,7 +502,7 @@ export const adminRouter = router({
         action: "created",
         entityType: "user",
         entityId: created.user.id,
-        entityLabel: `${input.name} - ${email}`,
+        entityLabel: `${name} - ${email}`,
         detail: trial ? `${role} (trial)` : role,
       });
 
@@ -466,23 +512,62 @@ export const adminRouter = router({
   renameUser: companyPermissionProcedure("user:rename")
     .input(
       userIdSchema.extend({
-        name: z.string().trim().min(1, "Name is required").max(120),
+        name: z.string(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (!isValidAccountName(input.name)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.nameInvalid });
+      }
+      const name = normalizeAccountName(input.name);
+      const username = normalizeUsername(name);
       const [target] = await db
-        .select({ name: user.name, email: user.email, companyId: user.companyId })
+        .select({
+          name: user.name,
+          email: user.email,
+          username: user.username,
+          displayUsername: user.displayUsername,
+          companyId: user.companyId,
+        })
         .from(user)
         .where(eq(user.id, input.userId));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
       }
+      if (
+        target.name === name &&
+        target.username === username &&
+        target.displayUsername === name
+      ) {
+        return { success: true };
+      }
+      const [duplicate] = await db
+        .select({ id: user.id })
+        .from(user)
+        .where(and(eq(user.username, username), ne(user.id, input.userId)));
+      if (duplicate) {
+        throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists });
+      }
       const previousLabel = `${target.name} - ${target.email}`;
 
-      await auth.api.adminUpdateUser({
-        headers: ctx.headers,
-        body: { userId: input.userId, data: { name: input.name } },
-      });
+      await auth.api
+        .adminUpdateUser({
+          headers: ctx.headers,
+          body: {
+            userId: input.userId,
+            data: {
+              name,
+              displayUsername: name,
+              ...(target.username === username ? {} : { username }),
+            },
+          },
+        })
+        .catch((error: unknown) => {
+          if (accountConflictField(error) === "name") {
+            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists, cause: error });
+          }
+          throw error;
+        });
 
       // Unpinned System accounts are global. Filing their name/email under the
       // actor's currently selected tenant would leak global-account PII into a
@@ -493,7 +578,7 @@ export const adminRouter = router({
           entityType: "user",
           entityId: input.userId,
           entityLabel: previousLabel,
-          detail: input.name,
+          detail: name,
         });
       }
 

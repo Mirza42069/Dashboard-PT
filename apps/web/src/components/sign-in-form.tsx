@@ -1,7 +1,7 @@
 "use client";
 
 import { TRIAL_ENDED_CODE } from "@DashboardV2/api/lib/trial";
-import { isValidUsername } from "@DashboardV2/auth/username";
+import { isValidAccountName } from "@DashboardV2/auth/username";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
@@ -36,7 +36,7 @@ export default function SignInForm() {
         (value) =>
           signInMethod(value) === "email"
             ? z.email().safeParse(value).success
-            : isValidUsername(value),
+            : isValidAccountName(value),
         t.auth.invalidIdentifier,
       ),
     password: z.string().min(1, t.auth.passwordRequired),

@@ -61,8 +61,8 @@ export const id = {
     notFound: "Pengguna tidak ditemukan",
     someNotFound: "Satu atau beberapa pengguna tidak ditemukan",
     emailExists: "Sudah ada akun dengan email tersebut",
-    usernameExists: "Sudah ada akun dengan nama pengguna tersebut",
-    usernameInvalid: "Gunakan 3–30 huruf, angka, titik, atau garis bawah",
+    nameExists: "Sudah ada akun dengan nama tersebut",
+    nameInvalid: "Masukkan nama hingga 120 karakter Latin dasar tanpa @",
     onlySuperAdminCreatesAdmins:
       "Hanya akun System yang dapat membuat akun admin atau System",
     ownCompanyOnly: "Anda hanya dapat membuat pengguna di perusahaan Anda sendiri",

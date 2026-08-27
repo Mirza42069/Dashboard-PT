@@ -1,21 +1,30 @@
 import { describe, expect, test } from "bun:test";
 
-import { isValidUsername, normalizeUsername, usernameFromEmail } from "./username";
+import {
+  isValidAccountName,
+  normalizeAccountName,
+  normalizeUsername,
+  usernameFromName,
+} from "./username";
 
 describe("username credentials", () => {
   test("normalizes usernames for case-insensitive sign-in", () => {
-    expect(normalizeUsername("  Site.Manager_1 ")).toBe("site.manager_1");
+    expect(normalizeUsername("  Rama Putra ")).toBe("rama putra");
+    expect(normalizeAccountName("  Rama   Putra ")).toBe("Rama Putra");
   });
 
-  test("accepts only supported username characters and lengths", () => {
-    expect(isValidUsername("site.manager_1")).toBe(true);
-    expect(isValidUsername("ab")).toBe(false);
-    expect(isValidUsername("site-manager")).toBe(false);
-    expect(isValidUsername("a".repeat(31))).toBe(false);
+  test("accepts human names but rejects ambiguous or unsafe identifiers", () => {
+    expect(isValidAccountName("Rama Putra")).toBe(true);
+    expect(isValidAccountName("Dewi's Team-2")).toBe(true);
+    expect(isValidAccountName("admin@example.com")).toBe(false);
+    expect(isValidAccountName("line\nbreak")).toBe(false);
+    expect(isValidAccountName("\tRama Putra")).toBe(false);
+    expect(isValidAccountName("Rama\u200bPutra")).toBe(false);
+    expect(isValidAccountName("İpek")).toBe(false);
+    expect(isValidAccountName("a".repeat(121))).toBe(false);
   });
 
-  test("derives a valid initial username from an email address", () => {
-    expect(usernameFromEmail("Mirza+Ops@example.com")).toBe("mirza_ops");
-    expect(usernameFromEmail("x@example.com")).toBe("user_x");
+  test("uses the normalized account name as the username", () => {
+    expect(usernameFromName("Rama Putra")).toBe("rama putra");
   });
 });

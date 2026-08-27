@@ -36,7 +36,7 @@ import z from "zod";
 import { FieldError, fieldError, focusFirstInvalid } from "@/components/field-error";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
-import { isValidUsername } from "@DashboardV2/auth/username";
+import { isValidAccountName } from "@DashboardV2/auth/username";
 import { trpc } from "@/utils/trpc";
 
 type CreateRole = "super_admin" | "admin" | "user";
@@ -82,9 +82,8 @@ export default function CreateUserDialog({
 
   const schema = z
     .object({
-      name: z.string().trim().min(1, t.users.nameRequired).max(120),
+      name: z.string().refine(isValidAccountName, t.users.nameInvalid),
       email: z.email(t.auth.invalidEmail),
-      username: z.string().trim().refine(isValidUsername, t.users.usernameInvalid),
       role: z.enum(["super_admin", "admin", "user"]),
       companyId: z.string(),
       trial: z.boolean(),
@@ -120,7 +119,6 @@ export default function CreateUserDialog({
     defaultValues: {
       name: "",
       email: "",
-      username: "",
       role: "user" as CreateRole,
       companyId: "",
       trial: false,
@@ -132,7 +130,6 @@ export default function CreateUserDialog({
         const data = await createUser.mutateAsync({
           name: value.name,
           email: value.email,
-          username: value.username,
           role: value.role,
           companyId: value.companyId === "" ? undefined : value.companyId,
           trial: value.trial
@@ -203,6 +200,7 @@ export default function CreateUserDialog({
                     onBlur={field.handleBlur}
                     onChange={(e) => field.handleChange(e.target.value)}
                   />
+                  <p className="text-xs text-muted-foreground">{t.users.nameHint}</p>
                   <FieldError {...error} />
                 </div>
               );
@@ -224,30 +222,6 @@ export default function CreateUserDialog({
                     onBlur={field.handleBlur}
                     onChange={(e) => field.handleChange(e.target.value)}
                   />
-                  <FieldError {...error} />
-                </div>
-              );
-            }}
-          </form.Field>
-
-          <form.Field name="username">
-            {(field) => {
-              const error = fieldError(field.name, field.state.meta.errors);
-              return (
-                <div className="space-y-2">
-                  <Label htmlFor={field.name}>{t.users.username}</Label>
-                  <Input
-                    {...error.control}
-                    name={field.name}
-                    type="text"
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    value={field.state.value}
-                    onBlur={field.handleBlur}
-                    onChange={(e) => field.handleChange(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">{t.users.usernameHint}</p>
                   <FieldError {...error} />
                 </div>
               );

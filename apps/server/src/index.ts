@@ -110,8 +110,8 @@ app.use("/api/auth/request-password-reset", async (c) => c.json({ error: "Not fo
 // The in-app account procedure owns current-password verification, password
 // policy, session revocation, and clearing the forced-change flag as one flow.
 app.use("/api/auth/change-password", async (c) => c.json({ error: "Not found" }, 404));
-// Usernames are immutable administrator-issued credentials. Better Auth's
-// username plugin otherwise exposes them through the generic update-user route.
+// Account names are administrator-managed login credentials. Better Auth's
+// generic route would let users change the name without the uniqueness checks.
 app.use("/api/auth/update-user", async (c) => c.json({ error: "Not found" }, 404));
 
 app.post("/api/auth/reset-password", async (c) => {
