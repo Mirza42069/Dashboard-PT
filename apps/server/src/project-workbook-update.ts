@@ -14,7 +14,11 @@ import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { prepareBoqRevision } from "./boq-import";
-import { relevantProjectStateChanged } from "./project-workbook-review";
+import {
+  hasValidWorkbookReviewStateSignature,
+  pdfCalendarDifferences,
+  relevantProjectStateChanged,
+} from "./project-workbook-review";
 import {
   prepareConfirmedWorkbook,
   projectWorkbookCommitSchema,
@@ -37,7 +41,7 @@ export type CommitProjectWorkbookUpdateInput = {
   filename: string;
   projectId: string;
   companyId: string;
-  selectedSheetName: string;
+  selectedSheetName: string | null;
   plan: unknown;
   sections: ProjectWorkbookUpdateSections;
   confirmed?: Partial<ProjectWorkbookCommit["project"]>;
@@ -75,6 +79,7 @@ const reviewStateSchema = z.object({
   activeVersionId: z.string().nullable(),
   progressEntryCount: z.number().int().nonnegative(),
   latestProgressUpdatedAt: z.iso.datetime().nullable(),
+  signature: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
 function invalid(message: string, code: string | null = null): never {
@@ -114,7 +119,19 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
   if (!Object.values(input.sections).some(Boolean)) {
     invalid("Select at least one project section to update.", "section_required");
   }
-  const reviewState = parseOrInvalid(reviewStateSchema.safeParse(input.reviewState));
+  const submittedPlan = workbookPlanSchema.parse(input.plan);
+  const signedReviewState = parseOrInvalid(reviewStateSchema.safeParse(input.reviewState));
+  const { signature: reviewStateSignature, ...reviewState } = signedReviewState;
+  if (
+    !hasValidWorkbookReviewStateSignature(
+      input.projectId,
+      submittedPlan.analysisSignature,
+      reviewState,
+      reviewStateSignature,
+    )
+  ) {
+    invalid("The reviewed project state is invalid. Analyze the source file again.", "review_invalid");
+  }
 
   const [current] = await db
     .select({
@@ -141,8 +158,10 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     );
   }
 
-  const submittedPlan = workbookPlanSchema.parse(input.plan);
-  if (submittedPlan.sheetName !== input.selectedSheetName) {
+  if (
+    submittedPlan.profile !== "pdf-ai" &&
+    submittedPlan.sheetName !== input.selectedSheetName
+  ) {
     invalid("The selected worksheet no longer matches the reviewed import plan.", "sheet_mismatch");
   }
 
@@ -176,6 +195,24 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
   ]);
 
   const importsBoqAndSchedule = input.sections.boq || input.sections.schedule;
+  if (
+    (importsBoqAndSchedule || input.sections.progress) &&
+    analysis.plan.profile === "pdf-ai" &&
+    analysis.plan.pdf
+  ) {
+    const differences = pdfCalendarDifferences(current, {
+      startDate: analysis.plan.pdf.extraction.startDate,
+      scheduleStartDate: analysis.plan.pdf.extraction.scheduleStartDate,
+      endDate: analysis.plan.pdf.extraction.endDate,
+      periodType: analysis.plan.pdf.extraction.periodType,
+    });
+    if (differences.length > 0) {
+      invalid(
+        `The PDF reporting calendar does not match the project (${differences.join(", ")}).`,
+        "reporting_period_mismatch",
+      );
+    }
+  }
   const existingDraft = versions.find((version) => version.status === "draft");
   const activeVersion = versions.find((version) => version.status === "active") ?? null;
   if (relevantProjectStateChanged(current, reviewState.project, input.sections)) {
@@ -458,6 +495,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     : null;
   const mappingAudit = {
     operation: "project_workbook_update",
+    sourceKind: analysis.plan.profile === "pdf-ai" ? "pdf" : "xlsx",
     requestedSections: input.sections,
     importedSections: effectiveSections,
     mapping: analysis.plan.mapping,
@@ -467,6 +505,20 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     userExcludedRows: analysis.plan.userExcludedRows,
     parentAssignments: analysis.plan.parentAssignments,
     actualCurve: analysis.plan.actualCurve,
+    pdf:
+      analysis.plan.pdf === null
+        ? null
+        : {
+            pageCount: analysis.plan.pdf.pageCount,
+            extractionDigest: analysis.plan.pdf.extractionDigest,
+            modelReportedMetadataSources: analysis.plan.pdf.extraction.metadataSources,
+            rowSources: analysis.plan.pdf.extraction.rows.map((row, index) => ({
+              row: index + 2,
+              page: row.page,
+              table: row.table,
+              sourceRow: row.sourceRow,
+            })),
+          },
     projectDetails: projectDetailsAudit,
   };
 
@@ -506,7 +558,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     boqImportId: updateImportId,
     cumulativePercent: snapshot.cumulativePercent.toFixed(6),
     sourceFilename: input.filename,
-    sourceSheetName: analysis.plan.sheetName,
+    sourceSheetName: snapshot.sourceLabel ?? analysis.plan.sheetName,
     sourceRow: snapshot.sourceRow,
     sourceColumn: snapshot.sourceColumn,
     sourceValue: snapshot.sourceValue,

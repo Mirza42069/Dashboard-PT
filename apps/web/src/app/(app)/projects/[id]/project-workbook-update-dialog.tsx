@@ -1,6 +1,10 @@
 "use client";
 
 import { env } from "@DashboardV2/env/web";
+import {
+  MAX_AI_PDF_BYTES,
+  MAX_AI_WORKBOOK_BYTES,
+} from "@DashboardV2/api/lib/workbook-limits";
 import { Alert, AlertDescription, AlertTitle } from "@DashboardV2/ui/components/alert";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Checkbox } from "@DashboardV2/ui/components/checkbox";
@@ -33,9 +37,9 @@ import { toast } from "@/lib/toast";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
-const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const XLSX_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const PDF_CONTENT_TYPE = "application/pdf";
 // A colon is forbidden in Excel worksheet names, so this cannot collide with a real sheet.
 const AUTO_SHEET = ":entire-workbook";
 
@@ -56,7 +60,7 @@ type SheetCandidate = {
 /** The fields this flow reviews from the shared workbook analysis response. */
 type WorkbookAnalysis = {
   plan: {
-    profile: "reference-s-curve" | "generic-ai" | "generic-deterministic";
+    profile: "reference-s-curve" | "generic-ai" | "generic-deterministic" | "pdf-ai";
     periodCount: number;
     warnings: string[];
     suggestedCode: string | null;
@@ -81,9 +85,21 @@ type WorkbookAnalysis = {
     sourceRow: number;
     sourceColumn: number;
     sourceValue: string;
+    sourceLabel?: string;
+  }[];
+  pdfActualPreview?: {
+    page: number;
+    table: string;
+    sourceRow: number;
+    periodIndex: number;
+    cumulativePercent: number;
+    sourceValue: string;
   }[];
   rowPreview: {
     row: number;
+    sourcePage?: number;
+    sourceTable?: string;
+    sourceRow?: number;
     description: string;
     kind: "item" | "section" | "excluded";
     parentRow: number | null;
@@ -91,6 +107,7 @@ type WorkbookAnalysis = {
     unit: string | null;
     quantity: number | null;
     unitRate: number | null;
+    amount: number | null;
     weight: number | null;
     startPeriodIndex: number | null;
     finishPeriodIndex: number | null;
@@ -129,6 +146,7 @@ type WorkbookAnalysis = {
     activeVersionId: string | null;
     progressEntryCount: number;
     latestProgressUpdatedAt: string | null;
+    signature: string;
   };
 };
 
@@ -195,6 +213,7 @@ export default function ProjectWorkbookUpdateDialog({
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<SheetCandidate[] | null>(null);
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const [sheetChoice, setSheetChoice] = useState("");
   const [recommendedSheetName, setRecommendedSheetName] = useState("");
   const [analysis, setAnalysis] = useState<WorkbookAnalysis | null>(null);
@@ -215,7 +234,7 @@ export default function ProjectWorkbookUpdateDialog({
     sheets?.find((candidate) => candidate.sheetName === selectedSheetName) ?? null;
   const draftBlocked = (analysis?.summary.validationErrors.length ?? 0) > 0;
   const progressAvailable = (analysis?.actualSnapshots.length ?? 0) > 0;
-  const reviewRows = analysis?.rowPreview.filter((row) => row.kind !== "excluded") ?? [];
+  const reviewRows = analysis?.rowPreview ?? [];
   const existingActualByPeriod = new Map(
     analysis?.existingActualSnapshots.map((snapshot) => [
       snapshot.periodIndex,
@@ -229,14 +248,15 @@ export default function ProjectWorkbookUpdateDialog({
     ...new Set([...existingActualByPeriod.keys(), ...incomingActualByPeriod.keys()]),
   ].sort((a, b) => a - b);
   const hasSelection = Object.values(sections).some(Boolean);
-  const step = analysis ? 3 : sheets ? 2 : 1;
+  const step = analysis ? 3 : sheets || pdfPageCount !== null ? 2 : 1;
 
   async function uploadAndProcess<T>(
     chosen: File,
     route: "discover" | "analyze" | "commit",
     body: Record<string, unknown>,
   ) {
-    const requestedPath = `temporary-workbooks/${projectId}/${currentUserId}/${crypto.randomUUID()}.xlsx`;
+    const kind = chosen.name.toLowerCase().endsWith(".pdf") ? "pdf" : "xlsx";
+    const requestedPath = `temporary-workbooks/${projectId}/${currentUserId}/${crypto.randomUUID()}.${kind}`;
     let pathname: string;
     try {
       const blob = await uploadPrivateBlob({
@@ -244,7 +264,7 @@ export default function ProjectWorkbookUpdateDialog({
         file: chosen,
         handleUploadUrl: `${baseUrl}/upload`,
         clientPayload: { projectId },
-        contentType: XLSX_CONTENT_TYPE,
+        contentType: kind === "pdf" ? PDF_CONTENT_TYPE : XLSX_CONTENT_TYPE,
       });
       pathname = blob.pathname;
     } catch (caught) {
@@ -275,6 +295,7 @@ export default function ProjectWorkbookUpdateDialog({
   async function discover(chosen: File) {
     setFile(chosen);
     setSheets(null);
+    setPdfPageCount(null);
     setSheetChoice("");
     setRecommendedSheetName("");
     setAnalysis(null);
@@ -283,13 +304,20 @@ export default function ProjectWorkbookUpdateDialog({
     setStatus(t.projectUpdate.uploadingDiscover);
     try {
       const result = await uploadAndProcess<{
+        kind?: "xlsx" | "pdf";
         sheets?: SheetCandidate[];
         recommendedSheetName?: string | null;
+        pageCount?: number;
       }>(
         chosen,
         "discover",
         {},
       );
+      if (result.kind === "pdf" && typeof result.pageCount === "number") {
+        setPdfPageCount(result.pageCount);
+        setStatus(t.projectUpdate.pdfReady);
+        return;
+      }
       if (!result.sheets?.length) throw new Error(t.projectUpdate.noSheets);
       setSheets(result.sheets);
       const recommended = result.recommendedSheetName ?? result.sheets[0]?.sheetName ?? "";
@@ -305,7 +333,7 @@ export default function ProjectWorkbookUpdateDialog({
   }
 
   async function analyze() {
-    if (!file || !selectedSheetName) return;
+    if (!file || (pdfPageCount === null && !selectedSheetName)) return;
     setAnalysis(null);
     setSections({
       projectDetails: false,
@@ -318,7 +346,7 @@ export default function ProjectWorkbookUpdateDialog({
     setStatus(t.projectUpdate.uploadingAnalyze);
     try {
       const result = await uploadAndProcess<WorkbookAnalysis>(file, "analyze", {
-        selectedSheetName,
+        ...(selectedSheetName ? { selectedSheetName } : {}),
       });
       if (!result.plan || !result.summary || !result.actualSnapshots) {
         throw new Error(t.projectUpdate.analysisFailed);
@@ -341,13 +369,13 @@ export default function ProjectWorkbookUpdateDialog({
   }
 
   async function commit() {
-    if (!file || !analysis || !selectedSheetName || !hasSelection) return;
+    if (!file || !analysis || !hasSelection) return;
     setError(null);
     setBusy("commit");
     setStatus(t.projectUpdate.uploadingCommit);
     try {
       const result = await uploadAndProcess<WorkbookUpdateResult>(file, "commit", {
-        selectedSheetName,
+        ...(selectedSheetName ? { selectedSheetName } : {}),
         plan: analysis.plan,
         sections,
         reviewState: analysis.reviewState,
@@ -435,7 +463,7 @@ export default function ProjectWorkbookUpdateDialog({
             <Input
               id="workbook-update-file"
               type="file"
-              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept=".xlsx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               disabled={busy !== null}
               aria-describedby="workbook-update-file-hint"
               onChange={(event) => {
@@ -443,6 +471,7 @@ export default function ProjectWorkbookUpdateDialog({
                 if (!chosen) return;
                 setFile(null);
                 setSheets(null);
+                setPdfPageCount(null);
                 setSheetChoice("");
                 setRecommendedSheetName("");
                 setAnalysis(null);
@@ -454,13 +483,18 @@ export default function ProjectWorkbookUpdateDialog({
                 });
                 setError(null);
                 setStatus("");
-                if (!chosen.name.toLowerCase().endsWith(".xlsx")) {
+                const kind = chosen.name.toLowerCase().endsWith(".pdf")
+                  ? "pdf"
+                  : chosen.name.toLowerCase().endsWith(".xlsx")
+                    ? "xlsx"
+                    : null;
+                if (!kind) {
                   setError(t.projectUpdate.fileTypeError);
                   setStatus(t.projectUpdate.discoveryFailed);
                   event.target.value = "";
                   return;
                 }
-                if (chosen.size > MAX_FILE_BYTES) {
+                if (chosen.size > (kind === "pdf" ? MAX_AI_PDF_BYTES : MAX_AI_WORKBOOK_BYTES)) {
                   setError(t.projectUpdate.fileSizeError);
                   setStatus(t.projectUpdate.discoveryFailed);
                   event.target.value = "";
@@ -571,6 +605,28 @@ export default function ProjectWorkbookUpdateDialog({
             </section>
           )}
 
+          {pdfPageCount !== null && !analysis && (
+            <section className="space-y-3 border-t pt-4" aria-labelledby="project-update-pdf-title">
+              <div>
+                <h3 id="project-update-pdf-title" className="font-medium">
+                  {t.projectUpdate.stepSource}
+                </h3>
+                <p className="text-muted-foreground">
+                  {interpolate(t.projectImport.pdfPages, { count: pdfPageCount })}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy !== null}
+                onClick={() => void analyze()}
+              >
+                {busy === "analyze" && <Loader2 className="animate-spin motion-reduce:animate-none" />}
+                {t.projectImport.analyzePdfAction}
+              </Button>
+            </section>
+          )}
+
           {analysis && (
             <section className="space-y-4 border-t pt-4" aria-labelledby="workbook-update-sections-title">
               <div>
@@ -612,10 +668,16 @@ export default function ProjectWorkbookUpdateDialog({
                   aria-label={t.projectImport.rowReviewTitle}
                   tabIndex={0}
                 >
-                  <table className="w-full min-w-[44rem] text-left text-xs">
+                  <table className="w-full min-w-[60rem] text-left text-xs">
                     <thead className="sticky top-0 bg-muted">
                       <tr>
                         <th scope="col" className="px-2 py-2 font-medium">#</th>
+                        <th scope="col" className="px-2 py-2 font-medium">
+                          {t.projectImport.pdfSource}
+                        </th>
+                        <th scope="col" className="px-2 py-2 font-medium">
+                          {t.projectImport.rowKind}
+                        </th>
                         <th scope="col" className="px-2 py-2 font-medium">
                           {t.projectImport.mappingFields.description}
                         </th>
@@ -624,6 +686,9 @@ export default function ProjectWorkbookUpdateDialog({
                         </th>
                         <th scope="col" className="px-2 py-2 font-medium">
                           {t.projectImport.mappingFields.unitRate}
+                        </th>
+                        <th scope="col" className="px-2 py-2 font-medium">
+                          {t.projectImport.mappingFields.amount}
                         </th>
                         <th scope="col" className="px-2 py-2 font-medium">
                           {t.projectImport.mappingFields.weight}
@@ -637,8 +702,16 @@ export default function ProjectWorkbookUpdateDialog({
                       {reviewRows.map((row) => (
                           <tr key={row.row} className="border-t align-top">
                             <td className="px-2 py-2 tabular-nums text-muted-foreground">
-                              {row.row}
+                              {row.sourcePage
+                                ? `p${row.sourcePage}:${row.sourceRow ?? row.row}`
+                                : row.row}
                             </td>
+                            <td className="px-2 py-2 text-muted-foreground">
+                              {row.sourcePage
+                                ? `p${row.sourcePage}:${row.sourceRow} · ${row.sourceTable}`
+                                : "-"}
+                            </td>
+                            <td className="px-2 py-2">{t.projectImport.rowKinds[row.kind]}</td>
                             <td className="max-w-72 px-2 py-2">
                               <span className="font-medium">{row.code ? `${row.code} · ` : ""}</span>
                               {row.description}
@@ -648,6 +721,9 @@ export default function ProjectWorkbookUpdateDialog({
                             </td>
                             <td className="px-2 py-2 tabular-nums">
                               {row.unitRate === null ? "-" : money(row.unitRate)}
+                            </td>
+                            <td className="px-2 py-2 tabular-nums">
+                              {row.amount === null ? "-" : money(row.amount)}
                             </td>
                             <td className="px-2 py-2 tabular-nums">
                               {row.weight === null ? "-" : `${row.weight.toFixed(4)}%`}
@@ -688,6 +764,11 @@ export default function ProjectWorkbookUpdateDialog({
                           <th scope="col" className="px-2 py-2 font-medium">
                             {t.projectUpdate.storedResultValue}
                           </th>
+                          {analysis.plan.profile === "pdf-ai" && (
+                            <th scope="col" className="px-2 py-2 font-medium">
+                              {t.projectImport.pdfSource}
+                            </th>
+                          )}
                         </tr>
                       </thead>
                       <tbody>
@@ -707,6 +788,13 @@ export default function ProjectWorkbookUpdateDialog({
                               <td className="px-2 py-2 tabular-nums">
                                 {result === undefined ? "-" : `${result.toFixed(4)}%`}
                               </td>
+                              {analysis.plan.profile === "pdf-ai" && (
+                                <td className="px-2 py-2">
+                                  {analysis.actualSnapshots.find(
+                                    (snapshot) => snapshot.periodIndex === periodIndex,
+                                  )?.sourceLabel ?? "-"}
+                                </td>
+                              )}
                             </tr>
                           );
                         })}
@@ -715,6 +803,40 @@ export default function ProjectWorkbookUpdateDialog({
                   </div>
                 </div>
               )}
+
+              {analysis.plan.profile === "pdf-ai" &&
+                (analysis.pdfActualPreview?.length ?? 0) > 0 && (
+                  <div className="space-y-2 rounded-lg border p-3">
+                    <h4 className="font-medium">{t.projectImport.pdfExtractedActuals}</h4>
+                    <div
+                      className="max-h-48 overflow-auto rounded-md border"
+                      role="region"
+                      aria-label={t.projectImport.pdfExtractedActuals}
+                      tabIndex={0}
+                    >
+                      <table className="w-full text-left text-xs">
+                        <thead className="sticky top-0 bg-muted">
+                          <tr>
+                            <th scope="col" className="px-2 py-2 font-medium">{t.projectImport.pdfSource}</th>
+                            <th scope="col" className="px-2 py-2 font-medium">{t.projectImport.periods}</th>
+                            <th scope="col" className="px-2 py-2 font-medium">%</th>
+                            <th scope="col" className="px-2 py-2 font-medium">{t.projectImport.sourceValue}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analysis.pdfActualPreview?.map((snapshot, index) => (
+                            <tr key={`${snapshot.periodIndex}-${snapshot.sourceRow}-${index}`} className="border-t">
+                              <td className="px-2 py-2">{`p${snapshot.page}:${snapshot.sourceRow} · ${snapshot.table}`}</td>
+                              <td className="px-2 py-2 tabular-nums">{snapshot.periodIndex}</td>
+                              <td className="px-2 py-2 tabular-nums">{snapshot.cumulativePercent.toFixed(4)}%</td>
+                              <td className="px-2 py-2">{snapshot.sourceValue}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
               <div className="space-y-3">
                 <div className="grid grid-cols-[1rem_1fr] gap-x-3 gap-y-1 rounded-lg border p-3">

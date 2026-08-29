@@ -52,6 +52,7 @@ export async function commitProjectWorkbook(input: {
     sheetName: prepared.plan.sheetName,
     mapping: prepared.plan.mapping,
     mappingAudit: {
+      sourceKind: prepared.plan.profile === "pdf-ai" ? "pdf" : "xlsx",
       mapping: prepared.plan.mapping,
       profile: prepared.plan.profile,
       sectionRows: prepared.plan.sectionRows,
@@ -59,6 +60,20 @@ export async function commitProjectWorkbook(input: {
       userExcludedRows: prepared.plan.userExcludedRows,
       parentAssignments: prepared.plan.parentAssignments,
       actualCurve: prepared.plan.actualCurve,
+      pdf:
+        prepared.plan.pdf === null
+          ? null
+          : {
+              pageCount: prepared.plan.pdf.pageCount,
+              extractionDigest: prepared.plan.pdf.extractionDigest,
+              modelReportedMetadataSources: prepared.plan.pdf.extraction.metadataSources,
+              rowSources: prepared.plan.pdf.extraction.rows.map((row, index) => ({
+                row: index + 2,
+                page: row.page,
+                table: row.table,
+                sourceRow: row.sourceRow,
+              })),
+            },
     },
     actor: input.actor,
   });
@@ -82,7 +97,7 @@ export async function commitProjectWorkbook(input: {
       boqImportId: revision.result.importId,
       cumulativePercent: snapshot.cumulativePercent.toFixed(6),
       sourceFilename: input.filename,
-      sourceSheetName: prepared.plan.sheetName,
+      sourceSheetName: snapshot.sourceLabel ?? prepared.plan.sheetName,
       sourceRow: snapshot.sourceRow,
       sourceColumn: snapshot.sourceColumn,
       sourceValue: snapshot.sourceValue,

@@ -87,7 +87,7 @@ test("returns a validated Gateway workbook interpretation", async () => {
   expect(model.doGenerateCalls).toHaveLength(1);
   expect(model.doGenerateCalls[0]?.maxOutputTokens).toBe(1_500);
   expect(model.doGenerateCalls[0]?.providerOptions).toMatchObject({
-    gateway: { only: ["azure"] },
+    gateway: { only: ["azure"], disallowPromptTraining: true },
   });
   expect(model.doGenerateCalls[0]?.responseFormat).toMatchObject({
     type: "json",

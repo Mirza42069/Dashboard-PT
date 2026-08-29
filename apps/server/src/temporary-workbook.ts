@@ -1,11 +1,21 @@
-import { MAX_AI_WORKBOOK_BYTES } from "@DashboardV2/api/lib/workbook-limits";
+import {
+  MAX_AI_PDF_BYTES,
+  MAX_AI_WORKBOOK_BYTES,
+} from "@DashboardV2/api/lib/workbook-limits";
 import { del, get, head, list } from "@vercel/blob";
 
 const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const PDF_CONTENT_TYPE = "application/pdf";
 const TEMPORARY_PREFIX = "temporary-workbooks/";
 const EXPIRY_MS = 60 * 60 * 1000;
 const CLAIM_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PENDING_AI_CHARGE_TIMEOUT_MS = 60 * 60 * 1000;
+
+export function maximumTemporaryWorkbookBytes(pathname: string) {
+  return pathname.toLowerCase().endsWith(".pdf")
+    ? MAX_AI_PDF_BYTES
+    : MAX_AI_WORKBOOK_BYTES;
+}
 
 export class TemporaryWorkbookError extends Error {
   constructor(message: string) {
@@ -52,9 +62,10 @@ export function temporaryWorkbookPrefix(projectId: string) {
 }
 
 export function assertTemporaryWorkbookPath(pathname: string, projectId: string) {
+  const extension = pathname.toLowerCase().match(/\.(xlsx|pdf)$/)?.[1];
   if (
     !pathname.startsWith(temporaryWorkbookPrefix(projectId)) ||
-    !pathname.toLowerCase().endsWith(".xlsx") ||
+    !extension ||
     pathname.includes("..")
   ) {
     throw new TemporaryWorkbookError("The temporary workbook reference is invalid.");
@@ -85,7 +96,11 @@ async function deleteWithRetry(pathname: string, storage: TemporaryWorkbookStora
 export async function consumeTemporaryWorkbook<T>(input: {
   pathname: string;
   projectId: string;
-  run: (workbook: { bytes: Uint8Array; filename: string }) => Promise<T>;
+  run: (workbook: {
+    bytes: Uint8Array;
+    filename: string;
+    sourceKind: "xlsx" | "pdf";
+  }) => Promise<T>;
   /** Test seam; production always uses the private Blob store. */
   storage?: TemporaryWorkbookStorage;
   /** Test seam; production uses the durable database claim. */
@@ -102,12 +117,19 @@ export async function consumeTemporaryWorkbook<T>(input: {
 
   try {
     const metadata = await storage.head(input.pathname);
+    const sourceKind = input.pathname.toLowerCase().endsWith(".pdf") ? "pdf" : "xlsx";
     if (metadata.size === 0) throw new TemporaryWorkbookError("The workbook is empty.");
-    if (metadata.size > MAX_AI_WORKBOOK_BYTES) {
-      throw new TemporaryWorkbookError("The workbook exceeds the 50 MB upload limit.");
+    const maximumBytes = maximumTemporaryWorkbookBytes(input.pathname);
+    if (metadata.size > maximumBytes) {
+      throw new TemporaryWorkbookError(
+        sourceKind === "pdf"
+          ? "The PDF exceeds the 50 MB upload limit."
+          : "The workbook exceeds the 50 MB upload limit.",
+      );
     }
-    if (metadata.contentType !== XLSX_CONTENT_TYPE) {
-      throw new TemporaryWorkbookError("Only .xlsx workbooks are supported.");
+    const expectedContentType = sourceKind === "pdf" ? PDF_CONTENT_TYPE : XLSX_CONTENT_TYPE;
+    if (metadata.contentType !== expectedContentType) {
+      throw new TemporaryWorkbookError("The upload type does not match its file extension.");
     }
 
     const downloaded = await storage.get(input.pathname);
@@ -118,13 +140,22 @@ export async function consumeTemporaryWorkbook<T>(input: {
     if (bytes.byteLength !== metadata.size) {
       throw new TemporaryWorkbookError("The temporary workbook download was incomplete.");
     }
-    const filename = metadata.contentDisposition.match(/filename="([^"]+)"/)?.[1] ?? "workbook.xlsx";
+    const matchesDeclaredType =
+      sourceKind === "pdf"
+        ? new TextDecoder().decode(bytes.subarray(0, 5)) === "%PDF-"
+        : bytes[0] === 0x50 && bytes[1] === 0x4b;
+    if (!matchesDeclaredType) {
+      throw new TemporaryWorkbookError("The upload contents do not match its file extension.");
+    }
+    const filename =
+      metadata.contentDisposition.match(/filename="([^"]+)"/)?.[1] ??
+      (sourceKind === "pdf" ? "document.pdf" : "workbook.xlsx");
     // Delete before calling application code. The bytes are already private in
     // this invocation, and no irreversible database write should happen while
     // a recoverable storage copy still exists.
     await deleteWithRetry(input.pathname, storage);
     deleted = true;
-    outcome = await input.run({ bytes, filename });
+    outcome = await input.run({ bytes, filename, sourceKind });
   } catch (error) {
     processingError = error;
   }
@@ -195,4 +226,4 @@ export async function purgeExpiredTemporaryWorkbooks(now = Date.now()) {
   return deleted;
 }
 
-export { XLSX_CONTENT_TYPE };
+export { PDF_CONTENT_TYPE, XLSX_CONTENT_TYPE };

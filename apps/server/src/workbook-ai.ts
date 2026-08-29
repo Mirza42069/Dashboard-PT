@@ -63,6 +63,8 @@ export async function interpretWorkbook(
       providerOptions: {
         gateway: {
           only: ["azure"],
+          disallowPromptTraining: true,
+          ...(env.AI_GATEWAY_ZERO_DATA_RETENTION ? { zeroDataRetention: true } : {}),
         },
       },
       output: Output.object({

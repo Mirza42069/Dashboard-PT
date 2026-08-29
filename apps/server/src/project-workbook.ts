@@ -9,6 +9,7 @@ import {
   PeriodRangeError,
 } from "@DashboardV2/api/lib/periods";
 import { PERIOD_TYPES } from "@DashboardV2/db/schema";
+import type ExcelJS from "exceljs";
 import { z } from "zod";
 
 import {
@@ -22,11 +23,19 @@ import {
   parseRows,
   readCell,
 } from "./boq-import-parse";
+import {
+  extractProjectPdf,
+  pdfExtractionDigest,
+  pdfExtractionSchema,
+  validateProjectPdf,
+  type PdfExtraction,
+} from "./project-pdf";
 
 const workbookRow = z.number().int().positive().max(MAX_WORKBOOK_ROWS);
 const workbookColumn = z.number().int().positive().max(MAX_WORKBOOK_COLUMNS);
 
 const fieldsSchema = z.object({
+  code: workbookColumn.optional(),
   description: workbookColumn,
   unit: workbookColumn.optional(),
   quantity: workbookColumn.optional(),
@@ -42,7 +51,7 @@ export const workbookPlanSchema = z
     version: z.literal(2),
     fileHash: z.string().regex(/^[a-f0-9]{64}$/),
     analysisSignature: z.string().regex(/^[a-f0-9]{64}$/),
-    profile: z.enum(["reference-s-curve", "generic-ai", "generic-deterministic"]),
+    profile: z.enum(["reference-s-curve", "generic-ai", "generic-deterministic", "pdf-ai"]),
     sheetName: z.string().min(1).max(100),
     headerRow: workbookRow,
     dataStartRow: workbookRow,
@@ -92,6 +101,14 @@ export const workbookPlanSchema = z
     periodCount: z.number().int().min(0).max(600),
     confidence: z.enum(["high", "medium", "low"]),
     warnings: z.array(z.string().max(300)).max(20),
+    pdf: z
+      .object({
+        pageCount: z.number().int().positive().max(25),
+        extractionDigest: z.string().regex(/^[a-f0-9]{64}$/),
+        extraction: pdfExtractionSchema,
+      })
+      .nullable()
+      .default(null),
   })
   .refine((plan) => plan.dataStartRow > plan.headerRow, {
     message: "The first data row must follow the header row.",
@@ -116,6 +133,13 @@ export const workbookPlanSchema = z
     const excludedRows = new Set(plan.excludedRows);
     const userExcludedRows = new Set(plan.userExcludedRows);
     const mandatoryExcludedRows = new Set(plan.mandatoryExcludedRows);
+    if ((plan.profile === "pdf-ai") !== (plan.pdf !== null)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "The PDF extraction does not match the import profile.",
+        path: ["pdf"],
+      });
+    }
     if (plan.profile !== "reference-s-curve" && plan.actualCurve !== null) {
       ctx.addIssue({
         code: "custom",
@@ -221,17 +245,23 @@ export type WorkbookAnalysis = {
   actualSnapshots: ParsedActualSnapshot[];
   rowPreview: {
     row: number;
+    sourcePage?: number;
+    sourceTable?: string;
+    sourceRow?: number;
     description: string;
     kind: "item" | "section" | "excluded";
     parentRow: number | null;
     code: string | null;
+    sourceCode?: string | null;
     unit: string | null;
     quantity: number | null;
     unitRate: number | null;
+    amount: number | null;
     weight: number | null;
     startPeriodIndex: number | null;
     finishPeriodIndex: number | null;
   }[];
+  pdfActualPreview?: PdfExtraction["actualSnapshots"];
   summary: {
     sectionCount: number;
     lineCount: number;
@@ -251,6 +281,7 @@ export type ParsedActualSnapshot = {
   sourceRow: number;
   sourceColumn: number;
   sourceValue: string;
+  sourceLabel?: string;
 };
 
 export type WorkbookSheetCandidate = {
@@ -346,6 +377,7 @@ type WorkbookPlanIdentity = {
   headerRow: number;
   dataStartRow: number;
   dataEndRow: number;
+  pdfExtractionDigest?: string;
 };
 
 export function workbookPlanIdentitySignature(identity: WorkbookPlanIdentity) {
@@ -367,6 +399,7 @@ function hasValidPlanIdentity(plan: WorkbookPlan) {
       headerRow: plan.headerRow,
       dataStartRow: plan.dataStartRow,
       dataEndRow: plan.dataEndRow,
+      ...(plan.pdf ? { pdfExtractionDigest: plan.pdf.extractionDigest } : {}),
     }),
     "hex",
   );
@@ -401,10 +434,57 @@ function assertPeriodCapacity(periodCount: number) {
   }
 }
 
+function indonesianCurveSummaryBounds(
+  sheet: Awaited<ReturnType<typeof loadWorkbook>>["worksheets"][number],
+) {
+  if (!/^kurva[ -]?s$/i.test(sheet.name.trim())) return null;
+  if (!cellValue(sheet.getCell("A1").value).toUpperCase().includes("SCHEDULE S CURVE")) {
+    return null;
+  }
+
+  let actualRow = 0;
+  let plannedRow = 0;
+  for (let row = 1; row <= sheet.rowCount; row++) {
+    const label = cellValue(sheet.getRow(row).getCell(4).value).trim().toUpperCase();
+    if (label === "PROGRES RENCANA (%)") plannedRow = row;
+    if (label === "AKUMULASI PROGRES ACTUAL (%)") actualRow = row;
+  }
+  if (plannedRow === 0 || actualRow === 0 || actualRow <= plannedRow) return null;
+
+  const headerRow = 9;
+  const periodColumns: { periodIndex: number; column: number }[] = [];
+  for (let column = 6; column <= sheet.columnCount; column++) {
+    const periodIndex = parseNumber(readCell(sheet.getRow(headerRow).getCell(column).value));
+    const expected = periodColumns.length + 1;
+    if (periodIndex === expected) {
+      periodColumns.push({ periodIndex, column });
+    } else if (periodColumns.length > 0) {
+      break;
+    }
+  }
+  if (periodColumns.length === 0) return null;
+
+  return {
+    layout: "indonesian-summary" as const,
+    headerRow,
+    titleRow: 4,
+    dataStartRow: headerRow + 1,
+    dataEndRow: plannedRow - 1,
+    periodColumns,
+    actualRow,
+    contractStartDate: null,
+    scheduleStartDate: null,
+    endDate: null,
+    mapping: { fields: { description: 3, weight: 5 } },
+    suggestedName: cellValue(sheet.getCell("A4").value).trim() || null,
+    suggestedLocation: cellValue(sheet.getCell("A5").value).trim() || null,
+  };
+}
+
 function referenceBounds(
   sheet: Awaited<ReturnType<typeof loadWorkbook>>["worksheets"][number],
 ) {
-  if (!/s[ -]?curve/i.test(sheet.name)) return null;
+  if (!/s[ -]?curve/i.test(sheet.name)) return indonesianCurveSummaryBounds(sheet);
   let headerRow = 0;
   let periodColumns: { periodIndex: number; column: number }[] = [];
   for (let row = 1; row <= Math.min(sheet.rowCount, 25); row++) {
@@ -481,6 +561,7 @@ function referenceBounds(
     }
   }
   return {
+    layout: "priced-reference" as const,
     headerRow,
     titleRow,
     dataStartRow: titleRow + 1,
@@ -490,6 +571,9 @@ function referenceBounds(
     contractStartDate,
     scheduleStartDate,
     endDate,
+    mapping: { fields: { description: 3, amount: 4, weight: 5, start: 6, finish: 7 } },
+    suggestedName: cellValue(sheet.getRow(titleRow).getCell(3).value).trim() || null,
+    suggestedLocation: null,
   };
 }
 
@@ -530,14 +614,23 @@ function referencePlan(
   for (const sheet of sheets) {
     const bounds = referenceBounds(sheet);
     if (!bounds) continue;
-    const { titleRow, dataStartRow, dataEndRow } = bounds;
+    const { dataStartRow, dataEndRow } = bounds;
     const sectionRows: number[] = [];
     let periodCount = bounds.periodColumns.at(-1)?.periodIndex ?? 0;
     for (let row = dataStartRow; row <= dataEndRow; row++) {
-      const text = cellValue(sheet.getRow(row).getCell(3).value).trim();
-      const rowAmount = parseNumber(readCell(sheet.getRow(row).getCell(4).value));
+      const descriptionColumn = bounds.mapping.fields.description;
+      const text = cellValue(sheet.getRow(row).getCell(descriptionColumn).value).trim();
+      const amountColumn =
+        "amount" in bounds.mapping.fields ? bounds.mapping.fields.amount : undefined;
+      const rowAmount = amountColumn
+        ? parseNumber(readCell(sheet.getRow(row).getCell(amountColumn).value))
+        : null;
       if (text && rowAmount === null) sectionRows.push(row);
-      const finish = parseNumber(readCell(sheet.getRow(row).getCell(7).value));
+      const finishColumn =
+        "finish" in bounds.mapping.fields ? bounds.mapping.fields.finish : undefined;
+      const finish = finishColumn
+        ? parseNumber(readCell(sheet.getRow(row).getCell(finishColumn).value))
+        : null;
       if (typeof finish === "number" && Number.isInteger(finish)) periodCount = Math.max(periodCount, finish);
     }
     assertPeriodCapacity(periodCount);
@@ -546,7 +639,7 @@ function referencePlan(
       dataEndRow,
       sectionRows,
       excludedRows: [],
-      descriptionColumn: 3,
+      descriptionColumn: bounds.mapping.fields.description,
     });
     const identity = {
       fileHash,
@@ -570,11 +663,11 @@ function referencePlan(
         bounds.actualRow && bounds.periodColumns.length > 0
           ? { sourceRow: bounds.actualRow, periodColumns: bounds.periodColumns }
           : null,
-      mapping: { fields: { description: 3, amount: 4, weight: 5, start: 6, finish: 7 } },
+      mapping: bounds.mapping,
       suggestedCode: null,
-      suggestedName: cellValue(sheet.getRow(titleRow).getCell(3).value).trim() || null,
+      suggestedName: bounds.suggestedName,
       suggestedClient: null,
-      suggestedLocation: null,
+      suggestedLocation: bounds.suggestedLocation,
       suggestedStartDate: bounds.contractStartDate,
       suggestedScheduleStartDate: bounds.scheduleStartDate,
       suggestedEndDate: bounds.endDate,
@@ -584,13 +677,16 @@ function referencePlan(
       confidence: "high",
       warnings: [
         "Roman numerals are sparse in this workbook, so stable BoQ codes will be generated.",
-        "Rows with JUMLAH are imported as lump-sum items (1 LS × JUMLAH).",
+        ...(bounds.layout === "priced-reference"
+          ? ["Rows with JUMLAH are imported as lump-sum items (1 LS × JUMLAH)."]
+          : ["This KURVA-S summary is suitable for progress updates; its item pricing is not present."]),
         ...(bounds.contractStartDate !== bounds.scheduleStartDate
           ? [
               "The first reporting period begins after the contract start, following the workbook's period-end dates.",
             ]
           : []),
       ],
+      pdf: null,
     };
   }
   return null;
@@ -711,6 +807,51 @@ function parseActualSnapshots(
   sheet: Awaited<ReturnType<typeof loadWorkbook>>["worksheets"][number],
   plan: WorkbookPlan,
 ) {
+  if (plan.profile === "pdf-ai" && plan.pdf) {
+    const snapshots: ParsedActualSnapshot[] = [];
+    const errors: { row: number; column: string | null; message: string }[] = [];
+    let previous = -1;
+    let previousPeriod = 0;
+    for (const snapshot of [...plan.pdf.extraction.actualSnapshots].sort(
+      (left, right) => left.periodIndex - right.periodIndex,
+    )) {
+      if (snapshot.periodIndex === previousPeriod) {
+        errors.push({
+          row: snapshot.sourceRow,
+          column: null,
+          message: `Actual cumulative progress has more than one value for period ${snapshot.periodIndex}.`,
+        });
+        continue;
+      }
+      if (snapshot.periodIndex > plan.periodCount) {
+        errors.push({
+          row: snapshot.sourceRow,
+          column: null,
+          message: `Actual cumulative progress period ${snapshot.periodIndex} exceeds the PDF schedule.`,
+        });
+        continue;
+      }
+      if (snapshot.cumulativePercent < previous) {
+        errors.push({
+          row: snapshot.sourceRow,
+          column: null,
+          message: `Actual cumulative progress decreases at period ${snapshot.periodIndex}.`,
+        });
+        break;
+      }
+      previousPeriod = snapshot.periodIndex;
+      previous = snapshot.cumulativePercent;
+      snapshots.push({
+        periodIndex: snapshot.periodIndex,
+        cumulativePercent: snapshot.cumulativePercent,
+        sourceRow: snapshot.sourceRow,
+        sourceColumn: 1,
+        sourceValue: snapshot.sourceValue,
+        sourceLabel: `PDF page ${snapshot.page}, ${snapshot.table}`,
+      });
+    }
+    return { snapshots, errors };
+  }
   if (!plan.actualCurve) return { snapshots: [], errors: [] };
   return parseActualSnapshotCells(
     sheet,
@@ -790,9 +931,7 @@ export function discoverProjectWorkbookSheets(
       actualSnapshotCount: actual.snapshots.length,
       latestActualPeriodIndex: latest?.periodIndex ?? null,
       latestActualPercent: latest?.cumulativePercent ?? null,
-      suggestedName: bounds
-        ? cellValue(sheet.getRow(bounds.titleRow).getCell(3).value).trim() || null
-        : null,
+      suggestedName: bounds?.suggestedName ?? null,
       suggestedStartDate: bounds?.contractStartDate ?? null,
       suggestedScheduleStartDate: bounds?.scheduleStartDate ?? null,
       suggestedEndDate: bounds?.endDate ?? null,
@@ -845,22 +984,157 @@ export function recommendProjectWorkbookSheet(
  * The steps this function passes through, in order.
  *
  * Reported rather than estimated: the caller cannot see inside a single
- * request, and the one step that dominates the wait — the model reading the
- * layout — is also the one a timer would guess worst. `interpreting` is
- * genuinely skipped for the reference template, which is recognised without
- * the model, so a progress bar driven by these never claims work that did not
- * happen.
+ * request, and provider work is also what a timer would guess worst. PDF
+ * parsing and model interpretation report separately; Excel skips parsing,
+ * while the reference template also skips interpretation.
  */
-export const ANALYSIS_STAGES = ["reading", "recognising", "interpreting", "building"] as const;
+export const ANALYSIS_STAGES = ["reading", "recognising", "parsing", "interpreting", "building"] as const;
 export type AnalysisStage = (typeof ANALYSIS_STAGES)[number];
+
+const PDF_SHEET_NAME = "PDF tables";
+const PDF_MAPPING = {
+  fields: {
+    code: 1,
+    description: 2,
+    unit: 3,
+    quantity: 4,
+    unitRate: 5,
+    amount: 6,
+    weight: 7,
+    start: 8,
+    finish: 9,
+  },
+} as const;
+
+async function pdfWorksheet(extraction: PdfExtraction) {
+  const { default: excel } = (await import("exceljs")) as unknown as {
+    default: typeof ExcelJS;
+  };
+  const workbook = new excel.Workbook();
+  const sheet = workbook.addWorksheet(PDF_SHEET_NAME);
+  sheet.addRow([
+    "Code",
+    "Description",
+    "Unit",
+    "Quantity",
+    "Unit rate",
+    "Amount",
+    "Weight",
+    "Start period",
+    "Finish period",
+  ]);
+  for (const [index, row] of extraction.rows.entries()) {
+    sheet.addRow([
+      row.code ?? `P${index + 1}`,
+      row.description,
+      row.unit,
+      row.quantity,
+      row.unitRate,
+      row.amount,
+      row.weight,
+      row.startPeriodIndex,
+      row.finishPeriodIndex,
+    ]);
+  }
+  return sheet;
+}
+
+function pdfRowNumbers(extraction: PdfExtraction, kind: PdfExtraction["rows"][number]["kind"]) {
+  return extraction.rows.flatMap((row, index) => (row.kind === kind ? [index + 2] : []));
+}
+
+function pdfParentAssignments(extraction: PdfExtraction) {
+  const assignments: { row: number; parentRow: number | null }[] = [];
+  let parentRow: number | null = null;
+  extraction.rows.forEach((row, index) => {
+    const workbookRow = index + 2;
+    if (row.kind === "section") parentRow = workbookRow;
+    else if (row.kind === "item") assignments.push({ row: workbookRow, parentRow });
+  });
+  return assignments;
+}
+
+function pdfSchedulePeriodCount(extraction: PdfExtraction) {
+  return Math.max(
+    0,
+    ...extraction.rows.map((row) => (row.kind === "item" ? (row.finishPeriodIndex ?? 0) : 0)),
+  );
+}
+
+async function analyzeProjectPdf(
+  bytes: Uint8Array,
+  filename: string,
+  onStage: (stage: AnalysisStage) => void,
+  onModelAnswer: () => void | Promise<void>,
+) {
+  const { pageCount } = await validateProjectPdf(bytes);
+  onStage("recognising");
+  onStage("parsing");
+  const extraction = await extractProjectPdf(bytes, filename, pageCount, {
+    onModelAnswer,
+    onParsed: () => onStage("interpreting"),
+  });
+  onStage("building");
+  const extractionDigest = pdfExtractionDigest(extraction);
+  const fileHash = hash(bytes);
+  const dataEndRow = extraction.rows.length + 1;
+  const mandatoryExcludedRows = pdfRowNumbers(extraction, "excluded");
+  const sectionRows = pdfRowNumbers(extraction, "section");
+  const periodCount = pdfSchedulePeriodCount(extraction);
+  assertPeriodCapacity(periodCount);
+  const identity = {
+    fileHash,
+    profile: "pdf-ai" as const,
+    sheetName: PDF_SHEET_NAME,
+    headerRow: 1,
+    dataStartRow: 2,
+    dataEndRow,
+    pdfExtractionDigest: extractionDigest,
+  };
+  const plan: WorkbookPlan = workbookPlanSchema.parse({
+    version: 2,
+    ...identity,
+    analysisSignature: workbookPlanIdentitySignature(identity),
+    sectionRows,
+    excludedRows: mandatoryExcludedRows,
+    mandatoryExcludedRows,
+    userExcludedRows: [],
+    parentAssignments: pdfParentAssignments(extraction),
+    actualCurve: null,
+    mapping: PDF_MAPPING,
+    suggestedCode: extraction.projectCode,
+    suggestedName: extraction.projectName,
+    suggestedClient: extraction.client,
+    suggestedLocation: extraction.location,
+    suggestedStartDate: extraction.startDate,
+    suggestedScheduleStartDate: extraction.scheduleStartDate ?? extraction.startDate,
+    suggestedEndDate: extraction.endDate,
+    periodType: extraction.periodType,
+    periodLengthDays: null,
+    periodCount,
+    confidence: extraction.confidence,
+    warnings: [
+      ...extraction.warnings,
+      "PDF text was parsed by Firecrawl and structured by AI. Review every imported row against the source document.",
+      "Rows without source codes receive deterministic import codes.",
+      "Amount-only rows import as 1 LS at the extracted amount.",
+    ],
+    pdf: { pageCount, extractionDigest, extraction },
+  });
+  return reviewProjectWorkbook(bytes, plan);
+}
 
 export async function analyzeProjectWorkbook(
   bytes: Uint8Array,
   onStage: (stage: AnalysisStage) => void = () => {},
   selectedSheetName?: string,
   onModelAnswer: () => void | Promise<void> = () => {},
+  filename = "workbook.xlsx",
 ): Promise<WorkbookAnalysis> {
   onStage("reading");
+  if (new TextDecoder().decode(bytes.subarray(0, 5)) === "%PDF-") {
+    return analyzeProjectPdf(bytes, filename, onStage, onModelAnswer);
+  }
   const workbook = await loadWorkbook(bytes);
   const explicitlySelected = selectedSheetName
     ? workbook.worksheets.find((sheet) => sheet.name === selectedSheetName)
@@ -991,6 +1265,7 @@ export async function analyzeProjectWorkbook(
       periodCount,
       confidence: interpreted?.confidence ?? "low",
       warnings: interpreted?.warnings ?? ["AI interpretation is unavailable. Review every mapping before importing."],
+      pdf: null,
     };
   }
 
@@ -1081,6 +1356,161 @@ function assertPlanCoordinates(
   }
 }
 
+async function reviewProjectPdf(bytes: Uint8Array, submittedPlan: WorkbookPlan) {
+  const pdf = submittedPlan.pdf;
+  if (!pdf) throw new ProjectWorkbookError("The PDF extraction is missing.", "invalid");
+  const validation = await validateProjectPdf(bytes);
+  if (validation.pageCount !== pdf.pageCount) {
+    throw new ProjectWorkbookError("The PDF page count changed after analysis.", "invalid");
+  }
+  if (
+    pdf.extraction.rows.some((row) => row.page > pdf.pageCount) ||
+    pdf.extraction.actualSnapshots.some((snapshot) => snapshot.page > pdf.pageCount) ||
+    Object.values(pdf.extraction.metadataSources).some(
+      (source) => source !== null && source.page > pdf.pageCount,
+    )
+  ) {
+    throw new ProjectWorkbookError("The PDF extraction references a page outside the document.", "invalid");
+  }
+  const extractionDigest = pdfExtractionDigest(pdf.extraction);
+  if (extractionDigest !== pdf.extractionDigest) {
+    throw new ProjectWorkbookError(
+      "The extracted PDF values changed after analysis. Analyze the PDF again.",
+      "invalid",
+    );
+  }
+  const expectedDataEndRow = pdf.extraction.rows.length + 1;
+  if (
+    submittedPlan.sheetName !== PDF_SHEET_NAME ||
+    submittedPlan.headerRow !== 1 ||
+    submittedPlan.dataStartRow !== 2 ||
+    submittedPlan.dataEndRow !== expectedDataEndRow ||
+    JSON.stringify(submittedPlan.mapping) !== JSON.stringify(PDF_MAPPING)
+  ) {
+    throw new ProjectWorkbookError("The PDF import scope was changed.", "invalid");
+  }
+
+  const mandatoryExcludedRows = pdfRowNumbers(pdf.extraction, "excluded");
+  const userExcludedRows = boundedRows(
+    submittedPlan.userExcludedRows,
+    2,
+    expectedDataEndRow,
+  ).filter((row) => !mandatoryExcludedRows.includes(row));
+  const excludedRows = boundedRows(
+    [...mandatoryExcludedRows, ...userExcludedRows],
+    2,
+    expectedDataEndRow,
+  );
+  const sectionRows = boundedRows(
+    submittedPlan.sectionRows,
+    2,
+    expectedDataEndRow,
+  ).filter((row) => !excludedRows.includes(row));
+  const periodCount = pdfSchedulePeriodCount(pdf.extraction);
+  assertPeriodCapacity(periodCount);
+  const plan = workbookPlanSchema.parse({
+    ...submittedPlan,
+    sectionRows,
+    excludedRows,
+    mandatoryExcludedRows,
+    userExcludedRows,
+    periodCount,
+    parentAssignments: submittedPlan.parentAssignments.filter(
+      (assignment) =>
+        assignment.row >= 2 &&
+        assignment.row <= expectedDataEndRow &&
+        !excludedRows.includes(assignment.row),
+    ),
+    suggestedCode: pdf.extraction.projectCode,
+    suggestedName: pdf.extraction.projectName,
+    suggestedClient: pdf.extraction.client,
+    suggestedLocation: pdf.extraction.location,
+    suggestedStartDate: pdf.extraction.startDate,
+    suggestedScheduleStartDate:
+      pdf.extraction.scheduleStartDate ?? pdf.extraction.startDate,
+    suggestedEndDate: pdf.extraction.endDate,
+    periodType: pdf.extraction.periodType,
+    confidence: pdf.extraction.confidence,
+    warnings: [
+      ...pdf.extraction.warnings,
+      "PDF text was parsed by Firecrawl and structured by AI. Review every imported row against the source document.",
+      "Rows without source codes receive deterministic import codes.",
+      "Amount-only rows import as 1 LS at the extracted amount.",
+    ],
+  });
+  const sheet = await pdfWorksheet(pdf.extraction);
+  const periods = Array.from({ length: Math.max(periodCount, 1) }, (_, index) => ({
+    periodIndex: index + 1,
+    startDate: "2000-01-01",
+    endDate: "2099-12-31",
+  }));
+  const parsed = parseRows(sheet, plan.headerRow, plan.mapping, periods, {
+    ...plan,
+    requirePricing: true,
+  });
+  const sectionSet = new Set(plan.sectionRows);
+  const excludedSet = new Set(plan.excludedRows);
+  const parentByRow = new Map(
+    plan.parentAssignments.map((assignment) => [assignment.row, assignment.parentRow]),
+  );
+  const sections = parsed.rows.filter((row) => sectionSet.has(row.row));
+  const lines = parsed.rows.filter((row) => !sectionSet.has(row.row));
+  const parsedByRow = new Map(parsed.rows.map((row) => [row.row, row]));
+  const rowPreview: WorkbookAnalysis["rowPreview"] = pdf.extraction.rows.map((source, index) => {
+    const row = index + 2;
+    const parsedRow = parsedByRow.get(row);
+    return {
+      row,
+      sourcePage: source.page,
+      sourceTable: source.table,
+      sourceRow: source.sourceRow,
+      description: source.description,
+      kind: excludedSet.has(row) ? "excluded" : sectionSet.has(row) ? "section" : "item",
+      parentRow: parentByRow.get(row) ?? null,
+      code: source.code,
+      sourceCode: source.code,
+      unit: source.unit,
+      quantity: source.quantity,
+      unitRate: source.unitRate,
+      amount: source.amount,
+      weight: parsedRow?.weight ?? source.weight,
+      startPeriodIndex: parsedRow?.start ?? source.startPeriodIndex,
+      finishPeriodIndex: parsedRow?.finish ?? source.finishPeriodIndex,
+    };
+  });
+  const actual = parseActualSnapshots(sheet, plan);
+  const validationErrors = [...parsed.errors, ...actual.errors];
+  if (lines.length === 0) {
+    validationErrors.push({
+      row: plan.dataStartRow,
+      column: null,
+      message: "Include at least one BoQ item before creating the draft.",
+    });
+  }
+
+  return {
+    plan,
+    columns: describeSheet(sheet, 1).columns,
+    actualSnapshots: actual.snapshots,
+    pdfActualPreview: pdf.extraction.actualSnapshots,
+    rowPreview,
+    summary: {
+      sectionCount: sections.length,
+      lineCount: lines.length,
+      scheduledCount: lines.filter((row) => row.start !== null && row.finish !== null).length,
+      totalAmount: lines.reduce(
+        (total, row) => total + (row.quantity ?? 0) * (row.unitRate ?? 0),
+        0,
+      ),
+      totalWeight: lines.reduce((total, row) => total + (row.weight ?? 0), 0),
+      actualSnapshotCount: actual.snapshots.length,
+      latestActualPercent: actual.snapshots.at(-1)?.cumulativePercent ?? null,
+      latestActualPeriodIndex: actual.snapshots.at(-1)?.periodIndex ?? null,
+      validationErrors: validationErrors.slice(0, 50),
+    },
+  } satisfies WorkbookAnalysis;
+}
+
 export async function reviewProjectWorkbook(
   bytes: Uint8Array,
   submittedPlan: WorkbookPlan,
@@ -1093,8 +1523,9 @@ export async function reviewProjectWorkbook(
     );
   }
   if (hash(bytes) !== parsedPlan.fileHash) {
-    throw new ProjectWorkbookError("The workbook changed after analysis.", "invalid");
+    throw new ProjectWorkbookError("The source file changed after analysis.", "invalid");
   }
+  if (parsedPlan.profile === "pdf-ai") return reviewProjectPdf(bytes, parsedPlan);
   const workbook = await loadWorkbook(bytes);
   const sheet = workbook.worksheets.find((candidate) => candidate.name === parsedPlan.sheetName);
   if (!sheet) {
@@ -1208,6 +1639,13 @@ export async function reviewProjectWorkbook(
       unit: parsedRow?.unit ?? null,
       quantity: parsedRow?.quantity ?? null,
       unitRate: parsedRow?.unitRate ?? null,
+      amount:
+        parsedRow?.quantity !== null &&
+        parsedRow?.quantity !== undefined &&
+        parsedRow.unitRate !== null &&
+        parsedRow.unitRate !== undefined
+          ? parsedRow.quantity * parsedRow.unitRate
+          : null,
       weight: parsedRow?.weight ?? null,
       startPeriodIndex: parsedRow?.start ?? null,
       finishPeriodIndex: parsedRow?.finish ?? null,
@@ -1308,12 +1746,27 @@ export async function validateWorkbookCalendar(
     );
   }
 
+  if (plan.profile === "pdf-ai" && plan.pdf) {
+    return { generated, sheet: await pdfWorksheet(plan.pdf.extraction) };
+  }
+
   const workbook = await loadWorkbook(bytes);
   const sheet = workbook.worksheets.find((candidate) => candidate.name === plan.sheetName);
   if (!sheet) throw new ProjectWorkbookError("The selected worksheet was not found.", "invalid");
   assertSafeRowScope(sheet, plan);
   if (plan.profile === "reference-s-curve") {
     const bounds = referenceBounds(sheet);
+    if (bounds?.layout === "indonesian-summary") {
+      if (project.periodType !== "weekly") {
+        throw new ProjectWorkbookError(
+          "The KURVA-S workbook uses weekly reporting periods.",
+          "invalid",
+          [],
+          "workbook_calendar_mismatch",
+        );
+      }
+      return { generated, sheet };
+    }
     if (
       !bounds?.contractStartDate ||
       !bounds.scheduleStartDate ||

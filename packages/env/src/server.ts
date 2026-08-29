@@ -52,6 +52,18 @@ export const env = createEnv({
     ADMIN_NAME: z.string().optional(),
     // Optional so unrelated API routes still boot when AI import is not configured.
     AI_GATEWAY_API_KEY: z.string().min(1).optional(),
+    // Firecrawl parses uploaded PDFs before the AI Gateway structures their tables.
+    FIRECRAWL_API_KEY: z.string().min(1).optional(),
+    FIRECRAWL_ZERO_DATA_RETENTION: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+    // Enable only after the Vercel team is on Pro or Enterprise. Hobby teams
+    // cannot request provider-side zero data retention through AI Gateway.
+    AI_GATEWAY_ZERO_DATA_RETENTION: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
     ACCOUNT_EMAIL_ENABLED: z
       .enum(["true", "false"])
       .default("false")

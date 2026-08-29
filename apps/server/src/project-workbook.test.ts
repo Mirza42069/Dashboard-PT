@@ -1,6 +1,7 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
 import ExcelJS from "exceljs";
 import { resolve } from "node:path";
+import { PDFDocument } from "pdf-lib";
 
 import {
   analyzeProjectWorkbook,
@@ -9,12 +10,14 @@ import {
   visibleProjectWorkbookSheets,
   prepareConfirmedWorkbook,
   reviewProjectWorkbook,
+  validateWorkbookCalendar,
   workbookSummary,
   workbookHash,
   workbookPlanIdentitySignature,
   workbookPlanSchema,
 } from "./project-workbook";
 import { loadWorkbook } from "./boq-import-parse";
+import { pdfExtractionDigest } from "./project-pdf";
 
 setDefaultTimeout(60_000);
 
@@ -90,6 +93,65 @@ test("workbook selection shows visible sheets and recommends the matching S-curv
       endDate: "2026-08-29",
     })?.sheetName,
   ).toBe("S CURVE (5)");
+});
+
+test("Indonesian KURVA-S summaries expose cumulative actual progress", async () => {
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet("COVER").getCell("A1").value = "LAPORAN PROGRES";
+  const sheet = workbook.addWorksheet("KURVA-S");
+  sheet.getCell("A1").value = "SCHEDULE S CURVE";
+  sheet.getCell("A4").value = "PROYEK PENGEMBANGAN GENERAL REPAIR";
+  sheet.getCell("A5").value = "BATAM - KEPULAUAN RIAU";
+  for (let periodIndex = 1; periodIndex <= 24; periodIndex++) {
+    sheet.getRow(9).getCell(periodIndex + 5).value = periodIndex;
+  }
+  sheet.getCell("D42").value = "PROGRES RENCANA (%)";
+  sheet.getCell("D43").value = "AKUMULASI PROGRES RENCANA (%)";
+  sheet.getCell("D44").value = "PROGRES ACTUAL (%)";
+  sheet.getCell("D45").value = "AKUMULASI PROGRES ACTUAL (%)";
+  sheet.getCell("F45").value = 0.04;
+  sheet.getCell("G45").value = 1.2;
+  sheet.getCell("H45").value = 1.38;
+  sheet.getCell("D46").value = "DEVIASI (%)";
+  const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+  const loaded = await loadWorkbook(bytes);
+  const candidates = discoverProjectWorkbookSheets(loaded);
+  const curve = candidates.find((candidate) => candidate.sheetName === "KURVA-S");
+
+  expect(curve).toMatchObject({
+    knownSCurve: true,
+    actualSnapshotCount: 3,
+    latestActualPeriodIndex: 3,
+    latestActualPercent: 1.38,
+  });
+  expect(recommendProjectWorkbookSheet(visibleProjectWorkbookSheets(candidates))?.sheetName).toBe(
+    "KURVA-S",
+  );
+
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
+  expect(analysis.plan).toMatchObject({
+    profile: "reference-s-curve",
+    periodCount: 24,
+    suggestedName: "PROYEK PENGEMBANGAN GENERAL REPAIR",
+    suggestedLocation: "BATAM - KEPULAUAN RIAU",
+  });
+  expect(analysis.actualSnapshots).toEqual([
+    expect.objectContaining({ periodIndex: 1, cumulativePercent: 0.04 }),
+    expect.objectContaining({ periodIndex: 2, cumulativePercent: 1.2 }),
+    expect.objectContaining({ periodIndex: 3, cumulativePercent: 1.38 }),
+  ]);
+  const calendar = await validateWorkbookCalendar(bytes, analysis.plan, {
+    code: "P-001",
+    name: "Project",
+    client: null,
+    location: null,
+    startDate: "2026-04-01",
+    scheduleStart: "2026-04-01",
+    endDate: "2026-09-15",
+    periodType: "weekly",
+    periodLengthDays: null,
+  });
+  expect(calendar.generated).toHaveLength(24);
 });
 
 test("missing project dates do not count as worksheet matches", () => {
@@ -275,6 +337,7 @@ test("a confirmed plan cannot reference data rows above its header", () => {
     periodCount: 0,
     confidence: "low",
     warnings: [],
+    pdf: null,
   });
 
   expect(result.success).toBe(false);
@@ -551,6 +614,7 @@ test("confirmation recomputes a tampered period count from the workbook", async 
     periodCount: 1,
     confidence: "low",
     warnings: [],
+    pdf: null,
   });
   let caught: unknown;
 
@@ -641,6 +705,7 @@ test("generic review includes trailing priced rows even when their description i
     periodCount: 1,
     confidence: "low",
     warnings: [],
+    pdf: null,
   });
 
   expect(reviewed.plan.dataEndRow).toBe(3);
@@ -696,4 +761,145 @@ test("AI review preserves signed table bounds and safe blank-description exclusi
   await expect(reviewProjectWorkbook(bytes, { ...plan, dataEndRow: 5 })).rejects.toThrow(
     "workbook identity changed",
   );
+});
+
+test("PDF review validates signed extracted values without another model call", async () => {
+  const document = await PDFDocument.create();
+  document.addPage();
+  const bytes = await document.save();
+  const extraction = {
+    projectCode: "PDF-1",
+    projectName: "PDF project",
+    client: null,
+    location: null,
+    startDate: "2026-01-01",
+    scheduleStartDate: "2026-01-01",
+    endDate: "2026-01-07",
+    periodType: "weekly" as const,
+    confidence: "high" as const,
+    warnings: [],
+    metadataSources: {
+      projectCode: { page: 1, table: "Project details", sourceRow: 1 },
+      projectName: { page: 1, table: "Project details", sourceRow: 1 },
+      client: null,
+      location: null,
+      startDate: { page: 1, table: "Project details", sourceRow: 2 },
+      scheduleStartDate: { page: 1, table: "Project details", sourceRow: 2 },
+      endDate: { page: 1, table: "Project details", sourceRow: 2 },
+      periodType: { page: 1, table: "Project details", sourceRow: 2 },
+    },
+    rows: [
+      {
+        page: 1,
+        table: "BoQ",
+        sourceRow: 2,
+        kind: "item" as const,
+        code: "1",
+        description: "Excavation",
+        unit: "m3",
+        quantity: 10,
+        unitRate: 20,
+        amount: 200,
+        weight: 100,
+        startPeriodIndex: 1,
+        finishPeriodIndex: 1,
+      },
+    ],
+    actualSnapshots: [],
+  };
+  const extractionDigest = pdfExtractionDigest(extraction);
+  const identity = {
+    fileHash: workbookHash(bytes),
+    profile: "pdf-ai" as const,
+    sheetName: "PDF tables",
+    headerRow: 1,
+    dataStartRow: 2,
+    dataEndRow: 2,
+    pdfExtractionDigest: extractionDigest,
+  };
+  const plan = workbookPlanSchema.parse({
+    version: 2,
+    ...identity,
+    analysisSignature: workbookPlanIdentitySignature(identity),
+    sectionRows: [],
+    excludedRows: [],
+    mandatoryExcludedRows: [],
+    userExcludedRows: [],
+    parentAssignments: [{ row: 2, parentRow: null }],
+    actualCurve: null,
+    mapping: {
+      fields: {
+        code: 1,
+        description: 2,
+        unit: 3,
+        quantity: 4,
+        unitRate: 5,
+        amount: 6,
+        weight: 7,
+        start: 8,
+        finish: 9,
+      },
+    },
+    suggestedCode: "PDF-1",
+    suggestedName: "PDF project",
+    suggestedClient: null,
+    suggestedLocation: null,
+    suggestedStartDate: "2026-01-01",
+    suggestedScheduleStartDate: "2026-01-01",
+    suggestedEndDate: "2026-01-07",
+    periodType: "weekly",
+    periodLengthDays: null,
+    periodCount: 1,
+    confidence: "high",
+    warnings: [],
+    pdf: { pageCount: 1, extractionDigest, extraction },
+  });
+
+  const reviewed = await reviewProjectWorkbook(bytes, plan);
+  expect(reviewed.summary).toMatchObject({ lineCount: 1, validationErrors: [] });
+  expect(reviewed.rowPreview[0]).toMatchObject({
+    sourcePage: 1,
+    sourceTable: "BoQ",
+    sourceRow: 2,
+    quantity: 10,
+  });
+
+  const extractionWithOutOfRangeActual = {
+    ...extraction,
+    actualSnapshots: [
+      {
+        page: 1,
+        table: "Actual progress",
+        sourceRow: 1,
+        periodIndex: 2,
+        cumulativePercent: 25,
+        sourceValue: "25%",
+      },
+    ],
+  };
+  const snapshotDigest = pdfExtractionDigest(extractionWithOutOfRangeActual);
+  const snapshotIdentity = { ...identity, pdfExtractionDigest: snapshotDigest };
+  const snapshotReview = await reviewProjectWorkbook(bytes, {
+    ...plan,
+    periodCount: 2,
+    analysisSignature: workbookPlanIdentitySignature(snapshotIdentity),
+    pdf: {
+      pageCount: 1,
+      extractionDigest: snapshotDigest,
+      extraction: extractionWithOutOfRangeActual,
+    },
+  });
+  expect(snapshotReview.plan.periodCount).toBe(1);
+  expect(snapshotReview.summary.validationErrors).toContainEqual(
+    expect.objectContaining({ message: expect.stringContaining("exceeds the PDF schedule") }),
+  );
+
+  const tampered = structuredClone(plan);
+  tampered.pdf!.extraction.rows[0]!.quantity = 11;
+  await expect(reviewProjectWorkbook(bytes, tampered)).rejects.toThrow(
+    "extracted PDF values changed",
+  );
+  await expect(
+    reviewProjectWorkbook(new Uint8Array([...bytes, 0]), plan),
+  ).rejects.toThrow("source file changed after analysis");
 });

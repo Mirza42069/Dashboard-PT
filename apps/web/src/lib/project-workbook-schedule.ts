@@ -33,7 +33,7 @@ type ScheduleAnswers = {
 };
 
 type SchedulePlan = {
-  profile: "reference-s-curve" | "generic-ai" | "generic-deterministic";
+  profile: "reference-s-curve" | "generic-ai" | "generic-deterministic" | "pdf-ai";
   periodCount: number;
   suggestedStartDate: string | null;
   suggestedScheduleStartDate: string | null;

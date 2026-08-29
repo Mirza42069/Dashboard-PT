@@ -70,14 +70,14 @@ const id = {
     duration: "Selesai",
   },
   ai: {
-    title: "Impor BoQ dari Excel.",
-    body: "AI membaca tata letak workbook Anda, lalu menyusun draft baseline.",
+    title: "Impor BoQ dari Excel atau PDF.",
+    body: "AI membaca tata letak sumber Anda, lalu menyusun draft baseline.",
     bullets: [
-      ["Membaca format, bukan mengisi angka", "Semua angka tetap dari workbook Anda."],
+      ["Membaca format, bukan mengisi angka", "Semua angka tetap dari sumber Anda."],
       ["Anda menyetujui dulu", "Pemetaan kolom ditinjau sebelum baseline dibuat."],
-      ["Ada cadangan deterministik", "Bila AI ragu, pembacaan berbasis aturan mengambil alih."],
+      ["Cadangan untuk Excel", "Bila AI ragu, pembacaan Excel berbasis aturan mengambil alih."],
     ],
-    note: ".xlsx hingga 50 MB. AI membaca sampel sel; salinan sementara dihapus permanen setelah diproses.",
+    note: "Berkas .xlsx dan PDF maksimal 50 MB.",
   },
   attention: {
     title: "Mulai dari yang bermasalah.",
@@ -257,14 +257,14 @@ const en: Content = {
     duration: "Done",
   },
   ai: {
-    title: "Import your BoQ from Excel.",
-    body: "AI reads your workbook layout, then drafts the baseline.",
+    title: "Import your BoQ from Excel or PDF.",
+    body: "AI reads your source layout, then drafts the baseline.",
     bullets: [
-      ["Reads format, not figures", "Every number still comes from your workbook."],
+      ["Reads format, not figures", "Every number still comes from your source."],
       ["You approve first", "You review the column mapping before any baseline is created."],
-      ["Deterministic fallback", "If AI is unsure, rule-based parsing takes over."],
+      ["Excel fallback", "If AI is unsure, rule-based Excel parsing takes over."],
     ],
-    note: ".xlsx up to 50 MB. AI reads sample cells; the temporary copy is permanently deleted after processing.",
+    note: ".xlsx and PDF up to 50 MB.",
   },
   attention: {
     title: "Start with what is off track.",

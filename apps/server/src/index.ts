@@ -14,7 +14,6 @@ import {
   verifyPasswordSetupToken,
 } from "@DashboardV2/auth";
 import { projectAccessFilter, resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
-import { MAX_AI_WORKBOOK_BYTES } from "@DashboardV2/api/lib/workbook-limits";
 import { TRIAL_AI_EXHAUSTED, trialHasEnded } from "@DashboardV2/api/lib/trial";
 import { db } from "@DashboardV2/db";
 import {
@@ -47,10 +46,13 @@ import {
   assertTemporaryWorkbookPath,
   consumeTemporaryWorkbook,
   discardTemporaryWorkbook,
+  maximumTemporaryWorkbookBytes,
   purgeExpiredTemporaryWorkbooks,
   TemporaryWorkbookError,
+  PDF_CONTENT_TYPE,
   XLSX_CONTENT_TYPE,
 } from "./temporary-workbook";
+import { signWorkbookReviewState } from "./project-workbook-review";
 
 /**
  * Mirrors MAX_IMPORT_BYTES in ./boq-import, which cannot be imported here — that
@@ -513,6 +515,12 @@ function readUpload(
   return { bytes };
 }
 
+function importSourceKind(bytes: Uint8Array) {
+  if (new TextDecoder().decode(bytes.subarray(0, 5)) === "%PDF-") return "pdf" as const;
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b) return "xlsx" as const;
+  return null;
+}
+
 async function readWorkbookRequest(c: HonoRequestContext) {
   if ((c.req.header("content-type") ?? "").startsWith("application/json")) {
     try {
@@ -522,7 +530,12 @@ async function readWorkbookRequest(c: HonoRequestContext) {
       return await consumeTemporaryWorkbook({
         pathname: parsed.pathname,
         projectId: `project-import/${session.user.id}`,
-        run: async ({ bytes }) => ({ bytes, fields: parsed.body, filename: parsed.filename }),
+        run: async ({ bytes, sourceKind }) => ({
+          bytes,
+          fields: parsed.body,
+          filename: parsed.filename,
+          sourceKind,
+        }),
       });
     } catch (error) {
       if (error instanceof TemporaryWorkbookError) {
@@ -537,13 +550,16 @@ async function readWorkbookRequest(c: HonoRequestContext) {
       const decoded = decodeWorkbookTransport(new Uint8Array(await c.req.arrayBuffer()));
       const upload = readUpload(tFor(c.req.raw.headers), decoded.bytes);
       if ("error" in upload) return upload;
+      const sourceKind = importSourceKind(upload.bytes);
+      if (!sourceKind) return { error: "The uploaded project file type is invalid.", status: 400 as const };
       return {
         bytes: upload.bytes,
         fields: decoded.metadata,
+        sourceKind,
         filename:
           typeof decoded.metadata.filename === "string"
             ? decoded.metadata.filename
-            : "workbook.xlsx",
+            : sourceKind === "pdf" ? "document.pdf" : "workbook.xlsx",
       };
     } catch (error) {
       if (error instanceof WorkbookTransportError) {
@@ -558,7 +574,21 @@ async function readWorkbookRequest(c: HonoRequestContext) {
   if (!(file instanceof File)) return { error: tFor(c.req.raw.headers).upload.noWorkbook, status: 400 as const };
   const upload = readUpload(tFor(c.req.raw.headers), new Uint8Array(await file.arrayBuffer()));
   if ("error" in upload) return upload;
-  return { bytes: upload.bytes, fields: form, filename: file.name || "workbook.xlsx" };
+  const sourceKind = importSourceKind(upload.bytes);
+  const declaredKind = file.name.toLowerCase().endsWith(".pdf")
+    ? "pdf"
+    : file.name.toLowerCase().endsWith(".xlsx")
+      ? "xlsx"
+      : null;
+  if (!sourceKind || sourceKind !== declaredKind) {
+    return { error: "The upload contents do not match its file extension.", status: 400 as const };
+  }
+  return {
+    bytes: upload.bytes,
+    fields: form,
+    filename: file.name || "workbook.xlsx",
+    sourceKind,
+  };
 }
 
 function isPublicImportError(error: unknown) {
@@ -650,18 +680,35 @@ async function spendTrialAiCredit(userId: string) {
 
 /** Hands a credit back when the model was never reached. */
 async function settleTrialAiCredit(userId: string, chargeId: string, status: "spent" | "refunded") {
-  await db.execute(sql`
-    with settled as (
-      update ai_credit_refund
-      set status = ${status}, settled_at = now()
-      where id = ${chargeId} and user_id = ${userId} and status = 'pending'
-      returning user_id
-    )
-    update "user"
-    set trial_ai_credits = trial_ai_credits + case when ${status} = 'refunded' then 1 else 0 end
-    from settled
-    where "user".id = settled.user_id and "user".trial_ai_credits is not null
-  `);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await db.execute(sql`
+        with settled as (
+          update ai_credit_refund
+          set status = ${status}, settled_at = now()
+          where id = ${chargeId} and user_id = ${userId} and status = 'pending'
+          returning user_id
+        )
+        update "user"
+        set trial_ai_credits = trial_ai_credits + case when ${status} = 'refunded' then 1 else 0 end
+        from settled
+        where "user".id = settled.user_id and "user".trial_ai_credits is not null
+      `);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
+    }
+  }
+  // The request fails without returning its analysis. Cleanup later refunds
+  // the stale reservation, preferring the user over charging for no result.
+  throw lastError;
+}
+
+function providerImportStatus(error: unknown) {
+  if (!(error instanceof Error) || !("kind" in error) || error.kind !== "provider") return null;
+  return "code" in error && error.code === "pdf_provider_rate_limited" ? 429 as const : 503 as const;
 }
 
 function workbookUpdateBody(value: unknown) {
@@ -681,6 +728,7 @@ function workbookUpdateBody(value: unknown) {
 
 function workbookUpdateFailure(error: unknown) {
   const invalidRequest = isInvalidImportRequest(error);
+  const providerStatus = providerImportStatus(error);
   if (!isPublicImportError(error) && !invalidRequest) logUnexpectedImportError(error);
   const conflict =
     error instanceof Error && typeof error === "object" && "kind" in error && error.kind === "conflict";
@@ -695,9 +743,11 @@ function workbookUpdateFailure(error: unknown) {
           ? (error as { code?: string | null }).code
           : null,
     },
-    status: (conflict ? 409 : isPublicImportError(error) || invalidRequest ? 422 : 500) as
+    status: (conflict ? 409 : providerStatus ?? (isPublicImportError(error) || invalidRequest ? 422 : 500)) as
       | 409
+      | 429
       | 422
+      | 503
       | 500,
   };
 }
@@ -738,8 +788,8 @@ app.post("/projects/:id/workbook-update/upload", async (c) => {
           throw new TemporaryWorkbookError("The upload is not assigned to this project.");
         }
         return {
-          allowedContentTypes: [XLSX_CONTENT_TYPE],
-          maximumSizeInBytes: MAX_AI_WORKBOOK_BYTES,
+          allowedContentTypes: [XLSX_CONTENT_TYPE, PDF_CONTENT_TYPE],
+          maximumSizeInBytes: maximumTemporaryWorkbookBytes(pathname),
           addRandomSuffix: true,
           cacheControlMaxAge: 60,
           validUntil: Date.now() + 10 * 60 * 1000,
@@ -799,8 +849,8 @@ app.post("/project-import/upload", async (c) => {
         }
         assertTemporaryWorkbookPath(pathname, `project-import/${access.session.user.id}`);
         return {
-          allowedContentTypes: [XLSX_CONTENT_TYPE],
-          maximumSizeInBytes: MAX_AI_WORKBOOK_BYTES,
+          allowedContentTypes: [XLSX_CONTENT_TYPE, PDF_CONTENT_TYPE],
+          maximumSizeInBytes: maximumTemporaryWorkbookBytes(pathname),
           addRandomSuffix: true,
           cacheControlMaxAge: 60,
           validUntil: Date.now() + 10 * 60 * 1000,
@@ -846,7 +896,12 @@ app.post("/projects/:id/workbook-update/discover", async (c) => {
       await consumeTemporaryWorkbook({
         pathname: parsed.pathname,
         projectId: owner,
-        run: async ({ bytes }) => {
+        run: async ({ bytes, sourceKind }) => {
+          if (sourceKind === "pdf") {
+            const { validateProjectPdf } = await import("./project-pdf");
+            const { pageCount } = await validateProjectPdf(bytes);
+            return { kind: "pdf" as const, pageCount };
+          }
           const { loadWorkbook } = await import("./boq-import-parse");
           const {
             discoverProjectWorkbookSheets,
@@ -856,6 +911,7 @@ app.post("/projects/:id/workbook-update/discover", async (c) => {
           const workbook = await loadWorkbook(bytes);
           const sheets = visibleProjectWorkbookSheets(discoverProjectWorkbookSheets(workbook));
           return {
+            kind: "xlsx" as const,
             sheets,
             recommendedSheetName:
               recommendProjectWorkbookSheet(sheets, access.project)?.sheetName ?? null,
@@ -905,8 +961,9 @@ app.post("/projects/:id/workbook-update/analyze", async (c) => {
   };
 
   try {
+    const isPdf = parsed.pathname.toLowerCase().endsWith(".pdf");
     const selectedSheetName = parsed.body.selectedSheetName;
-    if (typeof selectedSheetName !== "string" || !selectedSheetName) {
+    if (!isPdf && (typeof selectedSheetName !== "string" || !selectedSheetName)) {
       await discardTemporaryWorkbook(parsed.pathname, owner);
       throw new TemporaryWorkbookError("Choose a worksheet to analyze.");
     }
@@ -938,15 +995,15 @@ app.post("/projects/:id/workbook-update/analyze", async (c) => {
     const analysis = await consumeTemporaryWorkbook({
       pathname: parsed.pathname,
       projectId: owner,
-      run: async ({ bytes }) => {
+      run: async ({ bytes, filename }) => {
         const { analyzeProjectWorkbook } = await import("./project-workbook");
-        return analyzeProjectWorkbook(bytes, undefined, selectedSheetName, async () => {
+        return analyzeProjectWorkbook(bytes, undefined, typeof selectedSheetName === "string" ? selectedSheetName : undefined, async () => {
+          spent = true;
+          settled = true;
           if (credit.charged) {
             await settleTrialAiCredit(access.session.user.id, credit.chargeId, "spent");
           }
-          spent = true;
-          settled = true;
-        });
+        }, filename);
       },
     });
     if (!settled) await refund();
@@ -963,26 +1020,34 @@ app.post("/projects/:id/workbook-update/analyze", async (c) => {
     const latestProgressUpdatedAt = progressReview.latestProgressUpdatedAt
       ? new Date(progressReview.latestProgressUpdatedAt).toISOString()
       : null;
+    const reviewState = {
+      project: {
+        code: currentProject.code,
+        name: currentProject.name,
+        client: currentProject.client,
+        location: currentProject.location,
+        startDate: currentProject.startDate,
+        scheduleStart: currentProject.scheduleStart,
+        endDate: currentProject.endDate,
+        periodType: currentProject.periodType,
+        periodLengthDays: currentProject.periodLengthDays,
+      },
+      existingActualSnapshots,
+      activeVersionId: progressReview.activeVersionId,
+      progressEntryCount: Number(progressReview.progressEntryCount),
+      latestProgressUpdatedAt,
+    };
     const reviewed = {
       ...analysis,
       currentProject,
       existingActualSnapshots,
       reviewState: {
-        project: {
-          code: currentProject.code,
-          name: currentProject.name,
-          client: currentProject.client,
-          location: currentProject.location,
-          startDate: currentProject.startDate,
-          scheduleStart: currentProject.scheduleStart,
-          endDate: currentProject.endDate,
-          periodType: currentProject.periodType,
-          periodLengthDays: currentProject.periodLengthDays,
-        },
-        existingActualSnapshots,
-        activeVersionId: progressReview.activeVersionId,
-        progressEntryCount: Number(progressReview.progressEntryCount),
-        latestProgressUpdatedAt,
+        ...reviewState,
+        signature: signWorkbookReviewState(
+          projectId,
+          analysis.plan.analysisSignature,
+          reviewState,
+        ),
       },
     };
     return c.json(
@@ -1011,9 +1076,10 @@ app.post("/projects/:id/workbook-update/commit", async (c) => {
             operation: tFor(c.req.raw.headers).enums.workbookOperation.updates,
           }) }, 429);
     }
+    const isPdf = parsed.pathname.toLowerCase().endsWith(".pdf");
     const selectedSheetName = parsed.body.selectedSheetName;
     const sections = parsed.body.sections;
-    if (typeof selectedSheetName !== "string" || !selectedSheetName) {
+    if (!isPdf && (typeof selectedSheetName !== "string" || !selectedSheetName)) {
       await discardTemporaryWorkbook(parsed.pathname, owner);
       throw new TemporaryWorkbookError("Choose a worksheet to import.");
     }
@@ -1048,7 +1114,7 @@ app.post("/projects/:id/workbook-update/commit", async (c) => {
           filename: parsed.filename,
           projectId,
           companyId: access.companyId,
-          selectedSheetName,
+          selectedSheetName: typeof selectedSheetName === "string" ? selectedSheetName : null,
           plan: parsed.body.plan,
           sections: requestedSections,
           reviewState: parsed.body.reviewState,
@@ -1104,6 +1170,11 @@ app.post("/project-import/discover", async (c) => {
   }
 
   try {
+    if (upload.sourceKind === "pdf") {
+      const { validateProjectPdf } = await import("./project-pdf");
+      const { pageCount } = await validateProjectPdf(upload.bytes);
+      return c.json({ kind: "pdf", pageCount });
+    }
     const { loadWorkbook } = await import("./boq-import-parse");
     const {
       discoverProjectWorkbookSheets,
@@ -1113,6 +1184,7 @@ app.post("/project-import/discover", async (c) => {
     const workbook = await loadWorkbook(upload.bytes);
     const sheets = visibleProjectWorkbookSheets(discoverProjectWorkbookSheets(workbook));
     return c.json({
+      kind: "xlsx",
       sheets,
       recommendedSheetName: recommendProjectWorkbookSheet(sheets)?.sheetName ?? null,
     });
@@ -1145,7 +1217,10 @@ app.post("/project-import/analyze", async (c) => {
           }) }, 429);
   }
   const selectedSheetName = upload.fields.selectedSheetName;
-  if (typeof selectedSheetName !== "string" || !selectedSheetName) {
+  if (
+    upload.sourceKind !== "pdf" &&
+    (typeof selectedSheetName !== "string" || !selectedSheetName)
+  ) {
     return c.json({ error: tFor(c.req.raw.headers).upload.chooseWorksheet }, 400);
   }
 
@@ -1179,13 +1254,13 @@ app.post("/project-import/analyze", async (c) => {
   /** Shared by both response shapes, so they cannot disagree about the outcome. */
   const run = async (onStage: (stage: string) => void) => {
     const { analyzeProjectWorkbook } = await import("./project-workbook");
-    const analysis = await analyzeProjectWorkbook(upload.bytes, onStage, selectedSheetName, async () => {
+    const analysis = await analyzeProjectWorkbook(upload.bytes, onStage, typeof selectedSheetName === "string" ? selectedSheetName : undefined, async () => {
+      spent = true;
+      settled = true;
       if (credit.charged) {
         await settleTrialAiCredit(access.session.user.id, credit.chargeId, "spent");
       }
-      spent = true;
-      settled = true;
-    });
+    }, upload.filename);
     if (!settled) {
       await handBackCredit();
       return analysis;
@@ -1200,6 +1275,7 @@ app.post("/project-import/analyze", async (c) => {
     await handBackCredit();
     const invalidRequest = isInvalidImportRequest(error);
     if (!isPublicImportError(error) && !invalidRequest) logUnexpectedImportError(error);
+    const providerStatus = providerImportStatus(error);
     return {
       body: {
         error:
@@ -1207,7 +1283,11 @@ app.post("/project-import/analyze", async (c) => {
             ? error.message
             : "The workbook could not be analyzed.",
       },
-      status: (isPublicImportError(error) ? 400 : 500) as 400 | 500,
+      status: (providerStatus ?? (isPublicImportError(error) ? 400 : 500)) as
+        | 400
+        | 429
+        | 500
+        | 503,
     };
   };
 
