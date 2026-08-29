@@ -172,6 +172,9 @@ export const en = {
     closeBeforeDelete: "Close this support request before deleting it",
     conversationClosed: "This conversation is closed",
     invalidTransition: "A {status} support request cannot be {action}.",
+    screenshotsInvalid: "One or more screenshots could not be verified. Remove them and try again.",
+    screenshotsTooLarge: "Screenshots must total 50 MB or less.",
+    screenshotRateLimited: "Too many screenshot uploads. Try again in a few minutes.",
   },
   upload: {
     photoTooLarge: "Photo exceeds the 4 MB upload limit",

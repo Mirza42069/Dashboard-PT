@@ -14,6 +14,12 @@ import {
   verifyPasswordSetupToken,
 } from "@DashboardV2/auth";
 import { projectAccessFilter, resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
+import {
+  MAX_SUPPORT_SCREENSHOT_BYTES,
+  SUPPORT_SCREENSHOT_CONTENT_TYPES,
+  canReadSupportScreenshot,
+  isOwnedSupportScreenshotPath,
+} from "@DashboardV2/api/lib/support-screenshots";
 import { TRIAL_AI_EXHAUSTED, trialHasEnded } from "@DashboardV2/api/lib/trial";
 import { db } from "@DashboardV2/db";
 import {
@@ -24,12 +30,14 @@ import {
   projectMember,
   projectNote,
   reportingPeriod,
+  supportAttachment,
+  supportRequest,
   user,
   workbookRequestLimit,
 } from "@DashboardV2/db/schema";
 import { env, trustedOrigins } from "@DashboardV2/env/server";
 import { trpcServer } from "@hono/trpc-server";
-import { del } from "@vercel/blob";
+import { del, get as getBlob } from "@vercel/blob";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { and, asc, eq, exists, sql } from "drizzle-orm";
 import { Hono, type Context as HonoRequestContext } from "hono";
@@ -52,6 +60,7 @@ import {
   PDF_CONTENT_TYPE,
   XLSX_CONTENT_TYPE,
 } from "./temporary-workbook";
+import { purgeAbandonedSupportScreenshots } from "./support-screenshot-storage";
 import { signWorkbookReviewState } from "./project-workbook-review";
 
 /**
@@ -207,6 +216,112 @@ async function resolveCompany(
     return { error: message, status: code === "FORBIDDEN" ? (403 as const) : (409 as const) };
   }
 }
+
+app.post("/support/screenshots/upload", async (c) => {
+  const blobToken = env.BLOB_READ_WRITE_TOKEN;
+  if (!blobToken) {
+    return c.json({ error: tFor(c.req.raw.headers).upload.notConfigured }, 503);
+  }
+
+  let body: HandleUploadBody;
+  try {
+    body = (await c.req.json()) as HandleUploadBody;
+  } catch {
+    return c.json({ error: tFor(c.req.raw.headers).upload.invalidRequest }, 400);
+  }
+
+  try {
+    const response = await handleUpload({
+      body,
+      request: c.req.raw,
+      token: blobToken,
+      onBeforeGenerateToken: async (pathname) => {
+        const session = await activeSession(c);
+        if (!session || roleOf(session.user) === "super_admin") {
+          throw new Error(tFor(c.req.raw.headers).auth.required);
+        }
+        if (!isOwnedSupportScreenshotPath(pathname, session.user.id)) {
+          throw new Error(tFor(c.req.raw.headers).support.screenshotsInvalid);
+        }
+        if (!(await consumeWorkbookRequestLimit(session.user.id, "support-screenshot-upload", 12))) {
+          throw new Error(tFor(c.req.raw.headers).support.screenshotRateLimited);
+        }
+        return {
+          allowedContentTypes: [...SUPPORT_SCREENSHOT_CONTENT_TYPES],
+          maximumSizeInBytes: MAX_SUPPORT_SCREENSHOT_BYTES,
+          addRandomSuffix: false,
+          cacheControlMaxAge: 60,
+          validUntil: Date.now() + 10 * 60 * 1000,
+          callbackUrl: `${env.CORS_ORIGIN}/api/support/screenshots/upload`,
+          tokenPayload: JSON.stringify({ userId: session.user.id }),
+        };
+      },
+      onUploadCompleted: async ({ blob, tokenPayload }) => {
+        try {
+          const payload = JSON.parse(tokenPayload ?? "") as { userId?: unknown };
+          if (
+            typeof payload.userId !== "string" ||
+            !isOwnedSupportScreenshotPath(blob.pathname, payload.userId)
+          ) {
+            throw new Error();
+          }
+        } catch {
+          await del(blob.pathname);
+          throw new Error("The completed support screenshot upload is invalid.");
+        }
+      },
+    });
+    return c.json(response);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : tFor(c.req.raw.headers).support.screenshotsInvalid },
+      400,
+    );
+  }
+});
+
+app.get("/support/screenshots/:id", async (c) => {
+  const session = await activeSession(c);
+  if (!session) return c.json({ error: "Unauthorized" }, 401);
+
+  const [record] = await db
+    .select({
+      pathname: supportAttachment.pathname,
+      filename: supportAttachment.filename,
+      contentType: supportAttachment.contentType,
+      requesterId: supportRequest.requesterId,
+    })
+    .from(supportAttachment)
+    .innerJoin(supportRequest, eq(supportRequest.id, supportAttachment.requestId))
+    .where(eq(supportAttachment.id, c.req.param("id")));
+  if (
+    !record ||
+    !canReadSupportScreenshot({
+      requesterId: record.requesterId,
+      userId: session.user.id,
+      canManageSupport: hasPermission(roleOf(session.user), "support:manage"),
+    })
+  ) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const blob = await getBlob(record.pathname, { access: "private", useCache: true });
+  if (!blob || blob.statusCode !== 200 || !blob.stream) {
+    return c.json({ error: "Not found" }, 404);
+  }
+  const filename = record.filename.replace(/["\r\n]/g, "_");
+  const asciiFilename = filename.replace(/[^\x20-\x7e]/g, "_");
+  return new Response(blob.stream, {
+    status: 200,
+    headers: {
+      "Content-Type": record.contentType,
+      "Content-Disposition": `inline; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      "Cache-Control": "private, no-store",
+      "Content-Security-Policy": "sandbox",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+});
 
 /**
  * Stores a note photo as bytes in Postgres. Reached from the browser as
@@ -1155,7 +1270,11 @@ app.get("/internal/temporary-workbooks/cleanup", async (c) => {
   if (!env.CRON_SECRET || c.req.header("authorization") !== `Bearer ${env.CRON_SECRET}`) {
     return c.json({ error: "Not found" }, 404);
   }
-  return c.json({ deleted: await purgeExpiredTemporaryWorkbooks() });
+  const [workbooks, screenshots] = await Promise.all([
+    purgeExpiredTemporaryWorkbooks(),
+    purgeAbandonedSupportScreenshots(),
+  ]);
+  return c.json({ deleted: workbooks + screenshots, workbooks, screenshots });
 });
 
 app.post("/project-import/discover", async (c) => {

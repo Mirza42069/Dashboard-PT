@@ -44,4 +44,22 @@ describe("client Blob upload token exchange", () => {
       ),
     ).rejects.toThrow("Temporary workbook uploads are not configured.");
   });
+
+  test("requests a multipart token when large uploads opt in", async () => {
+    let request: RequestInit | undefined;
+    const fetcher = async (_input: string | URL | Request, init?: RequestInit) => {
+      request = init;
+      return Response.json({ clientToken: "token" });
+    };
+
+    await requestClientUploadToken(
+      "/api/support/screenshots/upload",
+      "support-screenshots/user-1/shot.png",
+      undefined,
+      fetcher,
+      true,
+    );
+
+    expect(JSON.parse(String(request?.body)).payload.multipart).toBe(true);
+  });
 });

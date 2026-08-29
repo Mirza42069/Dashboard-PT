@@ -1,6 +1,5 @@
 "use client";
 
-import { Badge } from "@DashboardV2/ui/components/badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,8 +10,26 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@DashboardV2/ui/components/alert-dialog";
+import { Avatar, AvatarFallback } from "@DashboardV2/ui/components/avatar";
+import { Badge } from "@DashboardV2/ui/components/badge";
 import { Button } from "@DashboardV2/ui/components/button";
-import { Card } from "@DashboardV2/ui/components/card";
+import {
+  Empty,
+  EmptyContent,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@DashboardV2/ui/components/empty";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  CircleSlash,
+  Inbox,
+  Loader2,
+  SearchX,
+  Send,
+  Trash2,
+} from "@DashboardV2/ui/components/icons";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Label } from "@DashboardV2/ui/components/label";
 import {
@@ -22,32 +39,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@DashboardV2/ui/components/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@DashboardV2/ui/components/sheet";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Textarea } from "@DashboardV2/ui/components/textarea";
-import type { inferOutput } from "@trpc/tanstack-react-query";
+import { cn } from "@DashboardV2/ui/lib/utils";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Inbox, Loader2, SearchX, Send, Trash2 } from "@DashboardV2/ui/components/icons";
+import type { inferOutput } from "@trpc/tanstack-react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { QueryError } from "@/components/query-error";
 import { SupportTranscript } from "@/components/support-transcript";
 import { interpolate } from "@/i18n";
-import {
-  Empty,
-  EmptyContent,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@DashboardV2/ui/components/empty";
-
 import { useT } from "@/i18n/provider";
 import { toast } from "@/lib/toast";
 import { useDebounced } from "@/lib/use-debounced";
@@ -62,9 +63,6 @@ type SupportStatus = (typeof STATUSES)[number];
 type SupportRequest = inferOutput<typeof trpc.support.list>["requests"][number];
 
 function statusClass(status: SupportStatus) {
-  // Violet, not blue: blue is gone from the product, and an unanswered request
-  // is the "needs a person" state the mark's purple stands for elsewhere. Raw
-  // palette classes rather than tokens to match the three statuses below it.
   if (status === "new") {
     return "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300";
   }
@@ -75,6 +73,14 @@ function statusClass(status: SupportStatus) {
     return "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
   }
   return "border-border bg-muted text-muted-foreground";
+}
+
+function initials(name: string) {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  return words
+    .slice(0, 2)
+    .map((word) => word[0]?.toUpperCase())
+    .join("") || "?";
 }
 
 export default function SupportInbox() {
@@ -128,78 +134,81 @@ export default function SupportInbox() {
     inbox.fetchNextPage,
   ]);
 
+  function backToList() {
+    const previousId = selectedId;
+    setSelectedId(null);
+    requestAnimationFrame(() => document.getElementById(`support-request-${previousId}`)?.focus());
+  }
+
   return (
-    <>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <Input
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          maxLength={200}
-          placeholder={t.support.searchPlaceholder}
-          aria-label={t.support.searchLabel}
-          className="sm:max-w-sm"
-        />
-        <div className="flex items-center gap-2">
-          <Label htmlFor="support-status" className="sr-only">
-            {t.support.filterStatus}
-          </Label>
-          <Select
-            items={statusItems}
-            value={status}
-            onValueChange={(value) => setStatus((value ?? "all") as "all" | SupportStatus)}
-          >
-            <SelectTrigger
-              id="support-status"
-              className="w-full sm:w-40"
-              aria-label={t.support.filterStatus}
+    <div className="grid min-h-0 flex-1 overflow-hidden bg-card md:rounded-xl md:border md:shadow-sm lg:grid-cols-[21rem_minmax(0,1fr)]">
+      <section
+        aria-label={t.support.requestList}
+        className={cn(
+          "min-h-0 flex-col border-e bg-card",
+          selectedId ? "hidden lg:flex" : "flex",
+        )}
+      >
+        <div className="space-y-2 border-b p-3">
+          <h1 className="px-1 text-lg font-semibold tracking-tight">{t.support.inboxTitle}</h1>
+          <Input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            maxLength={200}
+            placeholder={t.support.searchPlaceholder}
+            aria-label={t.support.searchLabel}
+          />
+          <div className="flex items-center gap-2">
+            <Label htmlFor="support-status" className="sr-only">
+              {t.support.filterStatus}
+            </Label>
+            <Select
+              items={statusItems}
+              value={status}
+              onValueChange={(value) => setStatus((value ?? "all") as "all" | SupportStatus)}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="start">
-              {statusItems.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
+              <SelectTrigger id="support-status" className="min-w-0 flex-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="start">
+                {statusItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {hasFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearch("");
+                  setStatus("all");
+                }}
+              >
+                {t.common.clearFilters}
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {inbox.isPending && (
+            <div className="space-y-1 p-2" role="status" aria-label={t.support.loadingInbox}>
+              {Array.from({ length: 7 }, (_, index) => (
+                <Skeleton key={index} className="h-20 w-full" />
               ))}
-            </SelectContent>
-          </Select>
-          {hasFilters && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setSearch("");
-                setStatus("all");
-              }}
-            >
-              {t.common.clearFilters}
-            </Button>
+            </div>
           )}
-        </div>
-      </div>
 
-      {inbox.isPending && (
-        <div className="space-y-2" role="status" aria-label={t.support.loadingInbox}>
-          {Array.from({ length: 6 }, (_, index) => (
-            <Skeleton key={index} className="h-24 w-full" />
-          ))}
-        </div>
-      )}
+          {initialError && (
+            <QueryError error={inbox.error} onRetry={() => void inbox.refetch()} className="m-3" />
+          )}
 
-      {initialError && (
-        <QueryError error={inbox.error} onRetry={() => void inbox.refetch()} />
-      )}
-
-      {!inbox.isPending &&
-        !initialError &&
-        requests.length === 0 && (
-          /* Was a hand-rolled Card reimplementing Empty — the only empty
-             state in the product with an icon, and the only one not using the
-             component built for this. Now both, everywhere. Its two
-             descriptions were restatements of their own titles and are gone. */
-          <Card className="min-h-64">
-            <Empty className="flex-1">
+          {!inbox.isPending && !initialError && requests.length === 0 && (
+            <Empty className="min-h-64 border-0">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
                   {hasSearch || status !== "all" ? <SearchX /> : <Inbox />}
@@ -223,130 +232,153 @@ export default function SupportInbox() {
                 </EmptyContent>
               )}
             </Empty>
-          </Card>
-        )}
+          )}
 
-      {!initialError && requests.length > 0 && (
-        <div className="space-y-2" aria-label={t.support.requestList}>
-          {requests.map((request) => (
-            <RequestRow
-              key={request.id}
-              request={request}
-              formatDateTime={formatDateTime}
-              onOpen={() => setSelectedId(request.id)}
+          {!initialError && requests.length > 0 && (
+            <ul className="divide-y">
+              {requests.map((request) => (
+                <li key={request.id}>
+                  <RequestRow
+                    request={request}
+                    selected={selectedId === request.id}
+                    formatDateTime={formatDateTime}
+                    onOpen={() => setSelectedId(request.id)}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {inbox.isFetchNextPageError && (
+            <QueryError
+              error={inbox.error}
+              onRetry={() => void inbox.fetchNextPage()}
+              className="m-3"
             />
-          ))}
+          )}
+
+          {!initialError && !inbox.isFetchNextPageError && inbox.hasNextPage && (
+            <div ref={loadMoreRef} className="flex min-h-12 items-center justify-center" aria-live="polite">
+              {inbox.isFetchingNextPage && (
+                <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="animate-spin" />
+                  {t.support.loadingMore}
+                </span>
+              )}
+            </div>
+          )}
+
+          {!inbox.isPending && !initialError && !inbox.hasNextPage && requests.length > 0 && (
+            <p role="status" className="px-3 py-4 text-center text-xs text-muted-foreground">
+              {hasSearch
+                ? interpolate(t.support.searchComplete, { count: requests.length })
+                : t.support.endOfInbox}
+            </p>
+          )}
         </div>
-      )}
+      </section>
 
-      {inbox.isFetchNextPageError && (
-        <QueryError
-          error={inbox.error}
-          onRetry={() => void inbox.fetchNextPage()}
-          className="px-4 py-6"
-        />
-      )}
-
-      {!initialError &&
-        !inbox.isFetchNextPageError &&
-        inbox.hasNextPage && (
-          <div
-            ref={loadMoreRef}
-            className="flex min-h-12 items-center justify-center"
-            aria-live="polite"
-          >
-            {inbox.isFetchingNextPage && (
-              <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="animate-spin" />
-                {t.support.loadingMore}
-              </span>
-            )}
-          </div>
+      <section
+        aria-label={t.support.conversation}
+        className={cn("min-h-0 min-w-0 flex-col bg-muted/20", selectedId ? "flex" : "hidden lg:flex")}
+      >
+        {selectedId ? (
+          <RequestChat
+            selectedId={selectedId}
+            onBack={backToList}
+            onDeleted={() => setSelectedId(null)}
+          />
+        ) : (
+          <Empty className="flex-1 border-0">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Inbox />
+              </EmptyMedia>
+              <EmptyTitle>{t.support.selectConversation}</EmptyTitle>
+            </EmptyHeader>
+          </Empty>
         )}
-
-      {!inbox.isPending && !initialError && !inbox.hasNextPage && requests.length > 0 && (
-        <p role="status" className="py-3 text-center text-sm text-muted-foreground">
-          {hasSearch
-            ? interpolate(t.support.searchComplete, { count: requests.length })
-            : t.support.endOfInbox}
-        </p>
-      )}
-
-      <RequestSheet
-        selectedId={selectedId}
-        onOpenChange={(open) => !open && setSelectedId(null)}
-      />
-    </>
+      </section>
+    </div>
   );
 }
 
 function RequestRow({
   request,
+  selected,
   formatDateTime,
   onOpen,
 }: {
   request: SupportRequest;
+  selected: boolean;
   formatDateTime: (value: string | Date | null | undefined) => string;
   onOpen: () => void;
 }) {
   const t = useT();
   return (
     <button
+      id={`support-request-${request.id}`}
       type="button"
       onClick={onOpen}
-      className="grid w-full gap-3 rounded-lg border bg-card p-4 text-left transition-[background-color,border-color] hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none sm:grid-cols-[minmax(0,1fr)_auto]"
+      aria-current={selected ? "true" : undefined}
+      className={cn(
+        "flex w-full gap-3 p-3 text-start outline-none transition-colors hover:bg-muted/60 focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        selected && "bg-muted",
+      )}
     >
-      <div className="min-w-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <p className="truncate font-medium text-foreground">{request.subject}</p>
-          <Badge variant="outline" className={statusClass(request.status)}>
+      <Avatar size="lg" className="mt-0.5">
+        <AvatarFallback>{initials(request.requesterName)}</AvatarFallback>
+      </Avatar>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-sm font-semibold text-foreground">
+            {request.requesterName}
+          </span>
+          <time className="shrink-0 text-[0.6875rem] text-muted-foreground" dateTime={new Date(request.updatedAt).toISOString()}>
+            {formatDateTime(request.updatedAt)}
+          </time>
+        </span>
+        <span className="mt-0.5 flex min-w-0 items-center gap-2">
+          <span className="truncate text-xs font-medium text-foreground">{request.subject}</span>
+          <Badge variant="outline" className={cn("shrink-0 px-1.5 py-0 text-[0.625rem]", statusClass(request.status))}>
             {t.support.status[request.status]}
           </Badge>
-        </div>
-        <p className="mt-1 truncate text-sm text-muted-foreground">
-          {request.requesterName} · {request.companyName}
-        </p>
-        <p className="mt-2 line-clamp-1 text-sm text-muted-foreground">{request.message}</p>
-      </div>
-      <time
-        className="whitespace-nowrap text-xs text-muted-foreground"
-        dateTime={new Date(request.createdAt).toISOString()}
-      >
-        {formatDateTime(request.createdAt)}
-      </time>
+        </span>
+        <span className="mt-1 block truncate text-xs text-muted-foreground">
+          {request.companyName} · {request.message}
+        </span>
+      </span>
     </button>
   );
 }
 
-function RequestSheet({
+function RequestChat({
   selectedId,
-  onOpenChange,
+  onBack,
+  onDeleted,
 }: {
-  selectedId: string | null;
-  onOpenChange: (open: boolean) => void;
+  selectedId: string;
+  onBack: () => void;
+  onDeleted: () => void;
 }) {
   const t = useT();
   const { formatDateTime } = useFormat();
   const queryClient = useQueryClient();
   const replyRef = useRef<HTMLTextAreaElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const statusFocusRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const [reply, setReply] = useState("");
   const [replyError, setReplyError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const detail = useQuery({
-    ...trpc.support.get.queryOptions({ id: selectedId ?? "" }),
-    enabled: Boolean(selectedId),
+    ...trpc.support.get.queryOptions({ id: selectedId }),
     refetchInterval: POLL_INTERVAL_MS,
     refetchIntervalInBackground: false,
   });
-  // Faster than the list behind it: an open thread is the one place somebody is
-  // waiting for a message to appear.
   const thread = useQuery({
-    ...trpc.support.thread.queryOptions({ id: selectedId ?? "" }),
-    enabled: Boolean(selectedId),
+    ...trpc.support.thread.queryOptions({ id: selectedId }),
     refetchInterval: THREAD_POLL_MS,
     refetchIntervalInBackground: false,
   });
@@ -359,9 +391,18 @@ function RequestSheet({
     accept.isPending || sendReply.isPending || close.isPending || deleteRequestMutation.isPending;
 
   useEffect(() => {
-    if (request?.status === "accepted") replyRef.current?.focus();
-    else if (request?.status === "closed") statusFocusRef.current?.focus();
-  }, [request?.status]);
+    setReply("");
+    setReplyError(null);
+    setActionError(null);
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!request) return;
+    headingRef.current?.focus();
+    if (request.status === "accepted" && window.matchMedia("(min-width: 64rem)").matches) {
+      replyRef.current?.focus();
+    }
+  }, [request?.id, request?.status]);
 
   async function refresh() {
     await queryClient.invalidateQueries(trpc.support.pathFilter());
@@ -394,10 +435,13 @@ function RequestSheet({
       return;
     }
     const succeeded = await run(
-      () => sendReply.mutateAsync({ id: selectedId ?? "", reply: cleanReply }),
+      () => sendReply.mutateAsync({ id: selectedId, reply: cleanReply }),
       t.support.replySent,
     );
-    if (succeeded) setReply("");
+    if (succeeded) {
+      setReply("");
+      replyRef.current?.focus();
+    }
   }
 
   async function deleteRequest() {
@@ -407,258 +451,277 @@ function RequestSheet({
       await deleteRequestMutation.mutateAsync({ id: request.id });
       await refresh();
       setDeleteOpen(false);
-      onOpenChange(false);
       toast.success(t.support.requestDeleted);
+      onDeleted();
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : t.support.deleteRequestFailed);
     }
   }
 
+  if (detail.isPending) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col" role="status" aria-label={t.support.loadingRequest}>
+        <div className="flex items-center gap-3 border-b bg-card p-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="lg:hidden"
+            aria-label={t.support.backToConversations}
+            onClick={onBack}
+          >
+            <ArrowLeft />
+          </Button>
+          <Skeleton className="size-10 rounded-full" />
+          <Skeleton className="h-10 w-48" />
+        </div>
+        <div className="space-y-4 p-6">
+          <Skeleton className="h-20 w-2/3" />
+          <Skeleton className="ms-auto h-20 w-2/3" />
+        </div>
+      </div>
+    );
+  }
+
+  if (detail.isError || !request) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="border-b bg-card p-2 lg:hidden">
+          <Button type="button" variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeft />
+            {t.support.backToConversations}
+          </Button>
+        </div>
+        <QueryError error={detail.error} onRetry={() => void detail.refetch()} className="m-4" />
+      </div>
+    );
+  }
+
   return (
     <>
-    <Sheet
-      open={Boolean(selectedId)}
-      onOpenChange={(open) => {
-        if (!open && !actionPending) {
-          setReply("");
-          setReplyError(null);
-          setActionError(null);
-          onOpenChange(false);
-        }
-      }}
-    >
-      <SheetContent
-        side="right"
-        closeLabel={t.common.close}
-        showCloseButton={!actionPending}
-        className="w-full sm:max-w-xl"
-      >
-        {detail.isPending && (
-          <div
-            className="space-y-4 p-4"
-            role="status"
-            aria-label={t.support.loadingRequest}
+      <header className="flex min-w-0 items-center gap-3 border-b bg-card px-3 py-2.5">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="lg:hidden"
+          aria-label={t.support.backToConversations}
+          onClick={onBack}
+        >
+          <ArrowLeft />
+        </Button>
+        <Avatar size="lg">
+          <AvatarFallback>{initials(request.requesterName)}</AvatarFallback>
+        </Avatar>
+        <div className="min-w-0 flex-1">
+          <h2 ref={headingRef} tabIndex={-1} className="truncate text-sm font-semibold outline-none">
+            {request.requesterName}
+          </h2>
+          <p className="truncate text-xs text-muted-foreground">
+            {request.companyName} ({request.companyCode}) · {request.subject}
+          </p>
+        </div>
+        <Badge variant="outline" className={cn("hidden sm:inline-flex", statusClass(request.status))}>
+          {t.support.status[request.status]}
+        </Badge>
+        {(request.status === "accepted" || request.status === "answered") && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            className="sm:hidden"
+            aria-label={t.support.closeRequest}
+            disabled={actionPending}
+            onClick={() =>
+              void run(
+                () => close.mutateAsync({ id: request.id }),
+                t.support.requestClosed,
+              )
+            }
           >
-            <Skeleton className="h-6 w-2/3" />
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-40 w-full" />
-          </div>
+            {close.isPending ? <Loader2 className="animate-spin" /> : <CircleSlash />}
+          </Button>
         )}
-
-        {detail.isError && (
-          <div className="p-4">
-            <QueryError error={detail.error} onRetry={() => void detail.refetch()} />
-          </div>
-        )}
-
-        {request && (
-          <>
-            <SheetHeader className="border-b pr-12">
-              <div
-                ref={statusFocusRef}
-                tabIndex={-1}
-                aria-live="polite"
-                className="mb-1 flex flex-wrap items-center gap-2 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Badge variant="outline" className={statusClass(request.status)}>
-                  {t.support.status[request.status]}
-                </Badge>
-                <span className="text-xs text-muted-foreground">
-                  {formatDateTime(request.createdAt)}
-                </span>
-              </div>
-              <SheetTitle className="text-base">{request.subject}</SheetTitle>
-              <SheetDescription>
-                {request.requesterName} &lt;{request.requesterEmail}&gt;
-              </SheetDescription>
-            </SheetHeader>
-
-            <div className="flex-1 overflow-y-auto">
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 border-b px-4 py-3 text-xs">
-                <dt className="text-muted-foreground">{t.support.company}</dt>
-                <dd className="min-w-0 truncate text-foreground">
-                  {request.companyName} ({request.companyCode})
-                </dd>
-                <dt className="text-muted-foreground">{t.support.received}</dt>
-                <dd className="text-foreground">{formatDateTime(request.createdAt)}</dd>
-              </dl>
-
-              {/* The whole exchange, not just the opening and one reply. Each
-                  message carries its own author and time, so the "replied by"
-                  and "final reply" captions this replaced are now redundant. */}
-              <div className="px-4 py-6">
-                {thread.isError ? (
-                  <QueryError error={thread.error} onRetry={() => void thread.refetch()} />
-                ) : thread.isPending ? (
-                  <Skeleton className="h-40 w-full" />
-                ) : (
-                  <SupportTranscript
-                    opening={{
-                      body: request.message,
-                      authorName: request.requesterName,
-                      createdAt: request.createdAt,
-                    }}
-                    messages={thread.data}
-                    mine="support"
-                  />
-                )}
-              </div>
-
-              {request.acceptedAt && (
-                <div className="mx-4 mb-3 rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
-                  {interpolate(t.support.acceptedBy, {
-                    actor: request.acceptedByName ?? t.support.supportTeam,
-                    date: formatDateTime(request.acceptedAt),
-                  })}
-                </div>
-              )}
-
-              {request.closedAt && (
-                <div className="mx-4 mb-4 text-xs text-muted-foreground">
-                  {interpolate(t.support.closedBy, {
-                    actor: request.closedByName ?? t.support.supportTeam,
-                    date: formatDateTime(request.closedAt),
-                  })}
-                </div>
-              )}
-
-              {request.status !== "new" && request.status !== "closed" && (
-                <form
-                  className="space-y-3 border-t px-4 py-4"
-                  onSubmit={handleReply}
-                  aria-busy={sendReply.isPending}
-                  noValidate
-                >
-                  <div className="space-y-2">
-                    <Label htmlFor="support-final-reply">{t.support.finalReply}</Label>
-                    <Textarea
-                      ref={replyRef}
-                      id="support-final-reply"
-                      value={reply}
-                      onChange={(event) => {
-                        setReply(event.target.value);
-                        if (replyError) setReplyError(null);
-                      }}
-                      maxLength={10_000}
-                      className="min-h-32"
-                      placeholder={t.support.replyPlaceholder}
-                      aria-invalid={Boolean(replyError)}
-                      aria-describedby={replyError ? "support-final-reply-error" : undefined}
-                    />
-                    {replyError && (
-                      <p id="support-final-reply-error" className="text-xs text-destructive">
-                        {replyError}
-                      </p>
-                    )}
-                  </div>
-                  <Button type="submit" disabled={actionPending}>
-                    <Send />
-                    {sendReply.isPending ? t.support.replying : t.support.sendFinalReply}
-                  </Button>
-                </form>
-              )}
-
-              {actionError && (
-                <p role="alert" className="mx-4 mb-4 text-xs text-destructive">
-                  {actionError}
-                </p>
-              )}
-            </div>
-
-            {(request.status === "new" ||
-              request.status === "accepted" ||
-              request.status === "answered") && (
-              <SheetFooter className="border-t bg-card">
-                {request.status === "new" && (
-                  <Button
-                    onClick={() =>
-                      void run(
-                        () => accept.mutateAsync({ id: request.id }),
-                        t.support.requestAccepted,
-                      )
-                    }
-                    disabled={actionPending}
-                  >
-                    <CheckCircle2 />
-                    {accept.isPending ? t.support.accepting : t.support.acceptRequest}
-                  </Button>
-                )}
-                {(request.status === "accepted" || request.status === "answered") && (
-                  <Button
-                    ref={closeButtonRef}
-                    variant="outline"
-                    onClick={() =>
-                      void run(
-                        () => close.mutateAsync({ id: request.id }),
-                        t.support.requestClosed,
-                      )
-                    }
-                    disabled={actionPending}
-                  >
-                    {close.isPending ? t.support.closing : t.support.closeRequest}
-                  </Button>
-                )}
-              </SheetFooter>
-            )}
-            {request.status === "closed" && (
-              <SheetFooter className="border-t bg-card">
-                <Button
-                  variant="destructive"
-                  disabled={actionPending}
-                  onClick={() => {
-                    setDeleteError(null);
-                    setDeleteOpen(true);
-                  }}
-                >
-                  <Trash2 />
-                  {t.support.deleteRequest}
-                </Button>
-              </SheetFooter>
-            )}
-          </>
-        )}
-      </SheetContent>
-    </Sheet>
-    <AlertDialog
-      open={deleteOpen}
-      onOpenChange={(open) => {
-        if (!deleteRequestMutation.isPending) setDeleteOpen(open);
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{t.support.deleteRequestTitle}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {interpolate(t.support.deleteRequestDescription, {
-              subject: request?.subject ?? "",
-            })}
-          </AlertDialogDescription>
-          {deleteError && (
-            <p role="alert" className="text-sm text-destructive">
-              {deleteError}
-            </p>
-          )}
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel
-            render={<Button variant="outline" disabled={deleteRequestMutation.isPending} />}
+        {(request.status === "accepted" || request.status === "answered") && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="hidden sm:inline-flex"
+            disabled={actionPending}
+            onClick={() =>
+              void run(
+                () => close.mutateAsync({ id: request.id }),
+                t.support.requestClosed,
+              )
+            }
           >
-            {t.common.cancel}
-          </AlertDialogCancel>
-          <AlertDialogAction
-            render={<Button variant="destructive" disabled={deleteRequestMutation.isPending} />}
-            onClick={(event) => {
-              event.preventDefault();
-              void deleteRequest();
+            {close.isPending ? t.support.closing : t.support.closeRequest}
+          </Button>
+        )}
+        {request.status === "closed" && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            disabled={actionPending}
+            aria-label={t.support.deleteRequest}
+            onClick={() => {
+              setDeleteError(null);
+              setDeleteOpen(true);
             }}
           >
-            {deleteRequestMutation.isPending
-              ? t.support.deletingRequest
-              : t.support.deleteRequest}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+            <Trash2 />
+          </Button>
+        )}
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-5 sm:px-6">
+        {thread.isError ? (
+          <QueryError error={thread.error} onRetry={() => void thread.refetch()} />
+        ) : thread.isPending ? (
+          <div className="space-y-4">
+            <Skeleton className="h-20 w-2/3" />
+            <Skeleton className="ms-auto h-20 w-2/3" />
+          </div>
+        ) : (
+          <SupportTranscript
+            opening={{
+              body: request.message,
+              authorName: request.requesterName,
+              createdAt: request.createdAt,
+              attachments: request.attachments,
+            }}
+            messages={thread.data}
+            events={[
+              ...(request.acceptedAt
+                ? [
+                    {
+                      id: "accepted",
+                      createdAt: request.acceptedAt,
+                      label: interpolate(t.support.acceptedBy, {
+                        actor: request.acceptedByName ?? t.support.supportTeam,
+                        date: formatDateTime(request.acceptedAt),
+                      }),
+                    },
+                  ]
+                : []),
+              ...(request.closedAt
+                ? [
+                    {
+                      id: "closed",
+                      createdAt: request.closedAt,
+                      label: interpolate(t.support.closedBy, {
+                        actor: request.closedByName ?? t.support.supportTeam,
+                        date: formatDateTime(request.closedAt),
+                      }),
+                    },
+                  ]
+                : []),
+            ]}
+            mine="support"
+          />
+        )}
+      </div>
+
+      {actionError && (
+        <p role="alert" className="border-t bg-destructive/5 px-4 py-2 text-xs text-destructive">
+          {actionError}
+        </p>
+      )}
+
+      {request.status === "new" && (
+        <div className="flex items-center justify-between gap-3 border-t bg-card px-4 py-3">
+          <p className="text-sm text-muted-foreground">{t.support.status.new}</p>
+          <Button
+            type="button"
+            disabled={actionPending}
+            onClick={() =>
+              void run(
+                () => accept.mutateAsync({ id: request.id }),
+                t.support.requestAccepted,
+              )
+            }
+          >
+            <CheckCircle2 />
+            {accept.isPending ? t.support.accepting : t.support.acceptRequest}
+          </Button>
+        </div>
+      )}
+
+      {(request.status === "accepted" || request.status === "answered") && (
+        <form className="border-t bg-card p-3" onSubmit={handleReply} aria-busy={sendReply.isPending} noValidate>
+          <Label htmlFor="support-chat-reply" className="sr-only">
+            {t.support.finalReply}
+          </Label>
+          <div className="flex items-end gap-2">
+            <Textarea
+              ref={replyRef}
+              id="support-chat-reply"
+              value={reply}
+              onChange={(event) => {
+                setReply(event.target.value);
+                if (replyError) setReplyError(null);
+              }}
+              maxLength={10_000}
+              rows={2}
+              className="min-h-0 flex-1 resize-none"
+              placeholder={t.support.replyPlaceholder}
+              aria-invalid={Boolean(replyError)}
+              aria-describedby={replyError ? "support-chat-reply-error" : undefined}
+            />
+            <Button type="submit" size="icon" disabled={actionPending} aria-label={t.support.sendFinalReply}>
+              {sendReply.isPending ? <Loader2 className="animate-spin" /> : <Send />}
+            </Button>
+          </div>
+          {replyError && (
+            <p id="support-chat-reply-error" className="mt-2 text-xs text-destructive">
+              {replyError}
+            </p>
+          )}
+        </form>
+      )}
+
+      {request.status === "closed" && (
+        <div className="border-t bg-card px-4 py-3 text-center text-sm text-muted-foreground">
+          {t.support.threadClosed}
+        </div>
+      )}
+
+      <AlertDialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          if (!deleteRequestMutation.isPending) setDeleteOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.support.deleteRequestTitle}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {interpolate(t.support.deleteRequestDescription, { subject: request.subject })}
+            </AlertDialogDescription>
+            {deleteError && (
+              <p role="alert" className="text-sm text-destructive">
+                {deleteError}
+              </p>
+            )}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel render={<Button variant="outline" disabled={deleteRequestMutation.isPending} />}>
+              {t.common.cancel}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              render={<Button variant="destructive" disabled={deleteRequestMutation.isPending} />}
+              onClick={(event) => {
+                event.preventDefault();
+                void deleteRequest();
+              }}
+            >
+              {deleteRequestMutation.isPending ? t.support.deletingRequest : t.support.deleteRequest}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

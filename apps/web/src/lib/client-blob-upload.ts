@@ -18,7 +18,7 @@ function errorMessage(body: TokenResponse | null) {
   ) {
     return body.error.message;
   }
-  return "The workbook upload could not be started. Sign in again and retry.";
+  return "The upload could not be started. Sign in again and retry.";
 }
 
 /** Exchanges the signed-in browser session for a short-lived, path-scoped Blob token. */
@@ -27,6 +27,7 @@ export async function requestClientUploadToken(
   pathname: string,
   clientPayload?: Record<string, unknown>,
   fetcher: Fetcher = fetch,
+  multipart = false,
 ) {
   const response = await fetcher(handleUploadUrl, {
     method: "POST",
@@ -37,7 +38,7 @@ export async function requestClientUploadToken(
       payload: {
         pathname,
         clientPayload: clientPayload ? JSON.stringify(clientPayload) : null,
-        multipart: false,
+        multipart,
       },
     }),
   });
@@ -61,13 +62,21 @@ export async function uploadPrivateBlob({
   handleUploadUrl,
   clientPayload,
   contentType,
+  multipart = false,
 }: {
   pathname: string;
   file: File;
   handleUploadUrl: string;
   clientPayload?: Record<string, unknown>;
   contentType: string;
+  multipart?: boolean;
 }): Promise<PutBlobResult> {
-  const token = await requestClientUploadToken(handleUploadUrl, pathname, clientPayload);
-  return put(pathname, file, { access: "private", contentType, token });
+  const token = await requestClientUploadToken(
+    handleUploadUrl,
+    pathname,
+    clientPayload,
+    fetch,
+    multipart,
+  );
+  return put(pathname, file, { access: "private", contentType, token, multipart });
 }

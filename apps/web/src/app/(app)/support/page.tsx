@@ -34,7 +34,7 @@ export default async function MySupportPage() {
           <h1 className="text-xl font-semibold tracking-tight">{dict.support.myRequests}</h1>
           <p className="text-sm text-muted-foreground">{dict.support.myRequestsDescription}</p>
         </div>
-        <SupportThreads />
+        <SupportThreads currentUserId={session.user.id} />
       </div>
     </HydrateClient>
   );

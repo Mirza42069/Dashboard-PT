@@ -32,7 +32,7 @@ const THREAD_POLL_MS = 10_000;
  * would add a control that never earns its place — and keeping the thread in the
  * same view means sending a message does not navigate.
  */
-export default function SupportThreads() {
+export default function SupportThreads({ currentUserId }: { currentUserId: string }) {
   const t = useT();
   const { formatDateTime } = useFormat();
   const queryClient = useQueryClient();
@@ -223,6 +223,7 @@ export default function SupportThreads() {
                       body: thread.request.message,
                       authorName: thread.request.requesterName,
                       createdAt: thread.request.createdAt,
+                      attachments: thread.request.attachments,
                     }}
                     messages={thread.messages}
                     mine="requester"
@@ -270,6 +271,7 @@ export default function SupportThreads() {
       </div>
 
       <ContactSupportDialog
+        currentUserId={currentUserId}
         open={composeOpen}
         onOpenChange={setComposeOpen}
         onSubmitted={(id) => {

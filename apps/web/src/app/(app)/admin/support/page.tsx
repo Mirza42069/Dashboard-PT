@@ -13,13 +13,9 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function SupportPage() {
   await requirePermission("support:manage");
-  const dict = getDictionary(await getLocale());
 
   return (
-    <div className="space-y-5 p-4 md:p-6">
-      <div className="space-y-1">
-        <h1 className="text-xl font-semibold tracking-tight">{dict.support.inboxTitle}</h1>
-      </div>
+    <div className="flex h-full min-h-0 flex-col p-0 md:p-6">
       <SupportInbox />
     </div>
   );

@@ -3,6 +3,7 @@ import {
   SUPPORT_REQUEST_STATUSES,
   company,
   notification,
+  supportAttachment,
   supportMessage,
   supportRequest,
   user,
@@ -11,6 +12,7 @@ import {
   type SupportRequestStatus,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
+import { del, head } from "@vercel/blob";
 import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import z from "zod";
 
@@ -23,6 +25,12 @@ import {
 import { interpolate, type MessageDictionary } from "../lib/messages/index";
 import { roleOf } from "../lib/permissions";
 import {
+  MAX_SUPPORT_SCREENSHOTS,
+  isOwnedSupportScreenshotPath,
+  isSupportScreenshotContentType,
+  supportScreenshotSelectionIssue,
+} from "../lib/support-screenshots";
+import {
   SUPPORT_NOTICE_KINDS,
   canDeleteSupportRequest,
   nextSupportStatus,
@@ -33,6 +41,82 @@ import {
 const supportStatusSchema = z.enum(SUPPORT_REQUEST_STATUSES);
 const idSchema = z.object({ id: z.string().min(1) });
 const supportNoticeKinds = SUPPORT_NOTICE_KINDS satisfies readonly NotificationKind[];
+const screenshotInputSchema = z.object({
+  pathname: z.string().min(1).max(500),
+  filename: z.string().trim().min(1).max(255),
+});
+
+const attachmentSelection = {
+  id: supportAttachment.id,
+  filename: supportAttachment.filename,
+  contentType: supportAttachment.contentType,
+  size: supportAttachment.size,
+  createdAt: supportAttachment.createdAt,
+};
+
+async function attachmentsFor(requestId: string) {
+  return db
+    .select(attachmentSelection)
+    .from(supportAttachment)
+    .where(eq(supportAttachment.requestId, requestId))
+    .orderBy(asc(supportAttachment.createdAt), asc(supportAttachment.id));
+}
+
+async function inspectScreenshots(
+  t: MessageDictionary,
+  userId: string,
+  screenshots: { pathname: string; filename: string }[],
+) {
+  const pathnames = screenshots.map((screenshot) => screenshot.pathname);
+  if (
+    new Set(pathnames).size !== pathnames.length ||
+    pathnames.some((pathname) => !isOwnedSupportScreenshotPath(pathname, userId))
+  ) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: t.support.screenshotsInvalid });
+  }
+
+  if (pathnames.length > 0) {
+    const linked = await db
+      .select({ pathname: supportAttachment.pathname })
+      .from(supportAttachment)
+      .where(inArray(supportAttachment.pathname, pathnames));
+    if (linked.length > 0) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: t.support.screenshotsInvalid });
+    }
+  }
+
+  let metadata;
+  try {
+    metadata = await Promise.all(pathnames.map((pathname) => head(pathname)));
+  } catch {
+    throw new TRPCError({ code: "BAD_REQUEST", message: t.support.screenshotsInvalid });
+  }
+
+  const attachments = metadata.map((blob, index) => {
+    if (
+      blob.pathname !== pathnames[index] ||
+      blob.size <= 0 ||
+      !isSupportScreenshotContentType(blob.contentType)
+    ) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: t.support.screenshotsInvalid });
+    }
+    return {
+      id: crypto.randomUUID(),
+      pathname: blob.pathname,
+      filename: screenshots[index]!.filename,
+      contentType: blob.contentType,
+      size: blob.size,
+    };
+  });
+  const issue = supportScreenshotSelectionIssue(attachments);
+  if (issue === "too-large") {
+    throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: t.support.screenshotsTooLarge });
+  }
+  if (issue) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: t.support.screenshotsInvalid });
+  }
+  return attachments;
+}
 
 /**
  * The states each action may be applied from. Where it lands is not listed here
@@ -323,6 +407,7 @@ export const supportRouter = router({
       z.object({
         subject: z.string().trim().min(1, "Subject is required").max(200),
         message: z.string().trim().min(1, "Message is required").max(10_000),
+        screenshots: z.array(screenshotInputSchema).max(MAX_SUPPORT_SCREENSHOTS).default([]),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -356,16 +441,51 @@ export const supportRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: ctx.t.auth.companyAccountRequired });
       }
 
-      const [created] = await db
+      const attachments = await inspectScreenshots(
+        ctx.t,
+        ctx.session.user.id,
+        input.screenshots,
+      );
+      const requestId = crypto.randomUUID();
+      const requestInsert = db
         .insert(supportRequest)
-        .values({ ...identity, subject: input.subject, message: input.message })
+        .values({ id: requestId, ...identity, subject: input.subject, message: input.message })
         .returning({
           id: supportRequest.id,
           status: supportRequest.status,
           createdAt: supportRequest.createdAt,
         });
+      let createdRows;
+      if (attachments.length > 0) {
+        [createdRows] = await db.batch([
+          requestInsert,
+          db.insert(supportAttachment).values(
+            attachments.map((attachment) => ({ ...attachment, requestId })),
+          ),
+        ]);
+      } else {
+        createdRows = await requestInsert;
+      }
+      const [created] = createdRows;
       if (!created) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       return created;
+    }),
+
+  discardScreenshots: protectedProcedure
+    .input(z.object({ pathnames: z.array(z.string().min(1).max(500)).max(MAX_SUPPORT_SCREENSHOTS) }))
+    .mutation(async ({ ctx, input }) => {
+      const owned = [...new Set(input.pathnames)].filter((pathname) =>
+        isOwnedSupportScreenshotPath(pathname, ctx.session.user.id),
+      );
+      if (owned.length === 0) return { success: true };
+      const linked = await db
+        .select({ pathname: supportAttachment.pathname })
+        .from(supportAttachment)
+        .where(inArray(supportAttachment.pathname, owned));
+      const linkedPaths = new Set(linked.map(({ pathname }) => pathname));
+      const disposable = owned.filter((pathname) => !linkedPaths.has(pathname));
+      if (disposable.length > 0) await del(disposable).catch(() => undefined);
+      return { success: true };
     }),
 
   list: permissionProcedure("support:manage")
@@ -392,18 +512,18 @@ export const supportRouter = router({
       );
       const cursorFilter =
         input.cursor
-          ? createdAtCursorCondition(supportRequest.createdAt, supportRequest.id, input.cursor)
+          ? createdAtCursorCondition(supportRequest.updatedAt, supportRequest.id, input.cursor)
           : undefined;
       const rows = await db
         .select({
           row: supportRequest,
-          cursorCreatedAt: exactCursorTimestamp(supportRequest.createdAt),
+          cursorCreatedAt: exactCursorTimestamp(supportRequest.updatedAt),
         })
         .from(supportRequest)
         .where(
           and(baseFilter, cursorFilter),
         )
-        .orderBy(desc(supportRequest.createdAt), desc(supportRequest.id))
+        .orderBy(desc(supportRequest.updatedAt), desc(supportRequest.id))
         .limit(input.limit + 1);
 
       const hasMore = rows.length > input.limit;
@@ -419,7 +539,10 @@ export const supportRouter = router({
 
   get: permissionProcedure("support:manage")
     .input(idSchema)
-    .query(({ ctx, input }) => requestOrThrow(ctx.t, input.id)),
+    .query(async ({ ctx, input }) => {
+      const request = await requestOrThrow(ctx.t, input.id);
+      return { ...request, attachments: await attachmentsFor(request.id) };
+    }),
 
   accept: permissionProcedure("support:manage")
     .input(idSchema)
@@ -480,6 +603,10 @@ export const supportRouter = router({
         });
       }
 
+      const paths = await db
+        .select({ pathname: supportAttachment.pathname })
+        .from(supportAttachment)
+        .where(eq(supportAttachment.requestId, input.id));
       const result = await db.execute<{ id: string }>(sql`
         with deleted_request as (
           delete from "support_request"
@@ -499,6 +626,9 @@ export const supportRouter = router({
           code: "CONFLICT",
           message: ctx.t.support.changedRefresh,
         });
+      }
+      if (paths.length > 0) {
+        await del(paths.map(({ pathname }) => pathname)).catch(() => undefined);
       }
       return { success: true };
     }),
@@ -553,6 +683,7 @@ export const supportRouter = router({
         message: request.message,
         requesterName: request.requesterName,
         createdAt: request.createdAt,
+        attachments: await attachmentsFor(request.id),
       },
       messages: await messagesFor(request.id),
     };

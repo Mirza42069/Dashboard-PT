@@ -1,0 +1,1 @@
+CREATE INDEX "support_request_updated_at_id_idx" ON "support_request" USING btree ("updated_at","id");

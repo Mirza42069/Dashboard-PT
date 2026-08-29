@@ -281,6 +281,20 @@
       "when": 1787870930537,
       "tag": "0039_account_name_ascii_casefold",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1787891825942,
+      "tag": "0040_superb_saracen",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1787892983496,
+      "tag": "0041_milky_scarecrow",
+      "breakpoints": true
     }
   ]
 }

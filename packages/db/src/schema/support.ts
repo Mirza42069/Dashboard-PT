@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-import { check, index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { check, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 import { user } from "./auth";
 import { company } from "./company";
@@ -65,6 +65,7 @@ export const supportRequest = pgTable(
       sql`${table.status} in ('new', 'accepted', 'answered', 'closed')`,
     ),
     index("support_request_created_at_id_idx").on(table.createdAt, table.id),
+    index("support_request_updated_at_id_idx").on(table.updatedAt, table.id),
     index("support_request_status_created_at_id_idx").on(table.status, table.createdAt, table.id),
   ],
 );
@@ -107,6 +108,27 @@ export const supportMessage = pgTable(
   ],
 );
 
+/** Private Blob metadata for screenshots attached to the opening request. */
+export const supportAttachment = pgTable(
+  "support_attachment",
+  {
+    id: id(),
+    requestId: text("request_id")
+      .notNull()
+      .references(() => supportRequest.id, { onDelete: "cascade" }),
+    pathname: text("pathname").notNull(),
+    filename: text("filename").notNull(),
+    contentType: text("content_type").notNull(),
+    size: integer("size").notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index("support_attachment_request_id_idx").on(table.requestId),
+    uniqueIndex("support_attachment_pathname_uidx").on(table.pathname),
+    check("support_attachment_size_check", sql`${table.size} > 0`),
+  ],
+);
+
 export const supportMessageRelations = relations(supportMessage, ({ one }) => ({
   request: one(supportRequest, {
     fields: [supportMessage.requestId],
@@ -117,6 +139,7 @@ export const supportMessageRelations = relations(supportMessage, ({ one }) => ({
 
 export const supportRequestRelations = relations(supportRequest, ({ one, many }) => ({
   messages: many(supportMessage),
+  attachments: many(supportAttachment),
   requester: one(user, { fields: [supportRequest.requesterId], references: [user.id] }),
   company: one(company, { fields: [supportRequest.companyId], references: [company.id] }),
   acceptedBy: one(user, {
@@ -133,5 +156,12 @@ export const supportRequestRelations = relations(supportRequest, ({ one, many })
     fields: [supportRequest.closedById],
     references: [user.id],
     relationName: "supportClosedBy",
+  }),
+}));
+
+export const supportAttachmentRelations = relations(supportAttachment, ({ one }) => ({
+  request: one(supportRequest, {
+    fields: [supportAttachment.requestId],
+    references: [supportRequest.id],
   }),
 }));

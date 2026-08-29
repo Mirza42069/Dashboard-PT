@@ -89,7 +89,7 @@ export const id = {
     baselinedWhileEditing:
       "BoQ ini dijadikan baseline saat sedang diubah. Muat ulang lalu coba lagi.",
     notEditableDraft: "Baseline ini bukan draf yang dapat diubah.",
-    noSchedulableLines: "BoQ ini tidak memiliki baris yang dapat dijadwalkan.",
+    noSchedulableLines: "BoQ ini tidak memiliki item yang dapat dijadwalkan.",
     codeUsedAtLevel: "Kode {code} sudah dipakai pada tingkat ini",
     weightsMustTotal:
       "Total bobot harus 100% sebelum dijadikan baseline — saat ini totalnya {total}%. Tambahkan item berharga satuan, atau periksa baris yang bobotnya diisi manual.",
@@ -104,7 +104,7 @@ export const id = {
     activeLocked: "Jadwal ini aktif dan terkunci.",
     activatedWhileEditing: "Jadwal ini diaktifkan saat sedang diubah. Muat ulang lalu coba lagi.",
     onlyPricedLines:
-      "Hanya baris BoQ berharga satuan yang dapat dijadwalkan — bagian mengikuti jumlah barisnya.",
+      "Hanya item BoQ berharga satuan yang dapat dijadwalkan — bagian mengikuti jumlah itemnya.",
     unknownPeriod: "Periode pelaporan tidak dikenali",
     baselineNotThisProject: "Baseline tersebut bukan milik proyek ini.",
     endBeforeStart: "Tanggal selesai lebih awal dari tanggal mulai.",
@@ -126,15 +126,15 @@ export const id = {
     windowNeedsBothEnds: "Rentang rencana memerlukan periode mulai dan periode selesai.",
     finishBeforeStart: "Periode selesai tidak boleh mendahului periode mulai.",
     periodsRunFrom: "Periode berjalan dari {first} sampai {last}.",
-    chooseLineToCopy: "Pilih setidaknya satu baris sebagai tujuan salinan rencana.",
+    chooseLineToCopy: "Pilih setidaknya satu item sebagai tujuan salinan rencana.",
     tooManyCellsSpread: {
-      one: "Itu akan menulis {count} sel rencana sekaligus. Terapkan rencana pada lebih sedikit baris.",
+      one: "Itu akan menulis {count} sel rencana sekaligus. Terapkan rencana pada lebih sedikit item.",
       other:
-        "Itu akan menulis {count} sel rencana sekaligus. Terapkan rencana pada lebih sedikit baris.",
+        "Itu akan menulis {count} sel rencana sekaligus. Terapkan rencana pada lebih sedikit item.",
     },
     tooManyCellsCopy: {
-      one: "Itu akan menulis {count} sel rencana sekaligus. Salin ke lebih sedikit baris.",
-      other: "Itu akan menulis {count} sel rencana sekaligus. Salin ke lebih sedikit baris.",
+      one: "Itu akan menulis {count} sel rencana sekaligus. Salin ke lebih sedikit item.",
+      other: "Itu akan menulis {count} sel rencana sekaligus. Salin ke lebih sedikit item.",
     },
   },
   progress: {
@@ -142,14 +142,14 @@ export const id = {
     needsBaseline: "Jadikan BoQ baseline sebelum mencatat progres.",
     needsSchedule: "Aktifkan jadwal sebelum mencatat progres.",
     onlyPricedLines:
-      "Progres hanya dapat dicatat pada baris berharga satuan dari baseline yang aktif.",
+      "Progres hanya dapat dicatat pada item berharga satuan dari baseline yang aktif.",
     reportNotEditable: "Laporan ini berstatus {status} dan tidak dapat diubah lagi.",
     periodNotEditable: "Periode ini tidak dapat diubah lagi. Muat ulang lalu coba lagi.",
     periodChangedRefresh: "Periode ini berubah saat Anda membukanya. Muat ulang lalu coba lagi.",
     invalidTransition: "Laporan berstatus {from} tidak dapat diubah menjadi {to}.",
     missingLines: {
-      one: "{count} baris belum memiliki angka maupun tanda “tanpa progres”.",
-      other: "{count} baris belum memiliki angka maupun tanda “tanpa progres”.",
+      one: "{count} item belum memiliki angka maupun tanda “tanpa progres”.",
+      other: "{count} item belum memiliki angka maupun tanda “tanpa progres”.",
     },
   },
   ticket: {
@@ -177,6 +177,9 @@ export const id = {
     closeBeforeDelete: "Tutup permintaan dukungan ini sebelum menghapusnya",
     conversationClosed: "Percakapan ini sudah ditutup",
     invalidTransition: "Permintaan dukungan berstatus {status} tidak dapat {action}.",
+    screenshotsInvalid: "Satu atau beberapa tangkapan layar tidak dapat diverifikasi. Hapus lalu coba lagi.",
+    screenshotsTooLarge: "Total tangkapan layar harus 50 MB atau kurang.",
+    screenshotRateLimited: "Terlalu banyak unggahan tangkapan layar. Coba lagi dalam beberapa menit.",
   },
   upload: {
     photoTooLarge: "Ukuran foto melebihi batas unggah 4 MB",
