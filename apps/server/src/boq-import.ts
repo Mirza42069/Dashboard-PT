@@ -15,6 +15,7 @@ import {
   type ImportError,
   type ImportMapping,
   type ParsedRow,
+  BOQ_NUMERIC_SCALE,
   loadWorkbook,
   parseRows,
 } from "./boq-import-parse";
@@ -135,8 +136,8 @@ export function prepareBoqRevision(input: {
       code: row.code,
       description: row.description,
       unit: row.unit,
-      quantity: row.quantity === null ? null : row.quantity.toFixed(4),
-      unitRate: row.unitRate === null ? null : row.unitRate.toFixed(4),
+      quantity: row.quantity === null ? null : row.quantity.toFixed(BOQ_NUMERIC_SCALE),
+      unitRate: row.unitRate === null ? null : row.unitRate.toFixed(BOQ_NUMERIC_SCALE),
       weight: row.weight === null ? "0" : row.weight.toFixed(6),
       weightSource: (row.weight === null ? "derived" : "manual") as "derived" | "manual",
       distribution: (row.cells ? "manual" : "linear") as "manual" | "linear",
@@ -149,10 +150,9 @@ export function prepareBoqRevision(input: {
 
   const itemIdByRow = new Map(input.rows.map((row, index) => [row.row, itemValues[index]!.id]));
   const sectionIds = new Set(itemValues.map((item) => item.parentId).filter(Boolean) as string[]);
-  const totalValue = input.rows.reduce((total, row, index) => {
+  const totalValue = itemValues.reduce((total, item, index) => {
     if (sectionIds.has(itemValues[index]!.id)) return total;
-    const value = (row.quantity ?? 0) * (row.unitRate ?? 0);
-    return total + Math.round(value * 100) / 100;
+    return total + Number(item.quantity ?? 0) * Number(item.unitRate ?? 0);
   }, 0);
   let plannedCellCount = 0;
   for (const [index, row] of input.rows.entries()) {
@@ -233,6 +233,7 @@ export function prepareBoqRevision(input: {
 
   return {
     statements,
+    itemIdByRow,
     result: {
       status: "succeeded" as const,
       importId,

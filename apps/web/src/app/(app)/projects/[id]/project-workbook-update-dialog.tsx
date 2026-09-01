@@ -67,6 +67,13 @@ type WorkbookAnalysis = {
     suggestedName: string | null;
     suggestedClient: string | null;
     suggestedLocation: string | null;
+    weeklyProgress?: {
+      version: 1;
+      detailSheetCount: number;
+      categoryCount: number;
+      previousPeriodIndex: number;
+      currentPeriodIndex: number;
+    } | null;
   };
   summary: {
     sectionCount: number;
@@ -98,6 +105,7 @@ type WorkbookAnalysis = {
   rowPreview: {
     row: number;
     sourcePage?: number;
+    sourceSheet?: string;
     sourceTable?: string;
     sourceRow?: number;
     description: string;
@@ -232,7 +240,10 @@ export default function ProjectWorkbookUpdateDialog({
     sheetChoice === AUTO_SHEET ? recommendedSheetName : sheetChoice;
   const selectedSheet =
     sheets?.find((candidate) => candidate.sheetName === selectedSheetName) ?? null;
-  const draftBlocked = (analysis?.summary.validationErrors.length ?? 0) > 0;
+  const draftBlocked =
+    (analysis?.summary.validationErrors.length ?? 0) > 0 ||
+    analysis?.plan.weeklyProgress != null;
+  const weeklyUpdateOnly = analysis?.plan.weeklyProgress != null;
   const progressAvailable = (analysis?.actualSnapshots.length ?? 0) > 0;
   const reviewRows = analysis?.rowPreview ?? [];
   const existingActualByPeriod = new Map(
@@ -704,12 +715,16 @@ export default function ProjectWorkbookUpdateDialog({
                             <td className="px-2 py-2 tabular-nums text-muted-foreground">
                               {row.sourcePage
                                 ? `p${row.sourcePage}:${row.sourceRow ?? row.row}`
-                                : row.row}
+                                : row.sourceSheet
+                                  ? `${row.sourceSheet}:${row.sourceRow ?? row.row}`
+                                  : row.row}
                             </td>
                             <td className="px-2 py-2 text-muted-foreground">
                               {row.sourcePage
                                 ? `p${row.sourcePage}:${row.sourceRow} · ${row.sourceTable}`
-                                : "-"}
+                                : row.sourceSheet
+                                  ? `${row.sourceSheet}:${row.sourceRow ?? row.row}`
+                                  : "-"}
                             </td>
                             <td className="px-2 py-2">{t.projectImport.rowKinds[row.kind]}</td>
                             <td className="max-w-72 px-2 py-2">
@@ -843,7 +858,7 @@ export default function ProjectWorkbookUpdateDialog({
                   <Checkbox
                     id="workbook-update-project-details"
                     checked={sections.projectDetails}
-                    disabled={busy !== null}
+                    disabled={busy !== null || weeklyUpdateOnly}
                     aria-describedby="workbook-update-project-details-hint"
                     onCheckedChange={(checked) =>
                       setSections((current) => ({ ...current, projectDetails: checked === true }))
@@ -856,7 +871,9 @@ export default function ProjectWorkbookUpdateDialog({
                     id="workbook-update-project-details-hint"
                     className="col-start-2 text-muted-foreground"
                   >
-                    {t.projectUpdate.sectionProjectDetailsHint}
+                    {weeklyUpdateOnly
+                      ? t.projectUpdate.weeklyCreateOnlyHint
+                      : t.projectUpdate.sectionProjectDetailsHint}
                   </p>
                   {sections.projectDetails && (
                     <dl className="col-start-2 mt-2 grid gap-2 rounded-md bg-muted/40 p-3 sm:grid-cols-2">
@@ -950,7 +967,9 @@ export default function ProjectWorkbookUpdateDialog({
                   </div>
                   <p id="workbook-update-draft-hint" className="text-muted-foreground">
                     {draftBlocked
-                      ? t.projectUpdate.draftBlockedHint
+                      ? analysis.plan.weeklyProgress
+                        ? t.projectUpdate.weeklyCreateOnlyHint
+                        : t.projectUpdate.draftBlockedHint
                       : t.projectUpdate.draftCoupledHint}
                   </p>
                 </div>

@@ -23,6 +23,10 @@ setDefaultTimeout(60_000);
 
 const REFERENCE = resolve(import.meta.dir, "../../../reference/S-CURVE PLAN VS ACTUAL RSCH.xlsx");
 const DAILY_PROGRESS = resolve(import.meta.dir, "../../../reference/DAILY PROGRESS WEEK 16.xlsx");
+const DSO_PROGRESS = resolve(
+  import.meta.dir,
+  "../../../reference/Laporan Progres minggu ke 3 DSO BATAM.xlsx",
+);
 
 test("selected-sheet AI summaries include rows beyond the discovery sample", () => {
   const workbook = new ExcelJS.Workbook();
@@ -152,6 +156,195 @@ test("Indonesian KURVA-S summaries expose cumulative actual progress", async () 
     periodLengthDays: null,
   });
   expect(calendar.generated).toHaveLength(24);
+});
+
+test("the DSO weekly workbook combines its BoQ and progress sheets", async () => {
+  const bytes = new Uint8Array(await Bun.file(DSO_PROGRESS).arrayBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
+
+  expect(analysis.plan).toMatchObject({
+    profile: "reference-s-curve",
+    sheetName: "KURVA-S",
+    suggestedClient: "PT. ASTRA INTERNATIONAL Tbk",
+    periodCount: 24,
+    weeklyProgress: {
+      detailSheetCount: 14,
+      categoryCount: 19,
+    },
+  });
+  expect(analysis.summary).toMatchObject({
+    sectionCount: 19,
+    lineCount: 481,
+    scheduledCount: 481,
+    actualSnapshotCount: 3,
+    validationErrors: [],
+  });
+  expect(analysis.summary.totalAmount).toBeCloseTo(12_159_090_951.38, 2);
+  expect(analysis.summary.totalWeight).toBeCloseTo(100, 4);
+  expect(analysis.weeklyProgressPreview).toMatchObject({
+    detailSheetCount: 14,
+    previousPeriodIndex: 2,
+    currentPeriodIndex: 3,
+    previousEntryCount: 192,
+    currentEntryCount: 14,
+    aggregateCurrentPercent: 1.38,
+    confirmationRequired: true,
+  });
+  expect(analysis.weeklyProgressPreview?.itemizedPreviousPercent).toBeCloseTo(1.201768659, 8);
+  expect(analysis.weeklyProgressPreview?.itemizedCurrentPercent).toBeCloseTo(1.510591088, 8);
+});
+
+test("the DSO itemized discrepancy requires confirmation before preparation", async () => {
+  const bytes = new Uint8Array(await Bun.file(DSO_PROGRESS).arrayBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
+  const project = {
+    code: "DSO-BATAM",
+    name: analysis.plan.suggestedName!,
+    client: analysis.plan.suggestedClient,
+    location: analysis.plan.suggestedLocation,
+    startDate: "2026-04-06",
+    scheduleStart: "2026-04-06",
+    endDate: "2026-09-20",
+    periodType: "weekly" as const,
+    periodLengthDays: null,
+  };
+
+  expect(prepareConfirmedWorkbook(bytes, { plan: analysis.plan, project })).rejects.toMatchObject({
+    code: "itemized_progress_difference",
+  });
+
+  const prepared = await prepareConfirmedWorkbook(bytes, {
+    plan: analysis.plan,
+    project,
+    acceptProgressDifference: true,
+  });
+  expect(prepared.periods).toHaveLength(24);
+  expect(prepared.rows).toHaveLength(500);
+  expect(prepared.itemProgress).toHaveLength(206);
+  expect(prepared.itemProgress.filter((entry) => entry.periodIndex === 2)).toHaveLength(192);
+  expect(prepared.itemProgress.filter((entry) => entry.periodIndex === 3)).toHaveLength(14);
+  const storedTotal = prepared.rows
+    .filter((row) => row.parentCode !== null)
+    .reduce(
+      (total, row) =>
+        total +
+        Number((row.quantity ?? 0).toFixed(8)) * Number((row.unitRate ?? 0).toFixed(8)),
+      0,
+    );
+  expect(Math.round(storedTotal * 100) / 100).toBe(12_159_090_951.38);
+  expect(
+    prepared.rows
+      .filter((row) => row.parentCode !== null)
+      .every(
+        (row) =>
+          row.cells !== null &&
+          Math.abs(row.cells.reduce((total, cell) => total + cell.plannedPct, 0) - 100) < 0.001,
+      ),
+  ).toBe(true);
+});
+
+test("weekly item progress follows the latest valid S-curve period", async () => {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await Bun.file(DSO_PROGRESS).arrayBuffer());
+  workbook.getWorksheet("KURVA-S")!.getCell("I45").value = 1.5;
+  const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
+
+  expect(analysis.plan.weeklyProgress).toMatchObject({
+    previousPeriodIndex: 3,
+    currentPeriodIndex: 4,
+  });
+  expect(analysis.weeklyProgressPreview).toMatchObject({
+    previousPeriodIndex: 3,
+    currentPeriodIndex: 4,
+  });
+});
+
+test("weekly progress rejects a mismatched previous aggregate", async () => {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await Bun.file(DSO_PROGRESS).arrayBuffer());
+  workbook.getWorksheet("KURVA-S")!.getCell("G45").value = 1.1;
+  const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
+
+  expect(
+    analysis.summary.validationErrors.some((error) =>
+      error.message.includes("itemized progress for period 2"),
+    ),
+  ).toBe(true);
+});
+
+test("weekly progress rejects negative planned cells", async () => {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await Bun.file(DSO_PROGRESS).arrayBuffer());
+  workbook.getWorksheet("KURVA-S")!.getCell("F10").value = -0.001;
+  const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
+
+  expect(
+    analysis.summary.validationErrors.some((error) =>
+      error.message.includes("planned progress cannot be negative"),
+    ),
+  ).toBe(true);
+});
+
+test("weekly progress reconciles the values that will be stored", async () => {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await Bun.file(DSO_PROGRESS).arrayBuffer());
+  const detailAmount = workbook.getWorksheet("I. PERSIAPAN")!.getCell("I18");
+  const originalAmount = Number(
+    typeof detailAmount.value === "object" && detailAmount.value && "result" in detailAmount.value
+      ? detailAmount.value.result
+      : detailAmount.value,
+  );
+  const delta = originalAmount * 0.001;
+  detailAmount.value = originalAmount + delta;
+  const recap = workbook.getWorksheet("REKAP TOTAL")!;
+  const subtotalRow = recap
+    .getRows(1, recap.rowCount)!
+    .find((row) => row.getCell(4).text.trim().toUpperCase() === "SUB TOTAL 1")!;
+  const subtotal = subtotalRow.getCell(6);
+  const originalSubtotal = Number(
+    typeof subtotal.value === "object" && subtotal.value && "result" in subtotal.value
+      ? subtotal.value.result
+      : subtotal.value,
+  );
+  subtotal.value = originalSubtotal + delta;
+
+  const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
+
+  expect(
+    analysis.summary.validationErrors.some((error) =>
+      error.message.includes("stored quantity and unit-rate precision"),
+    ),
+  ).toBe(true);
+});
+
+test("weekly layout detection cannot be removed from a reviewed plan", async () => {
+  const bytes = new Uint8Array(await Bun.file(DSO_PROGRESS).arrayBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
+
+  await expect(
+    reviewProjectWorkbook(bytes, { ...analysis.plan, weeklyProgress: null }),
+  ).rejects.toThrow("multi-sheet weekly progress layout changed");
+});
+
+test("weekly progress rejects malformed, invalid, and decreasing detail values", async () => {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await Bun.file(DSO_PROGRESS).arrayBuffer());
+  const preparation = workbook.getWorksheet("I. PERSIAPAN")!;
+  preparation.getCell("E18").value = null;
+  preparation.getCell("Q22").value = 0.04;
+  preparation.getCell("R22").value = 0.04;
+  preparation.getCell("R23").value = { error: "#VALUE!" };
+  const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
+  const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
+  const messages = analysis.summary.validationErrors.map((error) => error.message);
+
+  expect(messages.some((message) => message.includes("priced row needs"))).toBe(true);
+  expect(messages.some((message) => message.includes("decreases"))).toBe(true);
+  expect(messages.some((message) => message.includes("must be numeric"))).toBe(true);
 });
 
 test("missing project dates do not count as worksheet matches", () => {

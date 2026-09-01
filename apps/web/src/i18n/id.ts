@@ -388,6 +388,17 @@ export const id = {
     reportingStart: "Mulai pelaporan",
     completion: "Selesai",
     latestActual: "Aktual impor terbaru: {percent}% pada periode {period}",
+    weeklyProgressTitle: "Progres mingguan multi-lembar",
+    weeklyProgressDescription:
+      "{sheets} lembar detail menghasilkan {lines} item BoQ, {previous} pembacaan periode sebelumnya, dan {current} pembacaan periode berjalan.",
+    targetPeriod: "Periode website · tanggal akhir",
+    aggregateProgress: "Agregat kurva S",
+    itemizedProgress: "Aktual per item",
+    confirmProgressDifference: "Impor progres item yang valid meskipun total kurva S belum selesai",
+    progressDifferenceHint:
+      "Kurva S mencatat {aggregate}%, sementara detail item menghasilkan {itemized}%. Progres item akan diprioritaskan setelah draf baseline diaktifkan.",
+    progressConfirmationRequired: "Konfirmasikan perbedaan kurva S yang belum selesai sebelum membuat proyek.",
+    multiSheetSource: "{sheets} lembar detail dikelompokkan menjadi {categories} kategori kurva S. Baris sumber dikunci agar rekonsiliasi tetap terjaga.",
     mappingTitle: "Pemetaan kolom",
     mappingFields: {
       description: "Uraian",
@@ -512,6 +523,8 @@ export const id = {
       "BoQ dan Jadwal dipilih bersamaan dan membuat satu draf yang dapat ditinjau. Baseline aktif tidak diaktifkan atau diganti di sini.",
     draftBlockedHint:
       "BoQ dan Jadwal tidak tersedia karena sumber memiliki kesalahan validasi. Progres aktual mingguan yang valid tetap dapat diperbarui.",
+    weeklyCreateOnlyHint:
+      "Laporan mingguan multi-lembar ini hanya dapat menyusun BoQ dan jadwal saat membuat proyek. Proyek yang sudah ada dapat mengimpor titik progres agregatnya.",
     sectionProgress: "Progres aktual mingguan",
     sectionProgressHint:
       "Impor hanya progres mingguan kumulatif agregat. Progres item tidak diperkirakan, dan periode setelah kesalahan sumber pertama tetap tidak berubah.",

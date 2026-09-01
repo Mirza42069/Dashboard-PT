@@ -196,6 +196,15 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
 
   const importsBoqAndSchedule = input.sections.boq || input.sections.schedule;
   if (
+    analysis.plan.weeklyProgress &&
+    (input.sections.projectDetails || importsBoqAndSchedule)
+  ) {
+    invalid(
+      "Multi-sheet weekly reports can create a project, but can only add aggregate progress to an existing project.",
+      "weekly_progress_create_only",
+    );
+  }
+  if (
     (importsBoqAndSchedule || input.sections.progress) &&
     analysis.plan.profile === "pdf-ai" &&
     analysis.plan.pdf

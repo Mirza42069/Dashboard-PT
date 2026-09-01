@@ -1,13 +1,14 @@
 "use client";
 
 import { env } from "@DashboardV2/env/web";
-import { endDateForPeriodCount } from "@DashboardV2/api/lib/periods";
+import { endDateForPeriodCount, generatePeriods } from "@DashboardV2/api/lib/periods";
 import {
   MAX_AI_PDF_BYTES,
   MAX_AI_WORKBOOK_BYTES,
 } from "@DashboardV2/api/lib/workbook-limits";
 import { Alert, AlertDescription, AlertTitle } from "@DashboardV2/ui/components/alert";
 import { Button } from "@DashboardV2/ui/components/button";
+import { Checkbox } from "@DashboardV2/ui/components/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -89,6 +90,13 @@ type Plan = {
   periodCount: number;
   confidence: "high" | "medium" | "low";
   warnings: string[];
+  weeklyProgress?: {
+    version: 1;
+    detailSheetCount: number;
+    categoryCount: number;
+    previousPeriodIndex: number;
+    currentPeriodIndex: number;
+  } | null;
 };
 type Analysis = {
   plan: Plan;
@@ -109,9 +117,23 @@ type Analysis = {
     cumulativePercent: number;
     sourceValue: string;
   }[];
+  weeklyProgressPreview?: {
+    detailSheetCount: number;
+    categoryCount: number;
+    previousPeriodIndex: number;
+    currentPeriodIndex: number;
+    previousEntryCount: number;
+    currentEntryCount: number;
+    itemizedPreviousPercent: number;
+    itemizedCurrentPercent: number;
+    aggregatePreviousPercent: number | null;
+    aggregateCurrentPercent: number;
+    confirmationRequired: boolean;
+  };
   rowPreview: {
     row: number;
     sourcePage?: number;
+    sourceSheet?: string;
     sourceTable?: string;
     sourceRow?: number;
     description: string;
@@ -248,6 +270,20 @@ function importFileKind(file: File) {
   return null;
 }
 
+function reportingPeriodPreview(answers: Answers) {
+  if (!answers.scheduleStart || !answers.endDate || !cadenceReady(answers)) return [];
+  try {
+    return generatePeriods(
+      answers.scheduleStart,
+      answers.endDate,
+      answers.periodType,
+      cycleLength(answers),
+    );
+  } catch {
+    return [];
+  }
+}
+
 async function uploadWorkbook(
   file: File,
   currentUserId: string,
@@ -361,6 +397,7 @@ export default function ProjectWorkbookImportDialog({
   const [questionIndex, setQuestionIndex] = useState(0);
   const [reviewing, setReviewing] = useState(false);
   const [reviewStale, setReviewStale] = useState(false);
+  const [acceptProgressDifference, setAcceptProgressDifference] = useState(false);
   const [endDateInferred, setEndDateInferred] = useState(false);
   const [busy, setBusy] = useState(false);
   /** Set when the server refuses because a trial has spent its AI allowance. */
@@ -378,6 +415,7 @@ export default function ProjectWorkbookImportDialog({
   const [skippedStages, setSkippedStages] = useState<readonly ServerStage[]>([]);
   /** Which server stages actually arrived, so a skip can be told from a gap. */
   const seenStages = useRef(new Set<ServerStage>());
+  const progressConfirmationRef = useRef<HTMLButtonElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [codeConflict, setCodeConflict] = useState<string | null>(null);
   const [serverScheduleIssue, setServerScheduleIssue] = useState<ScheduleIssue | null>(null);
@@ -421,6 +459,7 @@ export default function ProjectWorkbookImportDialog({
     setQuestionIndex(0);
     setReviewing(false);
     setReviewStale(false);
+    setAcceptProgressDifference(false);
     setEndDateInferred(false);
     setBusy(false);
     setError(null);
@@ -543,6 +582,7 @@ export default function ProjectWorkbookImportDialog({
       }
       if (!response.ok || !body?.plan) throw new Error(body?.error ?? t.projectImport.analyzeFailed);
       setAnalysis(body);
+      setAcceptProgressDifference(false);
       setServerScheduleIssue(null);
       setAnswers({
         ...EMPTY,
@@ -826,9 +866,18 @@ export default function ProjectWorkbookImportDialog({
       return;
     }
     if (
-      !analysis.plan.mapping.fields.description ||
-      !analysis.plan.mapping.fields.start ||
-      !analysis.plan.mapping.fields.finish
+      analysis.weeklyProgressPreview?.confirmationRequired &&
+      !acceptProgressDifference
+    ) {
+      setError(t.projectImport.progressConfirmationRequired);
+      progressConfirmationRef.current?.focus();
+      return;
+    }
+    if (
+      !analysis.plan.weeklyProgress &&
+      (!analysis.plan.mapping.fields.description ||
+        !analysis.plan.mapping.fields.start ||
+        !analysis.plan.mapping.fields.finish)
     ) {
       setError(t.projectImport.requiredMappings);
       return;
@@ -850,6 +899,7 @@ export default function ProjectWorkbookImportDialog({
       const data = await uploadWorkbook(file, currentUserId, {
         confirmed: {
           plan: analysis.plan,
+          acceptProgressDifference,
           project: {
             code: answers.code.trim().toUpperCase(),
             name: answers.name.trim(),
@@ -958,6 +1008,10 @@ export default function ProjectWorkbookImportDialog({
   };
   const availableSections =
     analysis?.rowPreview.filter((row) => row.kind === "section") ?? [];
+  const multiSheetWeekly = analysis?.plan.weeklyProgress != null;
+  const weeklyPeriods = multiSheetWeekly ? reportingPeriodPreview(answers) : [];
+  const progressConfirmationError =
+    error === t.projectImport.progressConfirmationRequired;
   const selectedSheetName =
     sheetChoice === AUTO_SHEET ? recommendedSheetName : sheetChoice;
   const selectedSheet =
@@ -1455,13 +1509,112 @@ export default function ProjectWorkbookImportDialog({
                 </p>
               )}
             </div>
+            {analysis.weeklyProgressPreview && (
+              <div className="space-y-3 rounded-lg border p-4">
+                <div>
+                  <h3 className="font-medium">{t.projectImport.weeklyProgressTitle}</h3>
+                  <p className="mt-1 text-muted-foreground">
+                    {interpolate(t.projectImport.weeklyProgressDescription, {
+                      sheets: analysis.weeklyProgressPreview.detailSheetCount,
+                      lines: analysis.summary.lineCount,
+                      previous: analysis.weeklyProgressPreview.previousEntryCount,
+                      current: analysis.weeklyProgressPreview.currentEntryCount,
+                    })}
+                  </p>
+                </div>
+                <div className="overflow-x-auto rounded-md border">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-muted">
+                      <tr>
+                        <th scope="col" className="px-2 py-2 font-medium">{t.projectImport.periods}</th>
+                        <th scope="col" className="px-2 py-2 font-medium">{t.projectImport.targetPeriod}</th>
+                        <th scope="col" className="px-2 py-2 font-medium">{t.projectImport.aggregateProgress}</th>
+                        <th scope="col" className="px-2 py-2 font-medium">{t.projectImport.itemizedProgress}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {analysis.actualSnapshots.map((snapshot) => {
+                        const target = weeklyPeriods.find(
+                          (period) => period.periodIndex === snapshot.periodIndex,
+                        );
+                        const itemized =
+                          snapshot.periodIndex === analysis.weeklyProgressPreview?.previousPeriodIndex
+                            ? analysis.weeklyProgressPreview.itemizedPreviousPercent
+                            : snapshot.periodIndex === analysis.weeklyProgressPreview?.currentPeriodIndex
+                              ? analysis.weeklyProgressPreview.itemizedCurrentPercent
+                              : null;
+                        return (
+                          <tr key={snapshot.periodIndex} className="border-t">
+                            <td className="px-2 py-2 tabular-nums">{snapshot.periodIndex}</td>
+                            <td className="px-2 py-2 tabular-nums">
+                              {target ? `${target.periodIndex} · ${target.endDate}` : snapshot.periodIndex}
+                            </td>
+                            <td className="px-2 py-2 tabular-nums">
+                              {snapshot.cumulativePercent.toFixed(4)}%
+                            </td>
+                            <td className="px-2 py-2 tabular-nums">
+                              {itemized === null ? "-" : `${itemized.toFixed(4)}%`}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {analysis.weeklyProgressPreview.confirmationRequired && (
+                  <div className="grid grid-cols-[1rem_1fr] gap-x-3 gap-y-1 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+                    <Checkbox
+                      ref={progressConfirmationRef}
+                      id="project-import-progress-confirmation"
+                      checked={acceptProgressDifference}
+                      disabled={busy}
+                      aria-invalid={progressConfirmationError || undefined}
+                      aria-describedby={
+                        progressConfirmationError
+                          ? "project-import-progress-confirmation-hint project-import-progress-confirmation-error"
+                          : "project-import-progress-confirmation-hint"
+                      }
+                      onCheckedChange={(checked) => {
+                        setAcceptProgressDifference(checked === true);
+                        setError(null);
+                      }}
+                    />
+                    <Label htmlFor="project-import-progress-confirmation">
+                      {t.projectImport.confirmProgressDifference}
+                    </Label>
+                    <p
+                      id="project-import-progress-confirmation-hint"
+                      className="col-start-2 text-muted-foreground"
+                    >
+                      {interpolate(t.projectImport.progressDifferenceHint, {
+                        aggregate: analysis.weeklyProgressPreview.aggregateCurrentPercent.toFixed(4),
+                        itemized: analysis.weeklyProgressPreview.itemizedCurrentPercent.toFixed(4),
+                      })}
+                    </p>
+                    {progressConfirmationError && (
+                      <p
+                        id="project-import-progress-confirmation-error"
+                        className="col-start-2 text-destructive"
+                      >
+                        {t.projectImport.progressConfirmationRequired}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="rounded-lg border p-4">
               <h3 className="font-medium">{t.projectImport.rowReviewTitle}</h3>
               <p className="mt-1 text-muted-foreground">
-                {interpolate(t.projectImport.rowRange, {
-                  first: analysis.plan.dataStartRow,
-                  last: analysis.plan.dataEndRow,
-                })}
+                {multiSheetWeekly
+                  ? interpolate(t.projectImport.multiSheetSource, {
+                      sheets: analysis.weeklyProgressPreview?.detailSheetCount ?? 0,
+                      categories: analysis.weeklyProgressPreview?.categoryCount ?? 0,
+                    })
+                  : interpolate(t.projectImport.rowRange, {
+                      first: analysis.plan.dataStartRow,
+                      last: analysis.plan.dataEndRow,
+                    })}
               </p>
               <div
                 className="mt-3 max-h-64 overflow-y-auto rounded-md border"
@@ -1506,7 +1659,14 @@ export default function ProjectWorkbookImportDialog({
                       </select>
                     )}
                     <span className="truncate" title={row.description}>{row.description}</span>
-                    {row.kind === "item" ? (
+                    {multiSheetWeekly ? (
+                      <span
+                        className="col-span-2 col-start-2 truncate text-muted-foreground sm:col-auto"
+                        title={`${row.sourceSheet ?? "-"}:${row.sourceRow ?? row.row}`}
+                      >
+                        {row.sourceSheet ?? "-"}:{row.sourceRow ?? row.row}
+                      </span>
+                    ) : row.kind === "item" ? (
                       <div className="col-span-2 col-start-2 flex items-center gap-2 sm:col-auto">
                         <select
                           className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-base md:text-xs"
@@ -1622,7 +1782,7 @@ export default function ProjectWorkbookImportDialog({
                 </div>
               </div>
             )}
-            {analysis.plan.profile !== "pdf-ai" && (
+            {analysis.plan.profile !== "pdf-ai" && !multiSheetWeekly && (
             <div className="rounded-lg border p-4">
               <h3 className="font-medium">{t.projectImport.mappingTitle}</h3>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">

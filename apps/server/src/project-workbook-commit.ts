@@ -6,11 +6,13 @@ import {
   project,
   projectActualCurve,
   projectMember,
+  progressEntry,
   reportingPeriod,
 } from "@DashboardV2/db/schema";
 import { and, eq } from "drizzle-orm";
 
 import { prepareBoqRevision } from "./boq-import";
+import { BOQ_NUMERIC_SCALE } from "./boq-import-parse";
 import {
   prepareConfirmedWorkbook,
   projectWorkbookCommitSchema,
@@ -38,10 +40,14 @@ export async function commitProjectWorkbook(input: {
 
   const prepared = await prepareConfirmedWorkbook(input.bytes, confirmed);
   const projectId = crypto.randomUUID();
+  const progressPeriodIndexes = new Set(
+    prepared.itemProgress.map((entry) => entry.periodIndex),
+  );
   const periods = prepared.periods.map((period) => ({
     id: crypto.randomUUID(),
     projectId,
     ...period,
+    status: progressPeriodIndexes.has(period.periodIndex) ? ("draft" as const) : ("open" as const),
   }));
   const revision = prepareBoqRevision({
     projectId,
@@ -60,6 +66,18 @@ export async function commitProjectWorkbook(input: {
       userExcludedRows: prepared.plan.userExcludedRows,
       parentAssignments: prepared.plan.parentAssignments,
       actualCurve: prepared.plan.actualCurve,
+      weeklyProgress:
+        prepared.weeklyProgressPreview === undefined
+          ? null
+          : {
+              ...prepared.weeklyProgressPreview,
+              entries: prepared.itemProgress.map((entry) => ({
+                periodIndex: entry.periodIndex,
+                sourceSheetName: entry.sourceSheetName,
+                sourceRow: entry.sourceRow,
+                sourceColumn: entry.sourceColumn,
+              })),
+            },
       pdf:
         prepared.plan.pdf === null
           ? null
@@ -103,6 +121,28 @@ export async function commitProjectWorkbook(input: {
       sourceValue: snapshot.sourceValue,
     };
   });
+  const itemProgressValues = prepared.itemProgress.map((entry) => {
+    const period = periodByIndex.get(entry.periodIndex);
+    const boqItemId = revision.itemIdByRow.get(entry.row);
+    if (!period || !boqItemId) {
+      throw new ProjectWorkbookError(
+        `Imported item progress could not be attached at period ${entry.periodIndex}.`,
+        "invalid",
+      );
+    }
+    return {
+      id: crypto.randomUUID(),
+      projectId,
+      periodId: period.id,
+      boqItemId,
+      cumulativeQuantity: entry.cumulativeQuantity.toFixed(BOQ_NUMERIC_SCALE),
+      cumulativePercent: null,
+      pctComplete: entry.pctComplete.toFixed(4),
+      noProgress: false,
+      note: null,
+      recordedById: input.actor.id,
+    };
+  });
   const latestActual = prepared.actualSnapshots.at(-1);
   const dataDate = latestActual
     ? (periodByIndex.get(latestActual.periodIndex)?.endDate ?? null)
@@ -135,6 +175,9 @@ export async function commitProjectWorkbook(input: {
       : []),
     db.insert(reportingPeriod).values(periods),
     ...revision.statements,
+    ...(itemProgressValues.length > 0
+      ? [db.insert(progressEntry).values(itemProgressValues)]
+      : []),
     ...(actualCurveValues.length > 0
       ? [db.insert(projectActualCurve).values(actualCurveValues)]
       : []),

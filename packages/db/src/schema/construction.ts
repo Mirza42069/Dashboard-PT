@@ -391,9 +391,9 @@ export const boqItem = pgTable(
     code: text("code").notNull(),
     description: text("description").notNull(),
     unit: text("unit"),
-    quantity: numeric("quantity", { precision: 20, scale: 4 }),
-    unitRate: numeric("unit_rate", { precision: 20, scale: 4 }),
-    value: numeric("value", { precision: 20, scale: 2 }).generatedAlwaysAs(
+    quantity: numeric("quantity", { precision: 24, scale: 8 }),
+    unitRate: numeric("unit_rate", { precision: 24, scale: 8 }),
+    value: numeric("value", { precision: 26, scale: 8 }).generatedAlwaysAs(
       sql`quantity * unit_rate`,
     ),
     /** "Bobot" — this leaf's share of the contract, in percent. */
@@ -565,7 +565,7 @@ export const progressEntry = pgTable(
       .notNull()
       .references(() => boqItem.id, { onDelete: "cascade" }),
     /** Used when the item is measured by_quantity. */
-    cumulativeQuantity: numeric("cumulative_quantity", { precision: 20, scale: 4 }),
+    cumulativeQuantity: numeric("cumulative_quantity", { precision: 24, scale: 8 }),
     /** Used when the item is measured by_percent. */
     cumulativePercent: numeric("cumulative_percent", { precision: 9, scale: 4 }),
     /** Whichever of the two above applies, resolved to 0-100 at write time. */

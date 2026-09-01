@@ -5,6 +5,8 @@ import { inflateRawSync } from "node:zlib";
 // a tree of dynamic requires that Vercel's bundler will not resolve at boot.
 import type ExcelJS from "exceljs";
 
+export const BOQ_NUMERIC_SCALE = 8;
+
 /**
  * Reading a bill of quantities out of somebody's spreadsheet, and deciding
  * whether it is fit to import.

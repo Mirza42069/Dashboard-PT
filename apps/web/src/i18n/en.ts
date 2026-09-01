@@ -386,6 +386,17 @@ export const en = {
     reportingStart: "Reporting start",
     completion: "Completion",
     latestActual: "Latest imported actual: {percent}% at period {period}",
+    weeklyProgressTitle: "Multi-sheet weekly progress",
+    weeklyProgressDescription:
+      "{sheets} detail sheets produce {lines} BoQ lines, {previous} prior-period readings, and {current} current-period readings.",
+    targetPeriod: "Website period · end date",
+    aggregateProgress: "S-curve aggregate",
+    itemizedProgress: "Itemized actual",
+    confirmProgressDifference: "Import the valid item progress despite the unfinished S-curve total",
+    progressDifferenceHint:
+      "The S-curve reports {aggregate}%, while detailed items calculate to {itemized}%. Itemized progress will take precedence after the draft baseline is activated.",
+    progressConfirmationRequired: "Confirm the unfinished S-curve difference before creating the project.",
+    multiSheetSource: "{sheets} detail sheets grouped into {categories} S-curve categories. Source rows are locked to preserve reconciliation.",
     mappingTitle: "Column mapping",
     mappingFields: {
       description: "Description",
@@ -510,6 +521,8 @@ export const en = {
       "BoQ and Schedule are selected together and create one reviewable draft. The active baseline is not activated or replaced here.",
     draftBlockedHint:
       "BoQ and Schedule are unavailable because the source has validation errors. Valid weekly actual progress can still be updated.",
+    weeklyCreateOnlyHint:
+      "This multi-sheet weekly report can build its BoQ and schedule only while creating a project. Existing projects can import its aggregate progress points.",
     sectionProgress: "Weekly actual progress",
     sectionProgressHint:
       "Import aggregate cumulative weekly progress only. Item progress is never inferred, and periods after the first source error remain unchanged.",

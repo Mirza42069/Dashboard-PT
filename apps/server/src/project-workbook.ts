@@ -30,6 +30,11 @@ import {
   validateProjectPdf,
   type PdfExtraction,
 } from "./project-pdf";
+import {
+  isWeeklyProgressWorkbook,
+  parseWeeklyProgressWorkbook,
+  type WeeklyProgressPreview,
+} from "./project-weekly-progress";
 
 const workbookRow = z.number().int().positive().max(MAX_WORKBOOK_ROWS);
 const workbookColumn = z.number().int().positive().max(MAX_WORKBOOK_COLUMNS);
@@ -101,6 +106,16 @@ export const workbookPlanSchema = z
     periodCount: z.number().int().min(0).max(600),
     confidence: z.enum(["high", "medium", "low"]),
     warnings: z.array(z.string().max(300)).max(20),
+    weeklyProgress: z
+      .object({
+        version: z.literal(1),
+        detailSheetCount: z.number().int().positive().max(50),
+        categoryCount: z.number().int().positive().max(100),
+        previousPeriodIndex: z.number().int().positive().max(MAX_PERIODS),
+        currentPeriodIndex: z.number().int().positive().max(MAX_PERIODS),
+      })
+      .nullable()
+      .optional(),
     pdf: z
       .object({
         pageCount: z.number().int().positive().max(25),
@@ -246,6 +261,7 @@ export type WorkbookAnalysis = {
   rowPreview: {
     row: number;
     sourcePage?: number;
+    sourceSheet?: string;
     sourceTable?: string;
     sourceRow?: number;
     description: string;
@@ -262,6 +278,7 @@ export type WorkbookAnalysis = {
     finishPeriodIndex: number | null;
   }[];
   pdfActualPreview?: PdfExtraction["actualSnapshots"];
+  weeklyProgressPreview?: WeeklyProgressPreview;
   summary: {
     sectionCount: number;
     lineCount: number;
@@ -309,6 +326,7 @@ export type WorkbookSheetTarget = {
 
 export const projectWorkbookCommitSchema = z.object({
   plan: workbookPlanSchema,
+  acceptProgressDifference: z.boolean().optional(),
   project: z
     .object({
       code: z
@@ -614,6 +632,29 @@ function referencePlan(
   for (const sheet of sheets) {
     const bounds = referenceBounds(sheet);
     if (!bounds) continue;
+    const actual =
+      bounds.actualRow && bounds.periodColumns.length > 0
+        ? parseActualSnapshotCells(
+            sheet,
+            bounds.actualRow,
+            bounds.periodColumns,
+            bounds.periodColumns.at(-1)?.periodIndex ?? 0,
+          )
+        : { snapshots: [], errors: [] };
+    const latestActual = actual.snapshots.at(-1);
+    const previousActual = actual.snapshots.find(
+      (snapshot) => snapshot.periodIndex === (latestActual?.periodIndex ?? 0) - 1,
+    );
+    const weeklyProgress =
+      bounds.layout === "indonesian-summary"
+        ? parseWeeklyProgressWorkbook(
+            workbook,
+            sheet,
+            latestActual?.cumulativePercent ?? 0,
+            latestActual?.periodIndex ?? 0,
+            previousActual?.cumulativePercent ?? null,
+          )
+        : null;
     const { dataStartRow, dataEndRow } = bounds;
     const sectionRows: number[] = [];
     let periodCount = bounds.periodColumns.at(-1)?.periodIndex ?? 0;
@@ -666,7 +707,7 @@ function referencePlan(
       mapping: bounds.mapping,
       suggestedCode: null,
       suggestedName: bounds.suggestedName,
-      suggestedClient: null,
+      suggestedClient: weeklyProgress?.client ?? null,
       suggestedLocation: bounds.suggestedLocation,
       suggestedStartDate: bounds.contractStartDate,
       suggestedScheduleStartDate: bounds.scheduleStartDate,
@@ -679,13 +720,24 @@ function referencePlan(
         "Roman numerals are sparse in this workbook, so stable BoQ codes will be generated.",
         ...(bounds.layout === "priced-reference"
           ? ["Rows with JUMLAH are imported as lump-sum items (1 LS × JUMLAH)."]
-          : ["This KURVA-S summary is suitable for progress updates; its item pricing is not present."]),
+          : weeklyProgress
+            ? []
+            : ["This KURVA-S summary is suitable for progress updates; its item pricing is not present."]),
+        ...(weeklyProgress
+          ? [
+              `This weekly report combines ${weeklyProgress.plan.detailSheetCount} detail sheets into one BoQ.`,
+              ...(weeklyProgress.preview.confirmationRequired
+                ? ["The itemized current progress differs from the unfinished KURVA-S total and requires confirmation."]
+                : []),
+            ]
+          : []),
         ...(bounds.contractStartDate !== bounds.scheduleStartDate
           ? [
               "The first reporting period begins after the contract start, following the workbook's period-end dates.",
             ]
           : []),
       ],
+      weeklyProgress: weeklyProgress?.plan ?? null,
       pdf: null,
     };
   }
@@ -1119,6 +1171,7 @@ async function analyzeProjectPdf(
       "Rows without source codes receive deterministic import codes.",
       "Amount-only rows import as 1 LS at the extracted amount.",
     ],
+    weeklyProgress: null,
     pdf: { pageCount, extractionDigest, extraction },
   });
   return reviewProjectWorkbook(bytes, plan);
@@ -1265,6 +1318,7 @@ export async function analyzeProjectWorkbook(
       periodCount,
       confidence: interpreted?.confidence ?? "low",
       warnings: interpreted?.warnings ?? ["AI interpretation is unavailable. Review every mapping before importing."],
+      weeklyProgress: null,
       pdf: null,
     };
   }
@@ -1511,6 +1565,81 @@ async function reviewProjectPdf(bytes: Uint8Array, submittedPlan: WorkbookPlan) 
   } satisfies WorkbookAnalysis;
 }
 
+function reviewWeeklyProgressWorkbook(
+  workbook: Awaited<ReturnType<typeof loadWorkbook>>,
+  sheet: Awaited<ReturnType<typeof loadWorkbook>>["worksheets"][number],
+  plan: WorkbookPlan,
+): WorkbookAnalysis {
+  const actual = parseActualSnapshots(sheet, plan);
+  const latestActual = actual.snapshots.at(-1);
+  const previousActual = actual.snapshots.find(
+    (snapshot) => snapshot.periodIndex === (latestActual?.periodIndex ?? 0) - 1,
+  );
+  const parsed = parseWeeklyProgressWorkbook(
+    workbook,
+    sheet,
+    latestActual?.cumulativePercent ?? 0,
+    latestActual?.periodIndex ?? 0,
+    previousActual?.cumulativePercent ?? null,
+  );
+  if (!parsed || JSON.stringify(parsed.plan) !== JSON.stringify(plan.weeklyProgress)) {
+    throw new ProjectWorkbookError(
+      "The multi-sheet weekly progress layout changed after analysis.",
+      "invalid",
+    );
+  }
+
+  const totalAmount = parsed.totalAmount;
+  const sectionRowByCode = new Map(
+    parsed.rows
+      .filter((row) => row.parentCode === null)
+      .map((row) => [row.code, row.row]),
+  );
+  const rowPreview: WorkbookAnalysis["rowPreview"] = parsed.rows.map((row) => {
+    const source = parsed.rowSources.get(row.row);
+    const amount = (row.quantity ?? 0) * (row.unitRate ?? 0);
+    return {
+      row: row.row,
+      sourceSheet: source?.sheetName,
+      sourceRow: source?.sourceRow,
+      description: row.description,
+      kind: row.parentCode === null ? "section" : "item",
+      parentRow:
+        row.parentCode === null
+          ? null
+          : (sectionRowByCode.get(row.parentCode) ?? null),
+      code: row.code,
+      unit: row.unit,
+      quantity: row.quantity,
+      unitRate: row.unitRate,
+      amount: row.parentCode === null ? null : amount,
+      weight: row.parentCode === null || totalAmount === 0 ? null : (amount / totalAmount) * 100,
+      startPeriodIndex: row.start,
+      finishPeriodIndex: row.finish,
+    };
+  });
+  const lines = parsed.rows.filter((row) => row.parentCode !== null);
+
+  return {
+    plan,
+    columns: describeSheet(sheet, plan.headerRow).columns,
+    actualSnapshots: actual.snapshots,
+    weeklyProgressPreview: parsed.preview,
+    rowPreview,
+    summary: {
+      sectionCount: parsed.rows.length - lines.length,
+      lineCount: lines.length,
+      scheduledCount: lines.filter((row) => row.cells !== null).length,
+      totalAmount,
+      totalWeight: totalAmount > 0 && lines.length > 0 ? 100 : 0,
+      actualSnapshotCount: actual.snapshots.length,
+      latestActualPercent: actual.snapshots.at(-1)?.cumulativePercent ?? null,
+      latestActualPeriodIndex: actual.snapshots.at(-1)?.periodIndex ?? null,
+      validationErrors: [...parsed.errors, ...actual.errors].slice(0, 50),
+    },
+  };
+}
+
 export async function reviewProjectWorkbook(
   bytes: Uint8Array,
   submittedPlan: WorkbookPlan,
@@ -1532,6 +1661,10 @@ export async function reviewProjectWorkbook(
     throw new ProjectWorkbookError("The selected worksheet no longer exists.", "invalid");
   }
   assertPlanCoordinates(sheet, parsedPlan);
+  if (parsedPlan.weeklyProgress || isWeeklyProgressWorkbook(workbook, sheet)) {
+    assertSafeRowScope(sheet, parsedPlan);
+    return reviewWeeklyProgressWorkbook(workbook, sheet, parsedPlan);
+  }
   let scopedPlan = parsedPlan;
   if (parsedPlan.profile !== "reference-s-curve") {
     const dataStartRow =
@@ -1827,6 +1960,49 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
       reviewed.summary.validationErrors,
     );
   }
+  if (plan.weeklyProgress) {
+    const workbook = await loadWorkbook(bytes);
+    const sheet = workbook.worksheets.find((candidate) => candidate.name === plan.sheetName);
+    if (!sheet) throw new ProjectWorkbookError("The selected worksheet was not found.", "invalid");
+    const parsed = parseWeeklyProgressWorkbook(
+      workbook,
+      sheet,
+      reviewed.actualSnapshots.at(-1)?.cumulativePercent ?? 0,
+      reviewed.actualSnapshots.at(-1)?.periodIndex ?? 0,
+      reviewed.actualSnapshots.find(
+        (snapshot) =>
+          snapshot.periodIndex ===
+          (reviewed.actualSnapshots.at(-1)?.periodIndex ?? 0) - 1,
+      )?.cumulativePercent ?? null,
+    );
+    if (!parsed || JSON.stringify(parsed.plan) !== JSON.stringify(plan.weeklyProgress)) {
+      throw new ProjectWorkbookError(
+        "The multi-sheet weekly progress layout changed after review.",
+        "invalid",
+      );
+    }
+    if (parsed.preview.confirmationRequired && !input.acceptProgressDifference) {
+      throw new ProjectWorkbookError(
+        "The itemized current progress differs from the unfinished KURVA-S total. Confirm the partial progress import to continue.",
+        "invalid",
+        [],
+        "itemized_progress_difference",
+        {
+          aggregateCurrentPercent: parsed.preview.aggregateCurrentPercent,
+          itemizedCurrentPercent: parsed.preview.itemizedCurrentPercent,
+        },
+      );
+    }
+    const { generated } = await validateWorkbookCalendar(bytes, plan, input.project);
+    return {
+      plan,
+      rows: parsed.rows,
+      periods: generated,
+      actualSnapshots: reviewed.actualSnapshots,
+      itemProgress: parsed.itemProgress,
+      weeklyProgressPreview: parsed.preview,
+    };
+  }
   if (!plan.mapping.fields.start || !plan.mapping.fields.finish) {
     throw new ProjectWorkbookError(
       "Map both a start-period and finish-period column before creating the schedule.",
@@ -1858,5 +2034,12 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
     throw new ProjectWorkbookError("The imported actual curve needs attention.", "invalid", actual.errors);
   }
 
-  return { plan, rows: rows.rows, periods: generated, actualSnapshots: actual.snapshots };
+  return {
+    plan,
+    rows: rows.rows,
+    periods: generated,
+    actualSnapshots: actual.snapshots,
+    itemProgress: [],
+    weeklyProgressPreview: undefined,
+  };
 }
