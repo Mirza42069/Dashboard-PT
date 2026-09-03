@@ -31,6 +31,19 @@ export function todayStamp() {
   return new Date().toISOString().slice(0, 10);
 }
 
+/**
+ * The company's reporting timezone. Serverless functions run in UTC, so
+ * "today" must be derived through the zone — a download at 01:00 Jakarta time
+ * still lands on the previous UTC day, and a report dated yesterday reads as
+ * sloppy in front of the people signing it.
+ */
+export const REPORTING_TIME_ZONE = "Asia/Jakarta";
+
+/** Today's date in the reporting timezone, as an ISO calendar date. */
+export function reportingToday() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: REPORTING_TIME_ZONE }).format(new Date());
+}
+
 /** Produces a readable filename that is valid on Windows, macOS, and Linux. */
 export function projectWorkbookFilename(name: string, code: string) {
   const stem = `${name.trim()}-${code.trim()}`

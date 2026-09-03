@@ -426,6 +426,25 @@ test("the daily workbook matching S-curve can update the reference project calen
   expect(daily.actualSnapshots.at(-1)?.cumulativePercent).toBeCloseTo(56.9230209578, 8);
 });
 
+test("explicit S-curve selection still attaches the dated progress sheets", async () => {
+  const analysis = await analyzeProjectWorkbook(
+    new Uint8Array(await Bun.file(DAILY_PROGRESS).arrayBuffer()),
+    undefined,
+    "S CURVE (5)",
+  );
+
+  expect(analysis.plan.sheetName).toBe("S CURVE (5)");
+  expect(analysis.plan.dailyProgress?.sheets).toHaveLength(7);
+  expect(analysis.dailyProgressPreview?.itemCount).toBe(125);
+  expect(analysis.dailyProgressItems?.reportDate).toBe("2026-08-22");
+  expect(analysis.dailyProgressItems?.total).toBe(125);
+  expect(analysis.dailyProgressItems?.capped).toBe(false);
+  // The latest dated sheet records no movement; every current reading is empty.
+  expect(analysis.dailyProgressItems?.items.every((item) => item.currentPercent === null)).toBe(
+    true,
+  );
+});
+
 test("an explicit generic selection is not displaced by a recognized first sheet", async () => {
   // This is the only test that deliberately enters the AI fallback. The model
   // stays disabled, but the env module it lives behind still validates the

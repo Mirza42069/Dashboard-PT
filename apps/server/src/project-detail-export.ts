@@ -30,8 +30,14 @@ import {
   PERCENT_FORMAT,
   PROJECT_STATUS_LABELS,
   projectWorkbookFilename,
+  reportingToday,
   toExcelDate,
 } from "./export-format";
+import {
+  addDailyReportSheet,
+  overlayDailyCurveReadings,
+  type DailyReportItem,
+} from "./project-daily-report-export";
 import { renderProjectSCurveChart } from "./project-scurve-chart";
 
 const DATETIME_FORMAT = "yyyy-mm-dd hh:mm";
@@ -52,6 +58,7 @@ const SHEETS = {
     photos: "Note Photos",
     daily: "Daily Progress",
     dailyItems: "Daily Progress Items",
+    dailyReport: "Daily Report",
     team: "Team",
   },
   id: {
@@ -69,6 +76,7 @@ const SHEETS = {
     photos: "Metadata Foto",
     daily: "Progres Harian",
     dailyItems: "Item Progres Harian",
+    dailyReport: "Laporan Harian",
     team: "Tim",
   },
 } as const;
@@ -467,10 +475,13 @@ export async function buildProjectDetailWorkbook({
   projectId,
   locale,
   includeTeam,
+  dailyReportDate,
 }: {
   projectId: string;
   locale: Locale;
   includeTeam: boolean;
+  /** Picks which dated snapshot the signature-ready report shows; latest by default. */
+  dailyReportDate?: string;
 }) {
   const label = LABELS[locale];
   const names = SHEETS[locale];
@@ -683,18 +694,39 @@ export async function buildProjectDetailWorkbook({
       cumulativePercent:
         entry.cumulativePercent === null ? null : toAmount(entry.cumulativePercent),
     }));
+  const curveSnapshots = snapshots.map((snapshot) => ({
+    periodId: snapshot.periodId,
+    cumulativePercent: toAmount(snapshot.cumulativePercent),
+  }));
+  const snapshotByPeriod = new Map(snapshots.map((snapshot) => [snapshot.periodId, snapshot]));
+  const dailyByPeriod = new Map(dailySnapshots.map((snapshot) => [snapshot.periodId, snapshot]));
+  const dailyOverlay = overlayDailyCurveReadings(
+    periods,
+    new Set(snapshotByPeriod.keys()),
+    dailySnapshots.map((snapshot) => ({
+      periodId: snapshot.periodId,
+      reportDate: snapshot.reportDate,
+      cumulativePercent: toAmount(snapshot.cumulativePercent),
+    })),
+  );
+  // "Today" only marks the current period; the real data date still caps how
+  // far the actual curve may fill, so no progress is invented after it.
   const periodSummary = buildPeriodSummary(
     curveRows,
     periods,
     cells,
     curveEntries,
     p.dataDate,
-    snapshots.map((snapshot) => ({
-      periodId: snapshot.periodId,
-      cumulativePercent: toAmount(snapshot.cumulativePercent),
-    })),
+    [...curveSnapshots, ...dailyOverlay],
+    reportingToday(),
   );
-  const snapshotByPeriod = new Map(snapshots.map((snapshot) => [snapshot.periodId, snapshot]));
+  const hasCurveContent = periodSummary.some(
+    (row) => row.actualCumulative !== null || row.plannedCumulative > 0,
+  );
+  // Shared lookups live outside the per-sheet gates: several gated sheets use
+  // them, and an empty gate upstream must not hide them from a later one.
+  const itemById = new Map(allItems.map((row) => [row.item.id, row.item]));
+  const periodById = new Map(periods.map((period) => [period.id, period]));
 
   const { default: excel } = (await import("exceljs")) as unknown as { default: typeof ExcelJS };
   const workbook = new excel.Workbook();
@@ -723,7 +755,8 @@ export async function buildProjectDetailWorkbook({
     [label.startDate, toExcelDate(p.startDate), DATE_FORMAT],
     [label.targetCompletion, toExcelDate(p.endDate), DATE_FORMAT],
     [label.periodType, localized(locale, p.periodType)],
-    [label.dataDate, toExcelDate(p.dataDate), DATE_FORMAT],
+    // The download happens now; the numbers themselves still stop at the last reading.
+    [label.dataDate, toExcelDate(reportingToday()), DATE_FORMAT],
     [label.contractValue, contractValue, MONEY_FORMAT],
     [label.workCompleted, workCompleted, MONEY_FORMAT],
     [
@@ -748,168 +781,174 @@ export async function buildProjectDetailWorkbook({
   finishTable(summary);
 
   /* Printable visual overview. The editable source values remain in S-curve. */
-  const chartSheet = workbook.addWorksheet(names.chart, {
-    properties: { showGridLines: false },
-    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 1 },
-  });
-  chartSheet.mergeCells("A1:N1");
-  const chartTitle = chartSheet.getCell("A1");
-  chartTitle.value = `${p.name} (${p.code})`;
-  chartTitle.font = { bold: true, size: 18, color: { argb: "FF173D43" } };
-  chartTitle.alignment = { vertical: "middle" };
-  chartSheet.getRow(1).height = 30;
-  chartSheet.getCell("A2").value = label.dataDate;
-  chartSheet.getCell("A2").font = { bold: true };
-  chartSheet.getCell("B2").value = toExcelDate(p.dataDate);
-  chartSheet.getCell("B2").numFmt = DATE_FORMAT;
-  chartSheet.getCell("D2").value = label.plannedCumulative;
-  chartSheet.getCell("D2").font = { bold: true, color: { argb: "FFC27B18" } };
-  chartSheet.getCell("G2").value = label.actualCumulative;
-  chartSheet.getCell("G2").font = { bold: true, color: { argb: "FF10666F" } };
-  chartSheet.getCell("J2").value = label.deviationCumulative;
-  chartSheet.getCell("J2").font = { bold: true };
-  const latest = periodSummary.findLast((row) => row.actualCumulative !== null) ?? periodSummary.at(-1);
-  chartSheet.getCell("E2").value = latest ? latest.plannedCumulative / 100 : null;
-  chartSheet.getCell("H2").value = latest?.actualCumulative == null ? null : latest.actualCumulative / 100;
-  chartSheet.getCell("K2").value = latest?.deviationCumulative == null ? null : latest.deviationCumulative / 100;
-  for (const address of ["E2", "H2", "K2"]) chartSheet.getCell(address).numFmt = PERCENT_FORMAT;
-  for (let column = 1; column <= 14; column += 1) chartSheet.getColumn(column).width = 12;
-  if (periodSummary.length > 0) {
-    const imageId = workbook.addImage({
-      base64: `data:image/png;base64,${Buffer.from(
-        renderProjectSCurveChart(
-          periodSummary.map((row) => ({
-            planned: row.plannedCumulative,
-            actual: row.actualCumulative,
-            isCurrent: row.isCurrent,
-          })),
-        ),
-      ).toString("base64")}`,
-      extension: "png",
+  if (hasCurveContent) {
+    const chartSheet = workbook.addWorksheet(names.chart, {
+      properties: { showGridLines: false },
+      pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 1 },
     });
-    chartSheet.addImage(imageId, { tl: { col: 0, row: 3 }, ext: { width: 1100, height: 550 } });
-  } else {
-    chartSheet.getCell("A4").value = label.noActiveBaseline;
+    chartSheet.mergeCells("A1:N1");
+    const chartTitle = chartSheet.getCell("A1");
+    chartTitle.value = `${p.name} (${p.code})`;
+    chartTitle.font = { bold: true, size: 18, color: { argb: "FF173D43" } };
+    chartTitle.alignment = { vertical: "middle" };
+    chartSheet.getRow(1).height = 30;
+    chartSheet.getCell("A2").value = label.dataDate;
+    chartSheet.getCell("A2").font = { bold: true };
+    chartSheet.getCell("B2").value = toExcelDate(reportingToday());
+    chartSheet.getCell("B2").numFmt = DATE_FORMAT;
+    chartSheet.getCell("D2").value = label.plannedCumulative;
+    chartSheet.getCell("D2").font = { bold: true, color: { argb: "FFC27B18" } };
+    chartSheet.getCell("G2").value = label.actualCumulative;
+    chartSheet.getCell("G2").font = { bold: true, color: { argb: "FF10666F" } };
+    chartSheet.getCell("J2").value = label.deviationCumulative;
+    chartSheet.getCell("J2").font = { bold: true };
+    const latest =
+      periodSummary.findLast((row) => row.actualCumulative !== null) ?? periodSummary.at(-1);
+    chartSheet.getCell("E2").value = latest ? latest.plannedCumulative / 100 : null;
+    chartSheet.getCell("H2").value =
+      latest?.actualCumulative == null ? null : latest.actualCumulative / 100;
+    chartSheet.getCell("K2").value =
+      latest?.deviationCumulative == null ? null : latest.deviationCumulative / 100;
+    for (const address of ["E2", "H2", "K2"]) chartSheet.getCell(address).numFmt = PERCENT_FORMAT;
+    for (let column = 1; column <= 14; column += 1) chartSheet.getColumn(column).width = 12;
+    if (periodSummary.length > 0) {
+      const imageId = workbook.addImage({
+        base64: `data:image/png;base64,${Buffer.from(
+          renderProjectSCurveChart(
+            periodSummary.map((row) => ({
+              planned: row.plannedCumulative,
+              actual: row.actualCumulative,
+              isCurrent: row.isCurrent,
+            })),
+          ),
+        ).toString("base64")}`,
+        extension: "png",
+      });
+      chartSheet.addImage(imageId, { tl: { col: 0, row: 3 }, ext: { width: 1100, height: 550 } });
+    }
   }
 
   /* Baseline revision metadata */
-  const revisionSheet = workbook.addWorksheet(names.revisions, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    revisionSheet,
-    [
-      label.revision,
-      label.revisionTitle,
-      label.baselineStatus,
-      label.scheduleStatus,
-      label.active,
-      label.sourceRevision,
-      label.totalValue,
-      label.itemCount,
-      label.baselineAt,
-      label.baselineBy,
-      label.scheduleAt,
-      label.scheduleBy,
-      label.created,
-      label.updated,
-    ],
-    [10, 32, 16, 16, 10, 14, 18, 10, 18, 22, 18, 22, 18, 18],
-  );
-  const versionById = new Map(versions.map((version) => [version.id, version]));
-  for (const version of versions) {
-    revisionSheet.addRow([
-      version.versionNo,
-      version.title,
-      localized(locale, version.status),
-      localized(locale, version.scheduleStatus),
-      version.id === activeVersion?.id ? label.yes : label.no,
-      version.sourceVersionId ? (versionById.get(version.sourceVersionId)?.versionNo ?? "") : "",
-      version.totalValue === null ? null : toAmount(version.totalValue),
-      allItems.filter((row) => row.item.boqVersionId === version.id).length,
-      version.baselinedAt,
-      version.baselinedById ? (actorName.get(version.baselinedById) ?? "") : "",
-      version.scheduleBaselinedAt,
-      version.scheduleBaselinedById
-        ? (actorName.get(version.scheduleBaselinedById) ?? "")
-        : "",
-      version.createdAt,
-      version.updatedAt,
-    ]);
+  if (versions.length > 0) {
+    const revisionSheet = workbook.addWorksheet(names.revisions, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      revisionSheet,
+      [
+        label.revision,
+        label.revisionTitle,
+        label.baselineStatus,
+        label.scheduleStatus,
+        label.active,
+        label.sourceRevision,
+        label.totalValue,
+        label.itemCount,
+        label.baselineAt,
+        label.baselineBy,
+        label.scheduleAt,
+        label.scheduleBy,
+        label.created,
+        label.updated,
+      ],
+      [10, 32, 16, 16, 10, 14, 18, 10, 18, 22, 18, 22, 18, 18],
+    );
+    const versionById = new Map(versions.map((version) => [version.id, version]));
+    for (const version of versions) {
+      revisionSheet.addRow([
+        version.versionNo,
+        version.title,
+        localized(locale, version.status),
+        localized(locale, version.scheduleStatus),
+        version.id === activeVersion?.id ? label.yes : label.no,
+        version.sourceVersionId ? (versionById.get(version.sourceVersionId)?.versionNo ?? "") : "",
+        version.totalValue === null ? null : toAmount(version.totalValue),
+        allItems.filter((row) => row.item.boqVersionId === version.id).length,
+        version.baselinedAt,
+        version.baselinedById ? (actorName.get(version.baselinedById) ?? "") : "",
+        version.scheduleBaselinedAt,
+        version.scheduleBaselinedById
+          ? (actorName.get(version.scheduleBaselinedById) ?? "")
+          : "",
+        version.createdAt,
+        version.updatedAt,
+      ]);
+    }
+    revisionSheet.getColumn(7).numFmt = MONEY_FORMAT;
+    for (const index of [9, 11, 13, 14]) revisionSheet.getColumn(index).numFmt = DATETIME_FORMAT;
+    finishTable(revisionSheet);
   }
-  revisionSheet.getColumn(7).numFmt = MONEY_FORMAT;
-  for (const index of [9, 11, 13, 14]) revisionSheet.getColumn(index).numFmt = DATETIME_FORMAT;
-  finishTable(revisionSheet);
 
   /* Every item from every revision, including soft-deleted draft history. */
-  const boqSheet = workbook.addWorksheet(names.boq, { views: [{ state: "frozen", ySplit: 1 }] });
-  styleTable(
-    boqSheet,
-    [
-      label.revision,
-      label.revisionTitle,
-      label.code,
-      label.parentCode,
-      label.itemType,
-      label.description,
-      label.unit,
-      label.quantity,
-      label.unitRate,
-      label.lineValue,
-      label.weight,
-      label.weightSource,
-      label.progressMode,
-      label.distribution,
-      label.startPeriod,
-      label.finishPeriod,
-      label.deletedAt,
-    ],
-    [10, 28, 14, 14, 12, 48, 10, 14, 16, 18, 11, 15, 15, 15, 13, 13, 18],
-  );
-  const itemById = new Map(allItems.map((row) => [row.item.id, row.item]));
-  const parentIds = new Set(allItems.filter((row) => row.item.parentId).map((row) => row.item.parentId));
-  for (const { item, versionNo, versionTitle } of allItems) {
-    const row = boqSheet.addRow([
-      versionNo,
-      versionTitle,
-      item.code,
-      item.parentId ? (itemById.get(item.parentId)?.code ?? "") : "",
-      parentIds.has(item.id) ? label.section : label.leaf,
-      item.description,
-      item.unit ?? "",
-      item.quantity === null ? null : toAmount(item.quantity),
-      item.unitRate === null ? null : toAmount(item.unitRate),
-      item.value === null ? null : toAmount(item.value),
-      parentIds.has(item.id) ? null : toAmount(item.weight) / 100,
-      localized(locale, item.weightSource),
-      localized(locale, item.progressMode),
-      localized(locale, item.distribution),
-      item.plannedStartPeriodIndex,
-      item.plannedFinishPeriodIndex,
-      item.deletedAt,
-    ]);
-    if (parentIds.has(item.id)) row.font = { bold: true };
+  if (allItems.length > 0) {
+    const boqSheet = workbook.addWorksheet(names.boq, { views: [{ state: "frozen", ySplit: 1 }] });
+    styleTable(
+      boqSheet,
+      [
+        label.revision,
+        label.revisionTitle,
+        label.code,
+        label.parentCode,
+        label.itemType,
+        label.description,
+        label.unit,
+        label.quantity,
+        label.unitRate,
+        label.lineValue,
+        label.weight,
+        label.weightSource,
+        label.progressMode,
+        label.distribution,
+        label.startPeriod,
+        label.finishPeriod,
+        label.deletedAt,
+      ],
+      [10, 28, 14, 14, 12, 48, 10, 14, 16, 18, 11, 15, 15, 15, 13, 13, 18],
+    );
+    const parentIds = new Set(
+      allItems.filter((row) => row.item.parentId).map((row) => row.item.parentId),
+    );
+    for (const { item, versionNo, versionTitle } of allItems) {
+      const row = boqSheet.addRow([
+        versionNo,
+        versionTitle,
+        item.code,
+        item.parentId ? (itemById.get(item.parentId)?.code ?? "") : "",
+        parentIds.has(item.id) ? label.section : label.leaf,
+        item.description,
+        item.unit ?? "",
+        item.quantity === null ? null : toAmount(item.quantity),
+        item.unitRate === null ? null : toAmount(item.unitRate),
+        item.value === null ? null : toAmount(item.value),
+        parentIds.has(item.id) ? null : toAmount(item.weight) / 100,
+        localized(locale, item.weightSource),
+        localized(locale, item.progressMode),
+        localized(locale, item.distribution),
+        item.plannedStartPeriodIndex,
+        item.plannedFinishPeriodIndex,
+        item.deletedAt,
+      ]);
+      if (parentIds.has(item.id)) row.font = { bold: true };
+    }
+    for (const index of [9, 10]) boqSheet.getColumn(index).numFmt = MONEY_FORMAT;
+    boqSheet.getColumn(11).numFmt = PERCENT_FORMAT;
+    boqSheet.getColumn(17).numFmt = DATETIME_FORMAT;
+    finishTable(boqSheet);
   }
-  for (const index of [9, 10]) boqSheet.getColumn(index).numFmt = MONEY_FORMAT;
-  boqSheet.getColumn(11).numFmt = PERCENT_FORMAT;
-  boqSheet.getColumn(17).numFmt = DATETIME_FORMAT;
-  finishTable(boqSheet);
 
   /* Active plan matrix */
-  const planSheet = workbook.addWorksheet(names.plan, {
-    views: [{ state: "frozen", xSplit: 4, ySplit: 1 }],
-  });
-  const periodHeaders = periods.map(
-    (period) => period.label ?? `${label.period} ${period.periodIndex + 1}`,
-  );
-  styleTable(
-    planSheet,
-    [label.section, label.code, label.description, label.weight, ...periodHeaders],
-    [28, 14, 44, 11, ...periods.map(() => 12)],
-  );
-  if (!activeVersion) {
-    planSheet.addRow([label.noActiveBaseline]);
-  } else {
+  if (activeVersion && curveRows.length > 0) {
+    const planSheet = workbook.addWorksheet(names.plan, {
+      views: [{ state: "frozen", xSplit: 4, ySplit: 1 }],
+    });
+    const periodHeaders = periods.map(
+      (period) => period.label ?? `${label.period} ${period.periodIndex + 1}`,
+    );
+    styleTable(
+      planSheet,
+      [label.section, label.code, label.description, label.weight, ...periodHeaders],
+      [28, 14, 44, 11, ...periods.map(() => 12)],
+    );
     for (const row of curveRows) {
       planSheet.addRow([
         row.section,
@@ -922,385 +961,450 @@ export async function buildProjectDetailWorkbook({
         }),
       ]);
     }
+    planSheet.getColumn(4).numFmt = PERCENT_FORMAT;
+    periods.forEach((_, index) => {
+      planSheet.getColumn(index + 5).numFmt = PERCENT_FORMAT;
+    });
+    finishTable(planSheet);
   }
-  planSheet.getColumn(4).numFmt = PERCENT_FORMAT;
-  periods.forEach((_, index) => {
-    planSheet.getColumn(index + 5).numFmt = PERCENT_FORMAT;
-  });
-  finishTable(planSheet);
 
   /* Item-level progress readings across all revisions. */
-  const progressSheet = workbook.addWorksheet(names.progress, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    progressSheet,
-    [
-      label.revision,
-      label.revisionTitle,
-      label.code,
-      label.description,
-      label.period,
-      label.periodStart,
-      label.periodEnd,
-      label.cumulativeQuantity,
-      label.cumulativePercent,
-      label.resolvedPercent,
-      label.noProgress,
-      label.note,
-      label.recordedBy,
-      label.created,
-      label.updated,
-    ],
-    [10, 26, 14, 42, 14, 13, 13, 18, 18, 16, 16, 40, 22, 18, 18],
-  );
-  for (const row of progress) {
-    progressSheet.addRow([
-      row.versionNo,
-      row.versionTitle,
-      row.itemCode,
-      row.itemDescription,
-      row.periodLabel ?? `${label.period} ${row.periodIndex + 1}`,
-      toExcelDate(row.periodStart),
-      toExcelDate(row.periodEnd),
-      row.entry.cumulativeQuantity === null ? null : toAmount(row.entry.cumulativeQuantity),
-      row.entry.cumulativePercent === null ? null : toAmount(row.entry.cumulativePercent) / 100,
-      toAmount(row.entry.pctComplete) / 100,
-      row.entry.noProgress ? label.yes : label.no,
-      row.entry.note ?? "",
-      row.entry.recordedById ? (actorName.get(row.entry.recordedById) ?? "") : "",
-      row.entry.createdAt,
-      row.entry.updatedAt,
-    ]);
+  if (progress.length > 0) {
+    const progressSheet = workbook.addWorksheet(names.progress, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      progressSheet,
+      [
+        label.revision,
+        label.revisionTitle,
+        label.code,
+        label.description,
+        label.period,
+        label.periodStart,
+        label.periodEnd,
+        label.cumulativeQuantity,
+        label.cumulativePercent,
+        label.resolvedPercent,
+        label.noProgress,
+        label.note,
+        label.recordedBy,
+        label.created,
+        label.updated,
+      ],
+      [10, 26, 14, 42, 14, 13, 13, 18, 18, 16, 16, 40, 22, 18, 18],
+    );
+    for (const row of progress) {
+      progressSheet.addRow([
+        row.versionNo,
+        row.versionTitle,
+        row.itemCode,
+        row.itemDescription,
+        row.periodLabel ?? `${label.period} ${row.periodIndex + 1}`,
+        toExcelDate(row.periodStart),
+        toExcelDate(row.periodEnd),
+        row.entry.cumulativeQuantity === null ? null : toAmount(row.entry.cumulativeQuantity),
+        row.entry.cumulativePercent === null ? null : toAmount(row.entry.cumulativePercent) / 100,
+        toAmount(row.entry.pctComplete) / 100,
+        row.entry.noProgress ? label.yes : label.no,
+        row.entry.note ?? "",
+        row.entry.recordedById ? (actorName.get(row.entry.recordedById) ?? "") : "",
+        row.entry.createdAt,
+        row.entry.updatedAt,
+      ]);
+    }
+    for (const index of [6, 7]) progressSheet.getColumn(index).numFmt = DATE_FORMAT;
+    for (const index of [9, 10]) progressSheet.getColumn(index).numFmt = PERCENT_FORMAT;
+    for (const index of [14, 15]) progressSheet.getColumn(index).numFmt = DATETIME_FORMAT;
+    finishTable(progressSheet);
   }
-  for (const index of [6, 7]) progressSheet.getColumn(index).numFmt = DATE_FORMAT;
-  for (const index of [9, 10]) progressSheet.getColumn(index).numFmt = PERCENT_FORMAT;
-  for (const index of [14, 15]) progressSheet.getColumn(index).numFmt = DATETIME_FORMAT;
-  finishTable(progressSheet);
 
   /* S-curve source data, including imported project snapshots. */
-  const curveSheet = workbook.addWorksheet(names.curve, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    curveSheet,
-    [
-      label.period,
-      label.periodStart,
-      label.periodEnd,
-      label.periodStatus,
-      label.plannedPeriod,
-      label.actualPeriod,
-      label.plannedCumulative,
-      label.actualCumulative,
-      label.deviationPeriod,
-      label.deviationCumulative,
-      label.actualSource,
-      label.sourceFile,
-      label.sourceSheet,
-      label.sourceRow,
-      label.sourceColumn,
-      label.sourceValue,
-      label.current,
-    ],
-    [14, 13, 13, 15, 18, 18, 20, 20, 18, 20, 20, 30, 24, 12, 14, 20, 14],
-  );
-  for (const row of periodSummary) {
-    const snapshot = snapshotByPeriod.get(row.period.id);
-    curveSheet.addRow([
-      row.period.label ?? `${label.period} ${row.period.periodIndex + 1}`,
-      toExcelDate(row.period.startDate),
-      toExcelDate(row.period.endDate),
-      localized(locale, row.period.status),
-      row.plannedPeriod / 100,
-      row.actualPeriod === null ? null : row.actualPeriod / 100,
-      row.plannedCumulative / 100,
-      row.actualCumulative === null ? null : row.actualCumulative / 100,
-      row.deviationPeriod === null ? null : row.deviationPeriod / 100,
-      row.deviationCumulative === null ? null : row.deviationCumulative / 100,
-      localized(locale, row.actualSource),
-      snapshot?.sourceFilename ?? "",
-      snapshot?.sourceSheetName ?? "",
-      snapshot?.sourceRow ?? "",
-      snapshot?.sourceColumn ?? "",
-      snapshot?.sourceValue ?? "",
-      row.isCurrent ? label.yes : label.no,
-    ]);
+  if (hasCurveContent) {
+    const curveSheet = workbook.addWorksheet(names.curve, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      curveSheet,
+      [
+        label.period,
+        label.periodStart,
+        label.periodEnd,
+        label.periodStatus,
+        label.plannedPeriod,
+        label.actualPeriod,
+        label.plannedCumulative,
+        label.actualCumulative,
+        label.deviationPeriod,
+        label.deviationCumulative,
+        label.actualSource,
+        label.sourceFile,
+        label.sourceSheet,
+        label.sourceRow,
+        label.sourceColumn,
+        label.sourceValue,
+        label.current,
+      ],
+      [14, 13, 13, 15, 18, 18, 20, 20, 18, 20, 20, 30, 24, 12, 14, 20, 14],
+    );
+    for (const row of periodSummary) {
+      const snapshot = snapshotByPeriod.get(row.period.id);
+      const daily = dailyByPeriod.get(row.period.id);
+      curveSheet.addRow([
+        row.period.label ?? `${label.period} ${row.period.periodIndex + 1}`,
+        toExcelDate(row.period.startDate),
+        toExcelDate(row.period.endDate),
+        localized(locale, row.period.status),
+        row.plannedPeriod / 100,
+        row.actualPeriod === null ? null : row.actualPeriod / 100,
+        row.plannedCumulative / 100,
+        row.actualCumulative === null ? null : row.actualCumulative / 100,
+        row.deviationPeriod === null ? null : row.deviationPeriod / 100,
+        row.deviationCumulative === null ? null : row.deviationCumulative / 100,
+        localized(locale, row.actualSource),
+        snapshot?.sourceFilename ?? daily?.sourceFilename ?? "",
+        snapshot?.sourceSheetName ?? daily?.sourceSheetName ?? "",
+        snapshot?.sourceRow ?? "",
+        snapshot?.sourceColumn ?? "",
+        snapshot?.sourceValue ?? daily?.reportDate ?? "",
+        row.isCurrent ? label.yes : label.no,
+      ]);
+    }
+    for (const index of [2, 3]) curveSheet.getColumn(index).numFmt = DATE_FORMAT;
+    for (const index of [5, 6, 7, 8, 9, 10]) curveSheet.getColumn(index).numFmt = PERCENT_FORMAT;
+    finishTable(curveSheet);
   }
-  for (const index of [2, 3]) curveSheet.getColumn(index).numFmt = DATE_FORMAT;
-  for (const index of [5, 6, 7, 8, 9, 10]) curveSheet.getColumn(index).numFmt = PERCENT_FORMAT;
-  finishTable(curveSheet);
 
   /* Every dated workbook snapshot and its full source-line detail. */
-  const dailySheet = workbook.addWorksheet(names.daily, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    dailySheet,
-    [
-      label.reportDate,
-      label.period,
-      label.actualCumulative,
-      label.sourceFile,
-      label.sourceSheet,
-      label.created,
-      label.updated,
-    ],
-    [14, 14, 20, 34, 26, 18, 18],
-  );
-  for (const snapshot of dailySnapshots) {
-    const period = periods.find((candidate) => candidate.id === snapshot.periodId);
-    dailySheet.addRow([
-      toExcelDate(snapshot.reportDate),
-      period?.label ?? (period ? `${label.period} ${period.periodIndex + 1}` : ""),
-      toAmount(snapshot.cumulativePercent) / 100,
-      snapshot.sourceFilename,
-      snapshot.sourceSheetName,
-      snapshot.createdAt,
-      snapshot.updatedAt,
-    ]);
+  if (dailySnapshots.length > 0) {
+    const dailySheet = workbook.addWorksheet(names.daily, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      dailySheet,
+      [
+        label.reportDate,
+        label.period,
+        label.actualCumulative,
+        label.sourceFile,
+        label.sourceSheet,
+        label.created,
+        label.updated,
+      ],
+      [14, 14, 20, 34, 26, 18, 18],
+    );
+    for (const snapshot of dailySnapshots) {
+      const period = periods.find((candidate) => candidate.id === snapshot.periodId);
+      dailySheet.addRow([
+        toExcelDate(snapshot.reportDate),
+        period?.label ?? (period ? `${label.period} ${period.periodIndex + 1}` : ""),
+        toAmount(snapshot.cumulativePercent) / 100,
+        snapshot.sourceFilename,
+        snapshot.sourceSheetName,
+        snapshot.createdAt,
+        snapshot.updatedAt,
+      ]);
+    }
+    dailySheet.getColumn(1).numFmt = DATE_FORMAT;
+    dailySheet.getColumn(3).numFmt = PERCENT_FORMAT;
+    for (const index of [6, 7]) dailySheet.getColumn(index).numFmt = DATETIME_FORMAT;
+    finishTable(dailySheet);
   }
-  dailySheet.getColumn(1).numFmt = DATE_FORMAT;
-  dailySheet.getColumn(3).numFmt = PERCENT_FORMAT;
-  for (const index of [6, 7]) dailySheet.getColumn(index).numFmt = DATETIME_FORMAT;
-  finishTable(dailySheet);
 
-  const dailyItemSheet = workbook.addWorksheet(names.dailyItems, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    dailyItemSheet,
-    [
-      label.reportDate,
-      label.sourceRow,
-      label.code,
-      label.description,
-      label.unit,
-      label.quantity,
-      label.unitRate,
-      label.lineValue,
-      label.weight,
-      label.previousPercent,
-      label.currentPercent,
-      label.cumulativePercent,
-      label.remainingPercent,
-      label.previousWeighted,
-      label.currentWeighted,
-      label.cumulativeWeighted,
-      label.remainingWeighted,
-      label.remarks,
-      label.sourceValues,
-    ],
-    [14, 12, 14, 48, 10, 14, 16, 18, 11, 18, 16, 18, 18, 18, 16, 18, 18, 42, 72],
-  );
-  for (const { item, reportDate } of dailyItems) {
-    dailyItemSheet.addRow([
-      toExcelDate(reportDate),
-      item.sourceRow,
-      item.code ?? "",
-      item.description,
-      item.unit ?? "",
-      item.quantity === null ? null : toAmount(item.quantity),
-      item.unitRate === null ? null : toAmount(item.unitRate),
-      item.amount === null ? null : toAmount(item.amount),
-      toAmount(item.weight) / 100,
-      item.previousPercent === null ? null : toAmount(item.previousPercent) / 100,
-      item.currentPercent === null ? null : toAmount(item.currentPercent) / 100,
-      toAmount(item.cumulativePercent) / 100,
-      item.remainingPercent === null ? null : toAmount(item.remainingPercent) / 100,
-      item.previousWeighted === null ? null : toAmount(item.previousWeighted) / 100,
-      item.currentWeighted === null ? null : toAmount(item.currentWeighted) / 100,
-      toAmount(item.cumulativeWeighted) / 100,
-      item.remainingWeighted === null ? null : toAmount(item.remainingWeighted) / 100,
-      item.remark ?? "",
-      JSON.stringify(item.sourceValues),
-    ]);
+  if (dailyItems.length > 0) {
+    const dailyItemSheet = workbook.addWorksheet(names.dailyItems, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      dailyItemSheet,
+      [
+        label.reportDate,
+        label.sourceRow,
+        label.code,
+        label.description,
+        label.unit,
+        label.quantity,
+        label.unitRate,
+        label.lineValue,
+        label.weight,
+        label.previousPercent,
+        label.currentPercent,
+        label.cumulativePercent,
+        label.remainingPercent,
+        label.previousWeighted,
+        label.currentWeighted,
+        label.cumulativeWeighted,
+        label.remainingWeighted,
+        label.remarks,
+        label.sourceValues,
+      ],
+      [14, 12, 14, 48, 10, 14, 16, 18, 11, 18, 16, 18, 18, 18, 16, 18, 18, 42, 72],
+    );
+    for (const { item, reportDate } of dailyItems) {
+      dailyItemSheet.addRow([
+        toExcelDate(reportDate),
+        item.sourceRow,
+        item.code ?? "",
+        item.description,
+        item.unit ?? "",
+        item.quantity === null ? null : toAmount(item.quantity),
+        item.unitRate === null ? null : toAmount(item.unitRate),
+        item.amount === null ? null : toAmount(item.amount),
+        toAmount(item.weight) / 100,
+        item.previousPercent === null ? null : toAmount(item.previousPercent) / 100,
+        item.currentPercent === null ? null : toAmount(item.currentPercent) / 100,
+        toAmount(item.cumulativePercent) / 100,
+        item.remainingPercent === null ? null : toAmount(item.remainingPercent) / 100,
+        item.previousWeighted === null ? null : toAmount(item.previousWeighted) / 100,
+        item.currentWeighted === null ? null : toAmount(item.currentWeighted) / 100,
+        toAmount(item.cumulativeWeighted) / 100,
+        item.remainingWeighted === null ? null : toAmount(item.remainingWeighted) / 100,
+        item.remark ?? "",
+        JSON.stringify(item.sourceValues),
+      ]);
+    }
+    dailyItemSheet.getColumn(1).numFmt = DATE_FORMAT;
+    for (const index of [7, 8]) dailyItemSheet.getColumn(index).numFmt = MONEY_FORMAT;
+    for (const index of [9, 10, 11, 12, 13, 14, 15, 16, 17]) {
+      dailyItemSheet.getColumn(index).numFmt = PERCENT_FORMAT;
+    }
+    finishTable(dailyItemSheet);
   }
-  dailyItemSheet.getColumn(1).numFmt = DATE_FORMAT;
-  for (const index of [7, 8]) dailyItemSheet.getColumn(index).numFmt = MONEY_FORMAT;
-  for (const index of [9, 10, 11, 12, 13, 14, 15, 16, 17]) {
-    dailyItemSheet.getColumn(index).numFmt = PERCENT_FORMAT;
+
+  /* Signature-ready replica of the contractor's dated progress sheet. */
+  const reportSnapshot =
+    (dailyReportDate
+      ? dailySnapshots.find((snapshot) => snapshot.reportDate === dailyReportDate)
+      : undefined) ?? dailySnapshots.at(-1);
+  if (reportSnapshot) {
+    const reportItems: DailyReportItem[] = dailyItems
+      .filter((row) => row.item.snapshotId === reportSnapshot.id)
+      .map(({ item }) => ({
+        sourceRow: item.sourceRow,
+        code: item.code,
+        description: item.description,
+        sectionCode: item.sectionCode,
+        sectionDescription: item.sectionDescription,
+        parentCode: item.parentCode,
+        parentDescription: item.parentDescription,
+        unit: item.unit,
+        quantity: item.quantity === null ? 0 : toAmount(item.quantity),
+        unitRate: item.unitRate === null ? 0 : toAmount(item.unitRate),
+        amount: item.amount === null ? 0 : toAmount(item.amount),
+        weight: toAmount(item.weight),
+        previousPercent: item.previousPercent === null ? 0 : toAmount(item.previousPercent),
+        currentPercent: item.currentPercent === null ? null : toAmount(item.currentPercent),
+        cumulativePercent: toAmount(item.cumulativePercent),
+        remainingPercent: item.remainingPercent === null ? 0 : toAmount(item.remainingPercent),
+        previousWeighted: item.previousWeighted === null ? 0 : toAmount(item.previousWeighted),
+        currentWeighted: item.currentWeighted === null ? null : toAmount(item.currentWeighted),
+        cumulativeWeighted: toAmount(item.cumulativeWeighted),
+        remainingWeighted: item.remainingWeighted === null ? 0 : toAmount(item.remainingWeighted),
+        remark: item.remark,
+      }));
+    addDailyReportSheet(workbook, {
+      sheetName: names.dailyReport,
+      projectName: p.name,
+      projectCode: p.code,
+      client: p.client,
+      location: p.location,
+      periodLabel:
+        periods.find((period) => period.id === reportSnapshot.periodId)?.label ?? null,
+      snapshot: {
+        reportDate: reportSnapshot.reportDate,
+        cumulativePercent: toAmount(reportSnapshot.cumulativePercent),
+      },
+      items: reportItems,
+    });
   }
-  finishTable(dailyItemSheet);
 
   /* Current reporting-period workflow state. */
-  const periodSheet = workbook.addWorksheet(names.periods, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    periodSheet,
-    [
-      label.periodIndex,
-      label.period,
-      label.periodStart,
-      label.periodEnd,
-      label.periodStatus,
-      label.submittedBy,
-      label.submittedAt,
-      label.reviewedBy,
-      label.reviewedAt,
-      label.approvedBy,
-      label.approvedAt,
-      label.lockedBy,
-      label.lockedAt,
-      label.returnReason,
-      label.reviewComment,
-      label.created,
-      label.updated,
-    ],
-    [12, 14, 13, 13, 15, 22, 18, 22, 18, 22, 18, 22, 18, 42, 42, 18, 18],
-  );
-  for (const period of periods) {
-    periodSheet.addRow([
-      period.periodIndex,
-      period.label ?? `${label.period} ${period.periodIndex + 1}`,
-      toExcelDate(period.startDate),
-      toExcelDate(period.endDate),
-      localized(locale, period.status),
-      period.submittedById ? (actorName.get(period.submittedById) ?? "") : "",
-      period.submittedAt,
-      period.reviewedById ? (actorName.get(period.reviewedById) ?? "") : "",
-      period.reviewedAt,
-      period.approvedById ? (actorName.get(period.approvedById) ?? "") : "",
-      period.approvedAt,
-      period.lockedById ? (actorName.get(period.lockedById) ?? "") : "",
-      period.lockedAt,
-      period.returnReason ?? "",
-      period.reviewComment ?? "",
-      period.createdAt,
-      period.updatedAt,
-    ]);
+  if (periods.length > 0) {
+    const periodSheet = workbook.addWorksheet(names.periods, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      periodSheet,
+      [
+        label.periodIndex,
+        label.period,
+        label.periodStart,
+        label.periodEnd,
+        label.periodStatus,
+        label.submittedBy,
+        label.submittedAt,
+        label.reviewedBy,
+        label.reviewedAt,
+        label.approvedBy,
+        label.approvedAt,
+        label.lockedBy,
+        label.lockedAt,
+        label.returnReason,
+        label.reviewComment,
+        label.created,
+        label.updated,
+      ],
+      [12, 14, 13, 13, 15, 22, 18, 22, 18, 22, 18, 22, 18, 42, 42, 18, 18],
+    );
+    for (const period of periods) {
+      periodSheet.addRow([
+        period.periodIndex,
+        period.label ?? `${label.period} ${period.periodIndex + 1}`,
+        toExcelDate(period.startDate),
+        toExcelDate(period.endDate),
+        localized(locale, period.status),
+        period.submittedById ? (actorName.get(period.submittedById) ?? "") : "",
+        period.submittedAt,
+        period.reviewedById ? (actorName.get(period.reviewedById) ?? "") : "",
+        period.reviewedAt,
+        period.approvedById ? (actorName.get(period.approvedById) ?? "") : "",
+        period.approvedAt,
+        period.lockedById ? (actorName.get(period.lockedById) ?? "") : "",
+        period.lockedAt,
+        period.returnReason ?? "",
+        period.reviewComment ?? "",
+        period.createdAt,
+        period.updatedAt,
+      ]);
+    }
+    for (const index of [3, 4]) periodSheet.getColumn(index).numFmt = DATE_FORMAT;
+    for (const index of [7, 9, 11, 13, 16, 17])
+      periodSheet.getColumn(index).numFmt = DATETIME_FORMAT;
+    finishTable(periodSheet);
   }
-  for (const index of [3, 4]) periodSheet.getColumn(index).numFmt = DATE_FORMAT;
-  for (const index of [7, 9, 11, 13, 16, 17])
-    periodSheet.getColumn(index).numFmt = DATETIME_FORMAT;
-  finishTable(periodSheet);
 
   /* Append-only workflow history. */
-  const workflowSheet = workbook.addWorksheet(names.workflow, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    workflowSheet,
-    [label.periodIndex, label.period, label.fromStatus, label.toStatus, label.author, label.comment, label.created],
-    [12, 16, 16, 16, 24, 52, 18],
-  );
-  const periodById = new Map(periods.map((period) => [period.id, period]));
-  for (const { event } of workflow) {
-    const period = periodById.get(event.periodId);
-    workflowSheet.addRow([
-      period?.periodIndex ?? "",
-      period?.label ?? (period ? `${label.period} ${period.periodIndex + 1}` : ""),
-      localized(locale, event.fromStatus),
-      localized(locale, event.toStatus),
-      event.actorName,
-      event.comment ?? "",
-      event.createdAt,
-    ]);
+  if (workflow.length > 0) {
+    const workflowSheet = workbook.addWorksheet(names.workflow, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      workflowSheet,
+      [label.periodIndex, label.period, label.fromStatus, label.toStatus, label.author, label.comment, label.created],
+      [12, 16, 16, 16, 24, 52, 18],
+    );
+    for (const { event } of workflow) {
+      const period = periodById.get(event.periodId);
+      workflowSheet.addRow([
+        period?.periodIndex ?? "",
+        period?.label ?? (period ? `${label.period} ${period.periodIndex + 1}` : ""),
+        localized(locale, event.fromStatus),
+        localized(locale, event.toStatus),
+        event.actorName,
+        event.comment ?? "",
+        event.createdAt,
+      ]);
+    }
+    workflowSheet.getColumn(7).numFmt = DATETIME_FORMAT;
+    finishTable(workflowSheet);
   }
-  workflowSheet.getColumn(7).numFmt = DATETIME_FORMAT;
-  finishTable(workflowSheet);
 
   /* Tickets */
-  const ticketSheet = workbook.addWorksheet(names.tickets, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    ticketSheet,
-    [
-      label.id,
-      label.title,
-      label.type,
-      label.priority,
-      label.status,
-      label.dueDate,
-      label.issuer,
-      label.responsible,
-      label.contact,
-      label.assignee,
-      label.boqItem,
-      label.period,
-      label.created,
-      label.updated,
-      label.closedAt,
-      label.resolution,
-      label.description,
-    ],
-    [36, 36, 15, 14, 15, 13, 22, 22, 18, 22, 14, 14, 18, 18, 18, 42, 58],
-  );
-  for (const row of tickets) {
-    const item = row.boqItemId ? itemById.get(row.boqItemId) : undefined;
-    const period = row.periodId ? periodById.get(row.periodId) : undefined;
-    ticketSheet.addRow([
-      row.id,
-      row.title,
-      localized(locale, row.type),
-      localized(locale, row.priority),
-      localized(locale, row.status),
-      toExcelDate(row.dueDate),
-      row.issuerName,
-      row.responsibleName,
-      row.responsibleContactNumber,
-      row.assigneeId ? (actorName.get(row.assigneeId) ?? "") : "",
-      item?.code ?? "",
-      period?.label ?? "",
-      row.createdAt,
-      row.updatedAt,
-      row.closedAt,
-      row.resolution ?? "",
-      row.description,
-    ]);
+  if (tickets.length > 0) {
+    const ticketSheet = workbook.addWorksheet(names.tickets, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      ticketSheet,
+      [
+        label.id,
+        label.title,
+        label.type,
+        label.priority,
+        label.status,
+        label.dueDate,
+        label.issuer,
+        label.responsible,
+        label.contact,
+        label.assignee,
+        label.boqItem,
+        label.period,
+        label.created,
+        label.updated,
+        label.closedAt,
+        label.resolution,
+        label.description,
+      ],
+      [36, 36, 15, 14, 15, 13, 22, 22, 18, 22, 14, 14, 18, 18, 18, 42, 58],
+    );
+    for (const row of tickets) {
+      const item = row.boqItemId ? itemById.get(row.boqItemId) : undefined;
+      const period = row.periodId ? periodById.get(row.periodId) : undefined;
+      ticketSheet.addRow([
+        row.id,
+        row.title,
+        localized(locale, row.type),
+        localized(locale, row.priority),
+        localized(locale, row.status),
+        toExcelDate(row.dueDate),
+        row.issuerName,
+        row.responsibleName,
+        row.responsibleContactNumber,
+        row.assigneeId ? (actorName.get(row.assigneeId) ?? "") : "",
+        item?.code ?? "",
+        period?.label ?? "",
+        row.createdAt,
+        row.updatedAt,
+        row.closedAt,
+        row.resolution ?? "",
+        row.description,
+      ]);
+    }
+    ticketSheet.getColumn(6).numFmt = DATE_FORMAT;
+    for (const index of [13, 14, 15]) ticketSheet.getColumn(index).numFmt = DATETIME_FORMAT;
+    finishTable(ticketSheet);
   }
-  ticketSheet.getColumn(6).numFmt = DATE_FORMAT;
-  for (const index of [13, 14, 15]) ticketSheet.getColumn(index).numFmt = DATETIME_FORMAT;
-  finishTable(ticketSheet);
 
   /* Project notes and photo metadata; image bytes intentionally stay out. */
-  const noteSheet = workbook.addWorksheet(names.notes, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    noteSheet,
-    [label.id, label.author, label.body, label.photoCount, label.created, label.updated],
-    [36, 24, 72, 12, 18, 18],
-  );
-  const photoCount = new Map<string, number>();
-  for (const photo of photos) photoCount.set(photo.noteId, (photoCount.get(photo.noteId) ?? 0) + 1);
-  for (const note of notes) {
-    noteSheet.addRow([
-      note.id,
-      note.authorName,
-      note.body,
-      photoCount.get(note.id) ?? 0,
-      note.createdAt,
-      note.updatedAt,
-    ]);
+  if (notes.length > 0) {
+    const noteSheet = workbook.addWorksheet(names.notes, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      noteSheet,
+      [label.id, label.author, label.body, label.photoCount, label.created, label.updated],
+      [36, 24, 72, 12, 18, 18],
+    );
+    const photoCount = new Map<string, number>();
+    for (const photo of photos) photoCount.set(photo.noteId, (photoCount.get(photo.noteId) ?? 0) + 1);
+    for (const note of notes) {
+      noteSheet.addRow([
+        note.id,
+        note.authorName,
+        note.body,
+        photoCount.get(note.id) ?? 0,
+        note.createdAt,
+        note.updatedAt,
+      ]);
+    }
+    for (const index of [5, 6]) noteSheet.getColumn(index).numFmt = DATETIME_FORMAT;
+    finishTable(noteSheet);
   }
-  for (const index of [5, 6]) noteSheet.getColumn(index).numFmt = DATETIME_FORMAT;
-  finishTable(noteSheet);
 
-  const photoSheet = workbook.addWorksheet(names.photos, {
-    views: [{ state: "frozen", ySplit: 1 }],
-  });
-  styleTable(
-    photoSheet,
-    [label.photoId, label.note, label.contentType, label.fileSize, label.created],
-    [36, 36, 24, 18, 18],
-  );
-  for (const photo of photos) {
-    photoSheet.addRow([
-      photo.id,
-      photo.noteId,
-      photo.contentType,
-      photo.size,
-      photo.createdAt,
-    ]);
+  if (photos.length > 0) {
+    const photoSheet = workbook.addWorksheet(names.photos, {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+    styleTable(
+      photoSheet,
+      [label.photoId, label.note, label.contentType, label.fileSize, label.created],
+      [36, 36, 24, 18, 18],
+    );
+    for (const photo of photos) {
+      photoSheet.addRow([
+        photo.id,
+        photo.noteId,
+        photo.contentType,
+        photo.size,
+        photo.createdAt,
+      ]);
+    }
+    photoSheet.getColumn(5).numFmt = DATETIME_FORMAT;
+    finishTable(photoSheet);
   }
-  photoSheet.getColumn(5).numFmt = DATETIME_FORMAT;
-  finishTable(photoSheet);
 
   /* Team is the only permission-conditional sheet. */
-  if (includeTeam) {
+  if (includeTeam && members.length > 0) {
     const teamSheet = workbook.addWorksheet(names.team, {
       views: [{ state: "frozen", ySplit: 1 }],
     });

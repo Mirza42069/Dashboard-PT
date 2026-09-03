@@ -246,7 +246,13 @@ export type PeriodSummary<P> = {
   deviationCumulative: number | null;
   /** Whether this actual can be attributed to BoQ lines. */
   actualSource: ActualCurveSource;
-  /** The period the data date falls inside. False everywhere when there is no data date. */
+  /**
+   * The period the current date falls inside. The current date defaults to the
+   * data date, but may be passed separately: "where are we now" (today) and
+   * "how far the data reaches" (the data date) are different questions, and
+   * conflating them would either mark a stale period current or carry actuals
+   * into periods nobody has reported.
+   */
   isCurrent: boolean;
 };
 
@@ -277,6 +283,8 @@ export function buildPeriodSummary<P extends PeriodLike & { startDate: string }>
   entries: EntryLike[],
   dataDate: string | null,
   snapshots: ActualSnapshotLike[] = [],
+  /** Marks isCurrent; only ever defaults to the data date, never feeds the curves. */
+  currentDate: string | null = dataDate,
 ): PeriodSummary<P>[] {
   const planned = computePlannedCurve(rows, periods, cells);
   const actual = computeActualCurve(rows, periods, entries, dataDate, snapshots);
@@ -304,7 +312,9 @@ export function buildPeriodSummary<P extends PeriodLike & { startDate: string }>
         actualCumulative === null ? null : actualCumulative - plannedCumulative,
       actualSource: actual.sources[index] ?? null,
       isCurrent:
-        dataDate !== null && period.startDate <= dataDate && dataDate <= period.endDate,
+        currentDate !== null &&
+        period.startDate <= currentDate &&
+        currentDate <= period.endDate,
     };
   });
 }

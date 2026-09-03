@@ -407,6 +407,20 @@ export const en = {
       "{sheets} dated sheets from {first} to {last}, with {items} detailed lines per day. Movement was recorded on {movement} day(s).",
     dailyProgressIgnored:
       "Other workbook sheets remain unchanged and are not treated as dated progress tables.",
+    dailyExcludedWarningTitle: "Dated progress sheets are not included",
+    dailyExcludedWarningBody:
+      "This workbook contains {count} dated progress sheets, but only the selected sheet is part of this import. Choose \"Entire workbook\" and analyze again to include the daily progress.",
+    dailyDetailTitle: "Latest day · {date}",
+    dailyDetailCapped: "Showing the first {shown} of {total} lines.",
+    dailyDetailColumns: {
+      code: "Code",
+      description: "Work item",
+      unit: "Unit",
+      weight: "Weight (%)",
+      previous: "Previous (%)",
+      current: "Current (%)",
+      cumulative: "To date (%)",
+    },
     mappingTitle: "Column mapping",
     mappingFields: {
       description: "Description",

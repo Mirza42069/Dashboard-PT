@@ -409,6 +409,20 @@ export const id = {
       "{sheets} lembar bertanggal dari {first} sampai {last}, dengan {items} item detail per hari. Pergerakan tercatat pada {movement} hari.",
     dailyProgressIgnored:
       "Lembar buku kerja lain tidak diubah dan tidak dianggap sebagai tabel progres harian.",
+    dailyExcludedWarningTitle: "Lembar progres harian tidak ikut diimpor",
+    dailyExcludedWarningBody:
+      "Buku kerja ini memuat {count} lembar progres harian, tetapi hanya lembar terpilih yang diimpor. Pilih \"Seluruh buku kerja\" lalu analisis ulang agar progres hariannya ikut terimpor.",
+    dailyDetailTitle: "Hari terakhir · {date}",
+    dailyDetailCapped: "Menampilkan {shown} dari {total} baris pertama.",
+    dailyDetailColumns: {
+      code: "Kode",
+      description: "Uraian pekerjaan",
+      unit: "Sat",
+      weight: "Bobot (%)",
+      previous: "Minggu lalu (%)",
+      current: "Saat ini (%)",
+      cumulative: "S/D (%)",
+    },
     mappingTitle: "Pemetaan kolom",
     mappingFields: {
       description: "Uraian",

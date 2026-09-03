@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from "@DashboardV2/ui/components/select";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
@@ -118,6 +118,34 @@ type WorkbookAnalysis = {
     movementDates: string[];
     latestCumulativePercent: number;
     ignoredSheets: string[];
+  };
+  dailyProgressItems?: {
+    reportDate: string;
+    total: number;
+    capped: boolean;
+    items: {
+      sourceRow: number;
+      code: string | null;
+      description: string;
+      sectionCode: string | null;
+      sectionDescription: string | null;
+      parentCode: string | null;
+      parentDescription: string | null;
+      unit: string | null;
+      quantity: number;
+      unitRate: number;
+      amount: number;
+      weight: number;
+      previousPercent: number;
+      currentPercent: number | null;
+      cumulativePercent: number;
+      remainingPercent: number;
+      previousWeighted: number;
+      currentWeighted: number | null;
+      cumulativeWeighted: number;
+      remainingWeighted: number;
+      remark: string | null;
+    }[];
   };
   rowPreview: {
     row: number;
@@ -248,6 +276,7 @@ export default function ProjectWorkbookUpdateDialog({
   const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const [sheetChoice, setSheetChoice] = useState("");
   const [recommendedSheetName, setRecommendedSheetName] = useState("");
+  const [datedSheetCount, setDatedSheetCount] = useState(0);
   const [analysis, setAnalysis] = useState<WorkbookAnalysis | null>(null);
   const [confirmedProgressDate, setConfirmedProgressDate] = useState("");
   const [sections, setSections] = useState<Sections>({
@@ -355,6 +384,7 @@ export default function ProjectWorkbookUpdateDialog({
   async function discover(chosen: File) {
     setFile(chosen);
     setSheets(null);
+    setDatedSheetCount(0);
     setPdfPageCount(null);
     setSheetChoice("");
     setRecommendedSheetName("");
@@ -368,6 +398,7 @@ export default function ProjectWorkbookUpdateDialog({
         kind?: "xlsx" | "pdf";
         sheets?: SheetCandidate[];
         recommendedSheetName?: string | null;
+        datedSheetCount?: number;
         pageCount?: number;
       }>(
         chosen,
@@ -381,6 +412,7 @@ export default function ProjectWorkbookUpdateDialog({
       }
       if (!result.sheets?.length) throw new Error(t.projectUpdate.noSheets);
       setSheets(result.sheets);
+      setDatedSheetCount(result.datedSheetCount ?? 0);
       const recommended = result.recommendedSheetName ?? result.sheets[0]?.sheetName ?? "";
       setRecommendedSheetName(recommended);
       setSheetChoice(recommended ? AUTO_SHEET : "");
@@ -730,6 +762,21 @@ export default function ProjectWorkbookUpdateDialog({
                 </div>
               </dl>
 
+              {datedSheetCount >= 2 &&
+                !analysis.dailyProgressPreview &&
+                analysis.plan.profile !== "pdf-ai" && (
+                  <div className="grid grid-cols-[1rem_1fr] gap-x-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+                    <TriangleAlert className="mt-0.5 size-4 text-amber-600" aria-hidden="true" />
+                    <div className="space-y-1">
+                      <p className="font-medium">{t.projectImport.dailyExcludedWarningTitle}</p>
+                      <p className="text-muted-foreground">
+                        {interpolate(t.projectImport.dailyExcludedWarningBody, {
+                          count: datedSheetCount,
+                        })}
+                      </p>
+                    </div>
+                  </div>
+                )}
               {analysis.dailyProgressPreview && (
                 <div className="rounded-lg border p-3">
                   <h4 className="font-medium">{t.projectImport.dailyProgressTitle}</h4>
@@ -749,6 +796,97 @@ export default function ProjectWorkbookUpdateDialog({
                   <p className="mt-2 font-medium tabular-nums">
                     {analysis.dailyProgressPreview.latestCumulativePercent.toFixed(4)}%
                   </p>
+                  {analysis.dailyProgressItems && (
+                    <div className="mt-3 space-y-2">
+                      <p className="font-medium">
+                        {interpolate(t.projectImport.dailyDetailTitle, {
+                          date: analysis.dailyProgressItems.reportDate,
+                        })}
+                      </p>
+                      <div className="overflow-x-auto rounded-md border">
+                        <table className="w-full min-w-[42rem] text-left text-xs">
+                          <thead className="bg-muted">
+                            <tr>
+                              <th scope="col" className="px-2 py-2 font-medium">
+                                {t.projectImport.dailyDetailColumns.code}
+                              </th>
+                              <th scope="col" className="px-2 py-2 font-medium">
+                                {t.projectImport.dailyDetailColumns.description}
+                              </th>
+                              <th scope="col" className="px-2 py-2 text-right font-medium">
+                                {t.projectImport.dailyDetailColumns.weight}
+                              </th>
+                              <th scope="col" className="px-2 py-2 text-right font-medium">
+                                {t.projectImport.dailyDetailColumns.previous}
+                              </th>
+                              <th scope="col" className="px-2 py-2 text-right font-medium">
+                                {t.projectImport.dailyDetailColumns.current}
+                              </th>
+                              <th scope="col" className="px-2 py-2 text-right font-medium">
+                                {t.projectImport.dailyDetailColumns.cumulative}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analysis.dailyProgressItems.items.map((item, index) => {
+                              const previous = analysis.dailyProgressItems?.items[index - 1];
+                              const sectionStart =
+                                item.sectionCode !== null &&
+                                item.sectionCode !== previous?.sectionCode;
+                              const parentStart =
+                                item.parentCode !== null &&
+                                item.parentCode !== previous?.parentCode;
+                              const moved = (item.currentPercent ?? 0) > 0;
+                              return (
+                                <Fragment key={item.sourceRow}>
+                                  {sectionStart && (
+                                    <tr className="border-t bg-muted/60">
+                                      <td colSpan={6} className="px-2 py-1.5 font-medium">
+                                        {item.sectionCode} — {item.sectionDescription ?? item.sectionCode}
+                                      </td>
+                                    </tr>
+                                  )}
+                                  {parentStart && !sectionStart && (
+                                    <tr className="border-t">
+                                      <td colSpan={6} className="px-2 py-1.5 font-medium">
+                                        {item.parentCode} — {item.parentDescription ?? item.parentCode}
+                                      </td>
+                                    </tr>
+                                  )}
+                                  <tr className={`border-t ${moved ? "bg-amber-500/5" : ""}`}>
+                                    <td className="px-2 py-1.5 tabular-nums">{item.code ?? "-"}</td>
+                                    <td className="max-w-[16rem] truncate px-2 py-1.5" title={item.description}>
+                                      {item.description}
+                                    </td>
+                                    <td className="px-2 py-1.5 text-right tabular-nums">
+                                      {item.weight.toFixed(3)}
+                                    </td>
+                                    <td className="px-2 py-1.5 text-right tabular-nums">
+                                      {item.previousPercent.toFixed(2)}%
+                                    </td>
+                                    <td className="px-2 py-1.5 text-right tabular-nums">
+                                      {item.currentPercent === null ? "-" : `${item.currentPercent.toFixed(2)}%`}
+                                    </td>
+                                    <td className="px-2 py-1.5 text-right tabular-nums">
+                                      {item.cumulativePercent.toFixed(2)}%
+                                    </td>
+                                  </tr>
+                                </Fragment>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      {analysis.dailyProgressItems.capped && (
+                        <p className="text-muted-foreground">
+                          {interpolate(t.projectImport.dailyDetailCapped, {
+                            shown: analysis.dailyProgressItems.items.length,
+                            total: analysis.dailyProgressItems.total,
+                          })}
+                        </p>
+                      )}
+                    </div>
+                  )}
                   {needsProgressDate && (
                     <div className="mt-3 max-w-sm space-y-1.5">
                       <Label htmlFor="workbook-update-progress-date">

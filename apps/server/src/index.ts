@@ -62,6 +62,9 @@ import {
 } from "./temporary-workbook";
 import { purgeAbandonedSupportScreenshots } from "./support-screenshot-storage";
 import { signWorkbookReviewState } from "./project-workbook-review";
+// Type-only: erased at runtime, so the exceljs-and-effect tree behind
+// ./project-export never enters the boot graph through this file.
+import type { PackagedProjectExport } from "./project-export";
 
 /**
  * Mirrors MAX_IMPORT_BYTES in ./boq-import, which cannot be imported here — that
@@ -542,15 +545,34 @@ app.post("/projects/export", async (c) => {
   //
   // Keeping the whole module behind this await means a failure to resolve it
   // can only ever cost the spreadsheet download, never the ability to sign in.
-  const { buildSelectedProjectExport } = await import("./project-export");
-  const built = await buildSelectedProjectExport({
-    // Preserve the request order rather than the database's unspecified IN
-    // order; the builder is never handed an unrequested id.
-    projectIds: request.projectIds,
-    locale: request.locale ?? localeFromHeaders(c.req.raw.headers),
-    includeTeam: hasPermission(roleOf(session.user), "member:manage"),
-  });
-  if (!built) return c.json({ error: "Not found" }, 404);
+  // effect rides along lazily for the same reason.
+  const [{ Effect }, { buildProjectDetailWorkbook }, { buildSelectedProjectExport, ProjectExportUnavailable }] =
+    await Promise.all([
+      import("effect"),
+      import("./project-detail-export"),
+      import("./project-export"),
+    ]);
+  let built: PackagedProjectExport;
+  try {
+    built = await Effect.runPromise(
+      buildSelectedProjectExport(
+        {
+          // Preserve the request order rather than the database's unspecified IN
+          // order; the builder is never handed an unrequested id.
+          projectIds: request.projectIds,
+          locale: request.locale ?? localeFromHeaders(c.req.raw.headers),
+          includeTeam: hasPermission(roleOf(session.user), "member:manage"),
+          dailyReportDate: request.dailyReportDate,
+        },
+        buildProjectDetailWorkbook,
+      ),
+    );
+  } catch (error) {
+    if (error instanceof ProjectExportUnavailable) {
+      return c.json({ error: "Not found" }, 404);
+    }
+    throw error;
+  }
 
   const downloadName = built.filename.replace(/["\r\n]/g, "_");
   const asciiDownloadName = downloadName.replace(/[^\x20-\x7e]/g, "_");
@@ -1053,6 +1075,7 @@ app.post("/projects/:id/workbook-update/discover", async (c) => {
             recommendProjectWorkbookSheet,
             visibleProjectWorkbookSheets,
           } = await import("./project-workbook");
+          const { dailyProgressSheetDates } = await import("./project-daily-progress");
           const workbook = await loadWorkbook(bytes);
           const sheets = visibleProjectWorkbookSheets(discoverProjectWorkbookSheets(workbook));
           return {
@@ -1060,6 +1083,7 @@ app.post("/projects/:id/workbook-update/discover", async (c) => {
             sheets,
             recommendedSheetName:
               recommendProjectWorkbookSheet(sheets, access.project)?.sheetName ?? null,
+            datedSheetCount: dailyProgressSheetDates(workbook).length,
           };
         },
       }),
@@ -1337,12 +1361,14 @@ app.post("/project-import/discover", async (c) => {
       recommendProjectWorkbookSheet,
       visibleProjectWorkbookSheets,
     } = await import("./project-workbook");
+    const { dailyProgressSheetDates } = await import("./project-daily-progress");
     const workbook = await loadWorkbook(upload.bytes);
     const sheets = visibleProjectWorkbookSheets(discoverProjectWorkbookSheets(workbook));
     return c.json({
       kind: "xlsx",
       sheets,
       recommendedSheetName: recommendProjectWorkbookSheet(sheets)?.sheetName ?? null,
+      datedSheetCount: dailyProgressSheetDates(workbook).length,
     });
   } catch (error) {
     const invalidRequest = isInvalidImportRequest(error);

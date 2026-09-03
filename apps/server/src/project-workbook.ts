@@ -325,6 +325,13 @@ export type WorkbookAnalysis = {
   pdfProgressErrorCount?: number;
   weeklyProgressPreview?: WeeklyProgressPreview;
   dailyProgressPreview?: DailyProgressPreview;
+  /** The latest dated snapshot's line detail, capped for the review UI. */
+  dailyProgressItems?: {
+    reportDate: string;
+    total: number;
+    capped: boolean;
+    items: DailyProgressItemPreview[];
+  };
   summary: {
     sectionCount: number;
     lineCount: number;
@@ -346,6 +353,68 @@ export type ParsedActualSnapshot = {
   sourceValue: string;
   sourceLabel?: string;
 };
+
+/** One dated progress line, without the bulky sourceValues column. */
+export type DailyProgressItemPreview = {
+  sourceRow: number;
+  code: string | null;
+  description: string;
+  sectionCode: string | null;
+  sectionDescription: string | null;
+  parentCode: string | null;
+  parentDescription: string | null;
+  unit: string | null;
+  quantity: number;
+  unitRate: number;
+  amount: number;
+  weight: number;
+  previousPercent: number;
+  currentPercent: number | null;
+  cumulativePercent: number;
+  remainingPercent: number;
+  previousWeighted: number;
+  currentWeighted: number | null;
+  cumulativeWeighted: number;
+  remainingWeighted: number;
+  remark: string | null;
+};
+
+const DAILY_ITEMS_PREVIEW_LIMIT = 200;
+
+function dailyItemsPreview(
+  snapshots: ParsedDailyProgressSnapshot[],
+): WorkbookAnalysis["dailyProgressItems"] {
+  const latest = snapshots.at(-1);
+  if (!latest) return undefined;
+  return {
+    reportDate: latest.reportDate,
+    total: latest.items.length,
+    capped: latest.items.length > DAILY_ITEMS_PREVIEW_LIMIT,
+    items: latest.items.slice(0, DAILY_ITEMS_PREVIEW_LIMIT).map((item) => ({
+      sourceRow: item.sourceRow,
+      code: item.code,
+      description: item.description,
+      sectionCode: item.sectionCode,
+      sectionDescription: item.sectionDescription,
+      parentCode: item.parentCode,
+      parentDescription: item.parentDescription,
+      unit: item.unit,
+      quantity: item.quantity,
+      unitRate: item.unitRate,
+      amount: item.amount,
+      weight: item.weight,
+      previousPercent: item.previousPercent,
+      currentPercent: item.currentPercent,
+      cumulativePercent: item.cumulativePercent,
+      remainingPercent: item.remainingPercent,
+      previousWeighted: item.previousWeighted,
+      currentWeighted: item.currentWeighted,
+      cumulativeWeighted: item.cumulativeWeighted,
+      remainingWeighted: item.remainingWeighted,
+      remark: item.remark,
+    })),
+  };
+}
 
 export type WorkbookSheetCandidate = {
   sheetName: string;
@@ -1277,7 +1346,12 @@ export async function analyzeProjectWorkbook(
   const fileHash = hash(bytes);
   onStage("recognising");
   const selectedDailySheet = selectedSheetName ? parseDailySheetDate(selectedSheetName) !== null : false;
-  const dailySheets = !selectedSheetName || selectedDailySheet ? dailyProgressSheetDates(workbook) : [];
+  // Dated progress sheets are detected from the whole workbook, whatever the
+  // sheet choice. Restricting detection to AUTO and dated selections used to
+  // drop them silently when the S-curve sheet was picked by hand: the import
+  // then succeeded with actuals but no daily data behind it.
+  const dailySheets = dailyProgressSheetDates(workbook);
+  const dailySelectionExplicit = Boolean(selectedSheetName) && !selectedDailySheet;
   const autoSheetName =
     dailySheets.length >= 2
       ? recommendProjectWorkbookSheet(visibleProjectWorkbookSheets(discoverProjectWorkbookSheets(workbook)))
@@ -1291,7 +1365,7 @@ export async function analyzeProjectWorkbook(
 
   if (plan && dailySheets.length >= 2) {
     let daily = parseDailyProgressWorkbook(workbook);
-    if (!daily) {
+    if (!daily && !dailySelectionExplicit) {
       onStage("interpreting");
       const { interpretDailyProgressWorkbook } = await import("./workbook-ai");
       const interpreted = await interpretDailyProgressWorkbook(
@@ -1314,15 +1388,26 @@ export async function analyzeProjectWorkbook(
         daily = parseDailyProgressWorkbook(workbook, dailyPlan);
       }
     }
-    if (!daily) {
+    if (daily) {
+      plan = attachDailyProgress(plan, daily.plan);
+    } else if (!dailySelectionExplicit) {
       throw new ProjectWorkbookError(
         "The dated progress worksheets could not be mapped. Select the S-curve sheet to import it alone, or correct the dated sheet headers.",
         "invalid",
         [],
         "daily_progress_mapping_required",
       );
+    } else {
+      // An explicitly picked non-dated sheet keeps its import, but the skipped
+      // progress sheets must not disappear without a trace.
+      plan = workbookPlanSchema.parse({
+        ...plan,
+        warnings: [
+          ...plan.warnings,
+          `${dailySheets.length} dated progress sheets were detected but could not be mapped, so only the selected sheet is imported.`,
+        ],
+      });
     }
-    plan = attachDailyProgress(plan, daily.plan);
   }
 
   if (!plan) {
@@ -1685,6 +1770,9 @@ async function reviewProjectPdf(bytes: Uint8Array, submittedPlan: WorkbookPlan) 
     pdfActualPreview: pdf.extraction.actualSnapshots,
     pdfProgressErrorCount: detailedProgress?.errors.length ?? 0,
     dailyProgressPreview: detailedProgress?.preview,
+    dailyProgressItems: detailedProgress?.snapshot
+      ? dailyItemsPreview([detailedProgress.snapshot])
+      : undefined,
     rowPreview,
     summary: {
       sectionCount: sections.length,
@@ -1959,6 +2047,7 @@ export async function reviewProjectWorkbook(
     columns: describeSheet(sheet, plan.headerRow).columns,
     actualSnapshots: actual.snapshots,
     dailyProgressPreview: daily?.preview,
+    dailyProgressItems: daily ? dailyItemsPreview(daily.snapshots) : undefined,
     rowPreview,
     summary: {
       sectionCount: sections.length,

@@ -287,6 +287,24 @@ test("the current period is the one holding the data date, and only that one", (
   expect(summary.map((row) => row.isCurrent)).toEqual([false, true, false]);
 });
 
+test("a separate current date marks today's period without moving the actuals", () => {
+  const entries = [entry("a", "p1", 20, 20), entry("a", "p2", 50, 50)];
+  const summary = buildPeriodSummary(
+    rows,
+    summaryPeriods,
+    evenPlan,
+    entries,
+    "2026-01-14",
+    [],
+    "2026-01-19",
+  );
+
+  // The marker follows the current date into p3...
+  expect(summary.map((row) => row.isCurrent)).toEqual([false, false, true]);
+  // ...while the actual curve still stops at the data date: p3 stays unknown.
+  expect(summary[2]!.actualCumulative).toBeNull();
+});
+
 test("no data date means no current period, rather than defaulting to the first", () => {
   const summary = buildPeriodSummary(rows, summaryPeriods, evenPlan, [], null);
   expect(summary.some((row) => row.isCurrent)).toBe(false);
