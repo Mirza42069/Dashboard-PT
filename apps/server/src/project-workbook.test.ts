@@ -996,9 +996,11 @@ test("PDF review validates signed extracted values without another model call", 
         weight: 100,
         startPeriodIndex: 1,
         finishPeriodIndex: 1,
+        progress: null,
       },
     ],
     actualSnapshots: [],
+    progressReport: null,
   };
   const extractionDigest = pdfExtractionDigest(extraction);
   const identity = {
@@ -1082,10 +1084,66 @@ test("PDF review validates signed extracted values without another model call", 
       extraction: extractionWithOutOfRangeActual,
     },
   });
-  expect(snapshotReview.plan.periodCount).toBe(1);
-  expect(snapshotReview.summary.validationErrors).toContainEqual(
-    expect.objectContaining({ message: expect.stringContaining("exceeds the PDF schedule") }),
-  );
+  expect(snapshotReview.plan.periodCount).toBe(2);
+  expect(snapshotReview.summary.validationErrors).toEqual([]);
+
+  const progressExtraction = {
+    ...extraction,
+    rows: [
+      {
+        ...extraction.rows[0]!,
+        startPeriodIndex: null,
+        finishPeriodIndex: null,
+        progress: {
+          sectionCode: "BILL I",
+          sectionDescription: "Preliminaries",
+          parentCode: null,
+          parentDescription: null,
+          previousPercent: 25,
+          currentPercent: null,
+          cumulativePercent: 25,
+          remainingPercent: 75,
+          previousWeighted: 25,
+          currentWeighted: null,
+          cumulativeWeighted: 25,
+          remainingWeighted: 75,
+          remark: null,
+        },
+      },
+    ],
+    progressReport: {
+      reportDate: null,
+      reportDateSource: null,
+      grandTotal: {
+        page: 1,
+        table: "Grand total",
+        sourceRow: 3,
+        cumulativePercent: 25,
+        sourceValue: "25%",
+      },
+    },
+  };
+  const progressDigest = pdfExtractionDigest(progressExtraction);
+  const progressIdentity = { ...identity, pdfExtractionDigest: progressDigest };
+  const progressReview = await reviewProjectWorkbook(bytes, {
+    ...plan,
+    periodCount: 0,
+    analysisSignature: workbookPlanIdentitySignature(progressIdentity),
+    pdf: {
+      pageCount: 1,
+      extractionDigest: progressDigest,
+      extraction: progressExtraction,
+    },
+  });
+  expect(progressReview.plan.periodCount).toBe(0);
+  expect(progressReview.actualSnapshots).toEqual([]);
+  expect(progressReview.pdfProgressErrorCount).toBe(0);
+  expect(progressReview.dailyProgressPreview).toMatchObject({
+    itemCount: 1,
+    dates: [],
+    latestCumulativePercent: 25,
+  });
+  expect(progressReview.summary.validationErrors).toEqual([]);
 
   const tampered = structuredClone(plan);
   tampered.pdf!.extraction.rows[0]!.quantity = 11;

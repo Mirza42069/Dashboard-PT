@@ -5,6 +5,7 @@ import {
   boqItemDistribution,
   boqVersion,
   dailyReport,
+  dailyProgressSnapshot,
   progressEntry,
   project,
   reportingPeriod,
@@ -302,6 +303,18 @@ export const scheduleRouter = router({
         });
       }
 
+      const [existingDailyProgress] = await db
+        .select({ id: dailyProgressSnapshot.id })
+        .from(dailyProgressSnapshot)
+        .where(eq(dailyProgressSnapshot.projectId, input.projectId))
+        .limit(1);
+      if (existingDailyProgress) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: ctx.t.schedule.historyBlocksRebuild,
+        });
+      }
+
       const [linkedAction] = await db
         .select({ id: ticket.id })
         .from(ticket)
@@ -357,6 +370,10 @@ export const scheduleRouter = router({
               or exists (
                 select 1 from daily_report
                 where project_id = ${input.projectId} and period_id is not null
+              )
+              or exists (
+                select 1 from daily_progress_snapshot
+                where project_id = ${input.projectId}
               )
               or exists (
                 select 1 from ticket

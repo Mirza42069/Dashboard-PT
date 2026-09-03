@@ -26,9 +26,18 @@ export function toExcelDate(value: string | null) {
   return value ? new Date(`${value}T00:00:00Z`) : null;
 }
 
-/** Today, as the date stamp every export filename carries. */
+/** Today, used by collection exports whose contents can change between downloads. */
 export function todayStamp() {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** Produces a readable filename that is valid on Windows, macOS, and Linux. */
+export function projectWorkbookFilename(name: string, code: string) {
+  const stem = `${name.trim()}-${code.trim()}`
+    .replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, "_")
+    .replace(/[. ]+$/g, "")
+    .slice(0, 180);
+  return `${stem || "project"}.xlsx`;
 }
 
 export const PROJECT_STATUS_LABELS = {

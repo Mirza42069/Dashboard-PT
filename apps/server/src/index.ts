@@ -39,7 +39,7 @@ import { env, trustedOrigins } from "@DashboardV2/env/server";
 import { trpcServer } from "@hono/trpc-server";
 import { del, get as getBlob } from "@vercel/blob";
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
-import { and, asc, eq, exists, sql } from "drizzle-orm";
+import { and, asc, eq, exists, inArray, sql } from "drizzle-orm";
 import { Hono, type Context as HonoRequestContext } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
@@ -475,19 +475,15 @@ app.get("/photos/:id", async (c) => {
 });
 
 /**
- * The project list as a spreadsheet.
+ * Detailed workbooks for the explicitly selected projects. One selection is an
+ * XLSX; multiple selections are a ZIP containing one XLSX per project.
  *
- * A plain Hono route rather than a tRPC procedure because the response is a
- * binary file, and tRPC's JSON envelope would mean base64 in and out of a string
- * — the same reason the note photos above are not tRPC either.
- *
- * Deliberately the whole company portfolio, not the caller's current filters:
- * exporting is what people do to work on the numbers elsewhere, and a file that
- * silently held 3 of 200 projects because a filter was set is the kind of thing
- * nobody notices until it is in a report. `projectAccessFilter` still applies,
- * so a role=user only ever gets the projects they are a member of.
+ * The access-filtered lookup is all-or-nothing. If one requested id is outside
+ * the active company or a regular user's project membership, no file is built.
+ * That both prevents accidental over-export and keeps a missing id
+ * indistinguishable from an inaccessible one.
  */
-app.get("/projects/export", async (c) => {
+app.post("/projects/export", async (c) => {
   const session = await activeSession(c);
   if (!session) {
     return c.json({ error: "Unauthorized" }, 401);
@@ -499,6 +495,39 @@ app.get("/projects/export", async (c) => {
   const scope = await resolveCompany(session.user, c.req.raw.headers);
   if ("error" in scope) {
     return c.json({ error: scope.error }, scope.status);
+  }
+
+  let payload: unknown;
+  try {
+    payload = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  const { ProjectExportRequestError, parseProjectExportRequest } = await import(
+    "./project-export-request"
+  );
+  let request;
+  try {
+    request = parseProjectExportRequest(payload);
+  } catch (error) {
+    if (error instanceof ProjectExportRequestError) {
+      return c.json({ error: error.message }, 400);
+    }
+    throw error;
+  }
+
+  const visible = await db
+    .select({ id: project.id })
+    .from(project)
+    .where(
+      and(
+        inArray(project.id, request.projectIds),
+        projectAccessFilter({ companyId: scope.companyId, session: { user: session.user } }),
+      ),
+    );
+  if (visible.length !== request.projectIds.length) {
+    return c.json({ error: "Not found" }, 404);
   }
 
   // Imported here, not at the top of the file.
@@ -513,20 +542,21 @@ app.get("/projects/export", async (c) => {
   //
   // Keeping the whole module behind this await means a failure to resolve it
   // can only ever cost the spreadsheet download, never the ability to sign in.
-  const { buildProjectWorkbook } = await import("./project-export");
-
-  const { filename, body } = await buildProjectWorkbook({
-    companyId: scope.companyId,
-    session: { user: session.user },
-    // An explicit query param wins — the download URL carries its own
-    // choice — but the request's own locale is a better default than
-    // assuming English.
-    locale: c.req.query("locale") === "id" ? "id" : localeFromHeaders(c.req.raw.headers),
+  const { buildSelectedProjectExport } = await import("./project-export");
+  const built = await buildSelectedProjectExport({
+    // Preserve the request order rather than the database's unspecified IN
+    // order; the builder is never handed an unrequested id.
+    projectIds: request.projectIds,
+    locale: request.locale ?? localeFromHeaders(c.req.raw.headers),
+    includeTeam: hasPermission(roleOf(session.user), "member:manage"),
   });
+  if (!built) return c.json({ error: "Not found" }, 404);
 
-  return c.body(body, 200, {
-    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "Content-Disposition": `attachment; filename="${filename}"`,
+  const downloadName = built.filename.replace(/["\r\n]/g, "_");
+  const asciiDownloadName = downloadName.replace(/[^\x20-\x7e]/g, "_");
+  return c.body(built.body, 200, {
+    "Content-Type": built.contentType,
+    "Content-Disposition": `attachment; filename="${asciiDownloadName}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
     // Generated per request from live data; a cached copy is always wrong.
     "Cache-Control": "no-store",
   });
@@ -541,7 +571,7 @@ app.get("/projects/export", async (c) => {
  *
  * Access is decided by re-running `projectAccessFilter` as part of the lookup
  * rather than by checking the company after fetching. That filter is the same
- * one the project list and the portfolio export use, so these routes cannot
+ * one the project list and selected-project export use, so these routes cannot
  * drift from them, and it carries the project_member rule for role=user for
  * free. A project outside the caller's scope returns no row and the 404 is
  * indistinguishable from one that does not exist — the rule lib/scope.ts sets
@@ -1076,12 +1106,7 @@ app.post("/projects/:id/workbook-update/analyze", async (c) => {
   };
 
   try {
-    const isPdf = parsed.pathname.toLowerCase().endsWith(".pdf");
     const selectedSheetName = parsed.body.selectedSheetName;
-    if (!isPdf && (typeof selectedSheetName !== "string" || !selectedSheetName)) {
-      await discardTemporaryWorkbook(parsed.pathname, owner);
-      throw new TemporaryWorkbookError("Choose a worksheet to analyze.");
-    }
     const existingActualsPromise = db
       .select({
         periodIndex: reportingPeriod.periodIndex,
@@ -1090,6 +1115,17 @@ app.post("/projects/:id/workbook-update/analyze", async (c) => {
       .from(projectActualCurve)
       .innerJoin(reportingPeriod, eq(reportingPeriod.id, projectActualCurve.periodId))
       .where(eq(projectActualCurve.projectId, projectId))
+      .orderBy(asc(reportingPeriod.periodIndex));
+    const reportingPeriodsPromise = db
+      .select({
+        id: reportingPeriod.id,
+        periodIndex: reportingPeriod.periodIndex,
+        label: reportingPeriod.label,
+        startDate: reportingPeriod.startDate,
+        endDate: reportingPeriod.endDate,
+      })
+      .from(reportingPeriod)
+      .where(eq(reportingPeriod.projectId, projectId))
       .orderBy(asc(reportingPeriod.periodIndex));
     const progressReviewPromise = db.execute<{
       activeVersionId: string | null;
@@ -1126,6 +1162,7 @@ app.post("/projects/:id/workbook-update/analyze", async (c) => {
       periodIndex: snapshot.periodIndex,
       cumulativePercent: Number(snapshot.cumulativePercent),
     }));
+    const reportingPeriods = await reportingPeriodsPromise;
     const progressReview = (await progressReviewPromise).rows[0] ?? {
       activeVersionId: null,
       progressEntryCount: 0,
@@ -1155,6 +1192,7 @@ app.post("/projects/:id/workbook-update/analyze", async (c) => {
     const reviewed = {
       ...analysis,
       currentProject,
+      reportingPeriods,
       existingActualSnapshots,
       reviewState: {
         ...reviewState,
@@ -1191,13 +1229,8 @@ app.post("/projects/:id/workbook-update/commit", async (c) => {
             operation: tFor(c.req.raw.headers).enums.workbookOperation.updates,
           }) }, 429);
     }
-    const isPdf = parsed.pathname.toLowerCase().endsWith(".pdf");
     const selectedSheetName = parsed.body.selectedSheetName;
     const sections = parsed.body.sections;
-    if (!isPdf && (typeof selectedSheetName !== "string" || !selectedSheetName)) {
-      await discardTemporaryWorkbook(parsed.pathname, owner);
-      throw new TemporaryWorkbookError("Choose a worksheet to import.");
-    }
     if (!sections || typeof sections !== "object" || Array.isArray(sections)) {
       await discardTemporaryWorkbook(parsed.pathname, owner);
       throw new TemporaryWorkbookError("Choose which project sections to update.");
@@ -1238,6 +1271,10 @@ app.post("/projects/:id/workbook-update/commit", async (c) => {
             typeof parsed.body.confirmed === "object" &&
             !Array.isArray(parsed.body.confirmed)
               ? parsed.body.confirmed
+              : undefined,
+          confirmedProgressDate:
+            typeof parsed.body.confirmedProgressDate === "string"
+              ? parsed.body.confirmedProgressDate
               : undefined,
           actor: {
             id: access.session.user.id,
@@ -1336,12 +1373,6 @@ app.post("/project-import/analyze", async (c) => {
           }) }, 429);
   }
   const selectedSheetName = upload.fields.selectedSheetName;
-  if (
-    upload.sourceKind !== "pdf" &&
-    (typeof selectedSheetName !== "string" || !selectedSheetName)
-  ) {
-    return c.json({ error: tFor(c.req.raw.headers).upload.chooseWorksheet }, 400);
-  }
 
   // Charged up front and handed back below if the model turned out not to be
   // needed. The other order — analyse, then charge — cannot refuse anything,

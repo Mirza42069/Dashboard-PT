@@ -12,8 +12,9 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@DashboardV2/u
 import { Checkbox } from "@DashboardV2/ui/components/checkbox";
 import { Input } from "@DashboardV2/ui/components/input";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, Save, Trash2 } from "@DashboardV2/ui/components/icons";
+import { CircleCheck, Save, Trash2, Upload } from "@DashboardV2/ui/components/icons";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 
@@ -66,6 +67,7 @@ import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
 import DelayContributors from "./delay-contributors";
+import DailyProgressHistory from "./daily-progress-history";
 import { decimalOnly } from "./matrix-input";
 import PeriodSummaryTable from "./period-summary-table";
 import ReportingWorkflow from "./reporting-workflow";
@@ -94,6 +96,8 @@ export default function ProgressTab({
   canEdit,
   canReview,
   canLock,
+  canImport,
+  onImportProgress,
 }: {
   projectId: string;
   canEdit: boolean;
@@ -101,6 +105,8 @@ export default function ProgressTab({
   canReview: boolean;
   /** Lock an approved period, or reopen one for correction. */
   canLock: boolean;
+  canImport: boolean;
+  onImportProgress: () => void;
 }) {
   const t = useT();
   const format = useFormat();
@@ -431,14 +437,27 @@ export default function ProgressTab({
   }
 
   const reading = (
-    <>
+    <Tabs defaultValue="curve" className="gap-3">
+      <TabsList aria-label={t.progress.title}>
+        <TabsTrigger value="curve">{t.progress.viewCurve}</TabsTrigger>
+        <TabsTrigger value="daily">{t.progress.viewDaily}</TabsTrigger>
+      </TabsList>
+      <TabsContent value="curve" className="space-y-3">
         <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
           <Card>
-            <CardHeader>
-              <CardTitle>{t.progress.title}</CardTitle>
-              <CardDescription>
-                {dataDate ? interpolate(t.projects.asOf, { date: formatDate(dataDate) }) : t.progress.noReadings}
-              </CardDescription>
+            <CardHeader className="flex-row items-start justify-between gap-3">
+              <div>
+                <CardTitle>{t.progress.title}</CardTitle>
+                <CardDescription>
+                  {dataDate ? interpolate(t.projects.asOf, { date: formatDate(dataDate) }) : t.progress.noReadings}
+                </CardDescription>
+              </div>
+              {canImport && (
+                <Button type="button" variant="outline" size="sm" onClick={onImportProgress}>
+                  <Upload />
+                  {t.progress.importProgress}
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
               {periods.length === 0 ? (
@@ -517,7 +536,15 @@ export default function ProgressTab({
             actualSource={actualSource}
           />
         )}
-    </>
+      </TabsContent>
+      <TabsContent value="daily">
+        <DailyProgressHistory
+          projectId={projectId}
+          canImport={canImport}
+          onImportProgress={onImportProgress}
+        />
+      </TabsContent>
+    </Tabs>
   );
 
   const entry = (

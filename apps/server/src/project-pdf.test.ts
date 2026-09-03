@@ -60,9 +60,11 @@ const extraction = {
       weight: 100,
       startPeriodIndex: 1,
       finishPeriodIndex: 1,
+      progress: null,
     },
   ],
   actualSnapshots: [],
+  progressReport: null,
 };
 
 const parsedPages = [

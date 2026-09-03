@@ -1,6 +1,7 @@
 import { hasPermission, type Permission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { trialHasEnded } from "@DashboardV2/api/lib/trial";
 import { auth } from "@DashboardV2/auth";
+import type { Route } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
@@ -48,7 +49,7 @@ export async function requireSession(options: RequireSessionOptions = {}) {
   }
 
   if (session.user.mustChangePassword) {
-    redirect("/set-password?error=SETUP_REQUIRED");
+    redirect("/set-password?error=SETUP_REQUIRED" as Route);
   }
 
   // Sign-in is already refused for a lapsed trial in packages/auth, but that

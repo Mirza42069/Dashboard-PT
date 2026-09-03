@@ -19,9 +19,10 @@ export type ShellUser = {
 };
 
 /**
- * Owns the sidebar collapse state so the trigger can live in the topbar while
- * the sidebar itself reacts. Initial value comes from a cookie read on the
- * server, so there is no expand-then-collapse flash.
+ * Owns the sidebar collapse state. The trigger lives in the rail's own top
+ * block, but the state belongs here because this is what persists it to the
+ * cookie. Initial value comes from that cookie read on the server, so there is
+ * no expand-then-collapse flash.
  */
 export default function AppShell({
   user,
@@ -59,14 +60,9 @@ export default function AppShell({
     <div data-app-shell className="flex h-svh overflow-hidden">
       {/* First in the DOM so it is the first thing Tab reaches. */}
       <SkipLink />
-      <AppSidebar role={role} collapsed={collapsed} />
+      <AppSidebar role={role} collapsed={collapsed} onToggle={toggle} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <Header
-          user={user}
-          collapsed={collapsed}
-          initialTextScale={initialTextScale}
-          onToggleSidebar={toggle}
-        />
+        <Header user={user} initialTextScale={initialTextScale} />
         {/* tabIndex={-1} so the skip link can actually land focus here; without
             it the browser scrolls to #main but focus stays on the link, and the
             next Tab goes back into the sidebar. */}

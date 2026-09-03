@@ -206,7 +206,10 @@ export function AttentionList({
    * that one.
    */
   function signalHref(id: SignalId, row: AttentionRow): Route {
-    const tab = id === "openActions" ? "tickets" : id === "baselineMissing" ? "boq" : "progress";
+    if (id === "baselineMissing") {
+      return projectTabPath(row.projectId, "baseline", row.hiddenModules, "boq") as Route;
+    }
+    const tab = id === "openActions" ? "tickets" : "progress";
     return projectTabPath(row.projectId, tab, row.hiddenModules) as Route;
   }
 
@@ -222,7 +225,7 @@ export function AttentionList({
       return projectTabPath(row.projectId, "tickets", row.hiddenModules) as Route;
     }
     const candidates: ProjectTab[] = [];
-    if (row.reasons.baselineMissing) candidates.push("boq");
+    if (row.reasons.baselineMissing) candidates.push("baseline");
     if (
       row.reasons.behind ||
       row.reasons.unreported ||
@@ -236,7 +239,12 @@ export function AttentionList({
     const tab = candidates.find((candidate) =>
       isProjectTabVisible(candidate, row.hiddenModules, false),
     );
-    return projectTabPath(row.projectId, tab ?? "overview", row.hiddenModules) as Route;
+    return projectTabPath(
+      row.projectId,
+      tab ?? "overview",
+      row.hiddenModules,
+      "boq",
+    ) as Route;
   }
 
   /**

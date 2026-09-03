@@ -86,7 +86,7 @@ export async function resolveCompanyIdForSession(
 /**
  * What a *query* needs: who is asking, and on whose behalf. No copy, because a
  * filter never refuses — it just narrows. apps/server builds one of these from
- * a session alone (project-export.ts, and the export route in index.ts), which
+ * a session alone (the selected-project export route in index.ts), which
  * is why this half exists separately from the one below.
  */
 export type ProjectScopeQuery = {

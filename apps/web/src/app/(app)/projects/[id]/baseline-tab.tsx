@@ -29,6 +29,7 @@ import { QueryError } from "@/components/query-error";
 import { interpolate } from "@/i18n";
 import { Hint } from "@/components/hint";
 import { useT } from "@/i18n/provider";
+import type { BaselineStep } from "@/lib/project-navigation";
 import {
   buildSections,
   distributionMap,
@@ -43,7 +44,6 @@ import BoqImportDialog from "./boq-import-dialog";
 import BoqTab from "./boq-tab";
 import ScheduleTab from "./schedule-tab";
 
-export type BaselineStep = "boq" | "schedule" | "review";
 const ROW_TOLERANCE = 0.5;
 
 /**
@@ -87,7 +87,7 @@ export default function BaselineTab({
   const setupMode = Boolean(target);
   /*
    * There is nothing to review until a draft exists, and a project with no
-   * baseline is linked to as ?tab=baseline from the dashboard. Falling back to
+   * baseline review can be linked before a draft exists. Falling back to
    * the first step is what that link should have meant all along — the
    * alternative is a header with an empty page under it.
    */

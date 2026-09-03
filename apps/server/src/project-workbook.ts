@@ -24,12 +24,22 @@ import {
   readCell,
 } from "./boq-import-parse";
 import {
+  dailyProgressSheetDates,
+  parseDailySheetDate,
+  parseDailyProgressWorkbook,
+  type DailyProgressMapping,
+  type DailyProgressPlan,
+  type DailyProgressPreview,
+  type ParsedDailyProgressSnapshot,
+} from "./project-daily-progress";
+import {
   extractProjectPdf,
   pdfExtractionDigest,
   pdfExtractionSchema,
   validateProjectPdf,
   type PdfExtraction,
 } from "./project-pdf";
+import { parsePdfDailyProgress } from "./project-pdf-progress";
 import {
   isWeeklyProgressWorkbook,
   parseWeeklyProgressWorkbook,
@@ -49,6 +59,38 @@ const fieldsSchema = z.object({
   weight: workbookColumn.optional(),
   start: workbookColumn.optional(),
   finish: workbookColumn.optional(),
+});
+
+const dailyProgressMappingSchema = z.object({
+  code: workbookColumn.optional(),
+  description: workbookColumn,
+  quantity: workbookColumn,
+  unit: workbookColumn.optional(),
+  unitRate: workbookColumn,
+  amount: workbookColumn,
+  weight: workbookColumn,
+  previousPercent: workbookColumn,
+  previousWeighted: workbookColumn,
+  currentPercent: workbookColumn,
+  currentWeighted: workbookColumn,
+  cumulativePercent: workbookColumn,
+  cumulativeWeighted: workbookColumn,
+  remainingPercent: workbookColumn,
+  remainingWeighted: workbookColumn,
+  remark: workbookColumn.optional(),
+});
+
+const dailyProgressPlanSchema = z.object({
+  version: z.literal(1),
+  mappingSource: z.enum(["deterministic", "ai"]),
+  headerRow: workbookRow,
+  dataStartRow: workbookRow,
+  dataEndRow: workbookRow,
+  mapping: dailyProgressMappingSchema,
+  sheets: z
+    .array(z.object({ sheetName: z.string().min(1).max(100), reportDate: z.iso.date() }))
+    .min(2)
+    .max(100),
 });
 
 export const workbookPlanSchema = z
@@ -116,6 +158,7 @@ export const workbookPlanSchema = z
       })
       .nullable()
       .optional(),
+    dailyProgress: dailyProgressPlanSchema.nullable().optional(),
     pdf: z
       .object({
         pageCount: z.number().int().positive().max(25),
@@ -276,9 +319,12 @@ export type WorkbookAnalysis = {
     weight: number | null;
     startPeriodIndex: number | null;
     finishPeriodIndex: number | null;
+    progress?: PdfExtraction["rows"][number]["progress"];
   }[];
   pdfActualPreview?: PdfExtraction["actualSnapshots"];
+  pdfProgressErrorCount?: number;
   weeklyProgressPreview?: WeeklyProgressPreview;
+  dailyProgressPreview?: DailyProgressPreview;
   summary: {
     sectionCount: number;
     lineCount: number;
@@ -396,6 +442,7 @@ type WorkbookPlanIdentity = {
   dataStartRow: number;
   dataEndRow: number;
   pdfExtractionDigest?: string;
+  dailyProgressDigest?: string;
 };
 
 export function workbookPlanIdentitySignature(identity: WorkbookPlanIdentity) {
@@ -418,11 +465,42 @@ function hasValidPlanIdentity(plan: WorkbookPlan) {
       dataStartRow: plan.dataStartRow,
       dataEndRow: plan.dataEndRow,
       ...(plan.pdf ? { pdfExtractionDigest: plan.pdf.extractionDigest } : {}),
+      ...(plan.dailyProgress
+        ? { dailyProgressDigest: hashText(JSON.stringify(plan.dailyProgress)) }
+        : {}),
     }),
     "hex",
   );
   const submitted = Buffer.from(plan.analysisSignature, "hex");
   return expected.length === submitted.length && timingSafeEqual(expected, submitted);
+}
+
+function hashText(value: string) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function planIdentity(plan: WorkbookPlan, dailyProgress: DailyProgressPlan | null) {
+  return {
+    fileHash: plan.fileHash,
+    profile: plan.profile,
+    sheetName: plan.sheetName,
+    headerRow: plan.headerRow,
+    dataStartRow: plan.dataStartRow,
+    dataEndRow: plan.dataEndRow,
+    ...(plan.pdf ? { pdfExtractionDigest: plan.pdf.extractionDigest } : {}),
+    ...(dailyProgress
+      ? { dailyProgressDigest: hashText(JSON.stringify(dailyProgress)) }
+      : {}),
+  } satisfies WorkbookPlanIdentity;
+}
+
+function attachDailyProgress(plan: WorkbookPlan, dailyProgress: DailyProgressPlan) {
+  const identity = planIdentity(plan, dailyProgress);
+  return workbookPlanSchema.parse({
+    ...plan,
+    dailyProgress,
+    analysisSignature: workbookPlanIdentitySignature(identity),
+  });
 }
 
 function isoDateAt(
@@ -1106,10 +1184,11 @@ function pdfParentAssignments(extraction: PdfExtraction) {
   return assignments;
 }
 
-function pdfSchedulePeriodCount(extraction: PdfExtraction) {
+export function pdfSchedulePeriodCount(extraction: PdfExtraction) {
   return Math.max(
     0,
     ...extraction.rows.map((row) => (row.kind === "item" ? (row.finishPeriodIndex ?? 0) : 0)),
+    ...extraction.actualSnapshots.map((snapshot) => snapshot.periodIndex),
   );
 }
 
@@ -1197,7 +1276,54 @@ export async function analyzeProjectWorkbook(
   }
   const fileHash = hash(bytes);
   onStage("recognising");
-  let plan = referencePlan(workbook, fileHash, selectedSheetName);
+  const selectedDailySheet = selectedSheetName ? parseDailySheetDate(selectedSheetName) !== null : false;
+  const dailySheets = !selectedSheetName || selectedDailySheet ? dailyProgressSheetDates(workbook) : [];
+  const autoSheetName =
+    dailySheets.length >= 2
+      ? recommendProjectWorkbookSheet(visibleProjectWorkbookSheets(discoverProjectWorkbookSheets(workbook)))
+          ?.sheetName
+      : undefined;
+  let plan = referencePlan(
+    workbook,
+    fileHash,
+    selectedDailySheet ? autoSheetName : (selectedSheetName ?? autoSheetName),
+  );
+
+  if (plan && dailySheets.length >= 2) {
+    let daily = parseDailyProgressWorkbook(workbook);
+    if (!daily) {
+      onStage("interpreting");
+      const { interpretDailyProgressWorkbook } = await import("./workbook-ai");
+      const interpreted = await interpretDailyProgressWorkbook(
+        workbookSummary(workbook, dailySheets[0]!.sheetName),
+        onModelAnswer,
+      );
+      if (interpreted) {
+        const mapping = Object.fromEntries(
+          Object.entries(interpreted.mapping).filter(([, value]) => value !== null),
+        ) as DailyProgressMapping;
+        const dailyPlan: DailyProgressPlan = {
+          version: 1,
+          mappingSource: "ai",
+          headerRow: interpreted.headerRow,
+          dataStartRow: interpreted.dataStartRow,
+          dataEndRow: interpreted.dataEndRow,
+          mapping,
+          sheets: dailySheets,
+        };
+        daily = parseDailyProgressWorkbook(workbook, dailyPlan);
+      }
+    }
+    if (!daily) {
+      throw new ProjectWorkbookError(
+        "The dated progress worksheets could not be mapped. Select the S-curve sheet to import it alone, or correct the dated sheet headers.",
+        "invalid",
+        [],
+        "daily_progress_mapping_required",
+      );
+    }
+    plan = attachDailyProgress(plan, daily.plan);
+  }
 
   if (!plan) {
     onStage("interpreting");
@@ -1420,6 +1546,10 @@ async function reviewProjectPdf(bytes: Uint8Array, submittedPlan: WorkbookPlan) 
   if (
     pdf.extraction.rows.some((row) => row.page > pdf.pageCount) ||
     pdf.extraction.actualSnapshots.some((snapshot) => snapshot.page > pdf.pageCount) ||
+    (pdf.extraction.progressReport !== null &&
+      (pdf.extraction.progressReport.grandTotal.page > pdf.pageCount ||
+        (pdf.extraction.progressReport.reportDateSource !== null &&
+          pdf.extraction.progressReport.reportDateSource.page > pdf.pageCount))) ||
     Object.values(pdf.extraction.metadataSources).some(
       (source) => source !== null && source.page > pdf.pageCount,
     )
@@ -1530,10 +1660,16 @@ async function reviewProjectPdf(bytes: Uint8Array, submittedPlan: WorkbookPlan) 
       weight: parsedRow?.weight ?? source.weight,
       startPeriodIndex: parsedRow?.start ?? source.startPeriodIndex,
       finishPeriodIndex: parsedRow?.finish ?? source.finishPeriodIndex,
+      progress: source.progress,
     };
   });
   const actual = parseActualSnapshots(sheet, plan);
-  const validationErrors = [...parsed.errors, ...actual.errors];
+  const detailedProgress = parsePdfDailyProgress(pdf.extraction);
+  const validationErrors = [
+    ...parsed.errors,
+    ...actual.errors,
+    ...(detailedProgress?.errors ?? []),
+  ];
   if (lines.length === 0) {
     validationErrors.push({
       row: plan.dataStartRow,
@@ -1547,6 +1683,8 @@ async function reviewProjectPdf(bytes: Uint8Array, submittedPlan: WorkbookPlan) 
     columns: describeSheet(sheet, 1).columns,
     actualSnapshots: actual.snapshots,
     pdfActualPreview: pdf.extraction.actualSnapshots,
+    pdfProgressErrorCount: detailedProgress?.errors.length ?? 0,
+    dailyProgressPreview: detailedProgress?.preview,
     rowPreview,
     summary: {
       sectionCount: sections.length,
@@ -1661,6 +1799,15 @@ export async function reviewProjectWorkbook(
     throw new ProjectWorkbookError("The selected worksheet no longer exists.", "invalid");
   }
   assertPlanCoordinates(sheet, parsedPlan);
+  const daily = parsedPlan.dailyProgress
+    ? parseDailyProgressWorkbook(workbook, parsedPlan.dailyProgress)
+    : null;
+  if (parsedPlan.dailyProgress && !daily) {
+    throw new ProjectWorkbookError(
+      "The dated progress worksheet layout changed after analysis.",
+      "invalid",
+    );
+  }
   if (parsedPlan.weeklyProgress || isWeeklyProgressWorkbook(workbook, sheet)) {
     assertSafeRowScope(sheet, parsedPlan);
     return reviewWeeklyProgressWorkbook(workbook, sheet, parsedPlan);
@@ -1785,7 +1932,20 @@ export async function reviewProjectWorkbook(
     });
   }
   const actual = parseActualSnapshots(sheet, plan);
-  const validationErrors = [...parsed.errors, ...actual.errors];
+  const validationErrors = [...parsed.errors, ...actual.errors, ...(daily?.errors ?? [])];
+  const latestDaily = daily?.snapshots.at(-1);
+  const latestActual = actual.snapshots.at(-1);
+  if (
+    latestDaily &&
+    latestActual &&
+    Math.abs(latestDaily.cumulativePercent - latestActual.cumulativePercent) > 0.02
+  ) {
+    validationErrors.push({
+      row: plan.dailyProgress?.dataEndRow ?? plan.dataEndRow,
+      column: null,
+      message: `Latest daily progress (${latestDaily.cumulativePercent.toFixed(3)}%) does not match the S-curve (${latestActual.cumulativePercent.toFixed(3)}%).`,
+    });
+  }
   if (lines.length === 0) {
     validationErrors.push({
       row: plan.dataStartRow,
@@ -1798,6 +1958,7 @@ export async function reviewProjectWorkbook(
     plan,
     columns: describeSheet(sheet, plan.headerRow).columns,
     actualSnapshots: actual.snapshots,
+    dailyProgressPreview: daily?.preview,
     rowPreview,
     summary: {
       sectionCount: sections.length,
@@ -2001,6 +2162,7 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
       actualSnapshots: reviewed.actualSnapshots,
       itemProgress: parsed.itemProgress,
       weeklyProgressPreview: parsed.preview,
+      dailyProgress: [] as ParsedDailyProgressSnapshot[],
     };
   }
   if (!plan.mapping.fields.start || !plan.mapping.fields.finish) {
@@ -2033,13 +2195,46 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
   if (actual.errors.length > 0) {
     throw new ProjectWorkbookError("The imported actual curve needs attention.", "invalid", actual.errors);
   }
+  const workbook = plan.dailyProgress ? await loadWorkbook(bytes) : null;
+  const daily = workbook && plan.dailyProgress
+    ? parseDailyProgressWorkbook(workbook, plan.dailyProgress)
+    : null;
+  if (plan.dailyProgress && (!daily || daily.errors.length > 0)) {
+    throw new ProjectWorkbookError(
+      "The dated progress worksheets need attention.",
+      "invalid",
+      daily?.errors.slice(0, 100) ?? [],
+    );
+  }
+  const mergedActuals = new Map(actual.snapshots.map((snapshot) => [snapshot.periodIndex, snapshot]));
+  const latestDailyByPeriod = new Map<number, ParsedDailyProgressSnapshot>();
+  for (const snapshot of daily?.snapshots ?? []) {
+    const period = generated.find(
+      (candidate) =>
+        snapshot.reportDate >= candidate.startDate && snapshot.reportDate <= candidate.endDate,
+    );
+    if (period) latestDailyByPeriod.set(period.periodIndex, snapshot);
+  }
+  for (const [periodIndex, snapshot] of latestDailyByPeriod) {
+    if (mergedActuals.has(periodIndex)) continue;
+    mergedActuals.set(periodIndex, {
+      periodIndex,
+      cumulativePercent: snapshot.cumulativePercent,
+      sourceRow: plan.dailyProgress?.dataEndRow ?? plan.dataEndRow,
+      sourceColumn:
+        plan.dailyProgress?.mapping.cumulativeWeighted ?? plan.mapping.fields.weight ?? 1,
+      sourceValue: snapshot.cumulativePercent.toFixed(8),
+      sourceLabel: snapshot.sourceSheetName,
+    });
+  }
 
   return {
     plan,
     rows: rows.rows,
     periods: generated,
-    actualSnapshots: actual.snapshots,
+    actualSnapshots: [...mergedActuals.values()].sort((a, b) => a.periodIndex - b.periodIndex),
     itemProgress: [],
     weeklyProgressPreview: undefined,
+    dailyProgress: daily?.snapshots ?? [],
   };
 }

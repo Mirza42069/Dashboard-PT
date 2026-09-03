@@ -20,8 +20,9 @@ import { StatusBadge } from "@/components/status-badge";
 import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import {
-  BASELINE_STEP_TABS,
+  type BaselineStep,
   isProjectTabVisible,
+  resolveBaselineStep,
   resolveProjectTab,
 } from "@/lib/project-navigation";
 import { toast } from "@/lib/toast";
@@ -74,30 +75,40 @@ export default function ProjectDetail({
   const project = projectQuery.data;
 
   const requestedTab = searchParams.get("tab");
+  const requestedStep = searchParams.get("step");
   const hiddenModules = project?.hiddenModules ?? [];
   const activeTab = resolveProjectTab(requestedTab, hiddenModules, canManageMembers);
+  const activeBaselineStep = resolveBaselineStep(requestedTab, requestedStep);
 
-  function applyTab(value: string) {
+  function applyTab(value: string, baselineStep?: BaselineStep) {
     const resolved = resolveProjectTab(value, hiddenModules, canManageMembers);
     const next = new URLSearchParams(searchParams.toString());
     if (resolved === "overview") next.delete("tab");
     else next.set("tab", resolved);
+    if (resolved === "baseline") {
+      next.set("step", baselineStep ?? resolveBaselineStep(value, null));
+    } else {
+      next.delete("step");
+    }
     if (resolved !== "tickets") next.delete("action");
     const query = next.toString();
     router.replace((query ? `${pathname}?${query}` : pathname) as Route, { scroll: false });
   }
 
   function selectTab(value: string) {
-    applyTab(value);
+    applyTab(value, value === "baseline" ? "boq" : undefined);
   }
 
   useEffect(() => {
     if (!project) return;
     const urlIsCanonical =
-      (activeTab === "overview" && requestedTab === null && !searchParams.has("action")) ||
-      (requestedTab === activeTab && (activeTab === "tickets" || !searchParams.has("action")));
-    if (!urlIsCanonical) applyTab(activeTab);
-  }, [activeTab, project, requestedTab, searchParams]);
+      ((activeTab === "overview" && requestedTab === null) || requestedTab === activeTab) &&
+      (activeTab === "baseline"
+        ? requestedStep === activeBaselineStep
+        : requestedStep === null) &&
+      (activeTab === "tickets" || !searchParams.has("action"));
+    if (!urlIsCanonical) applyTab(activeTab, activeBaselineStep);
+  }, [activeBaselineStep, activeTab, project, requestedStep, requestedTab, searchParams]);
 
   if (projectQuery.isPending) {
     return <Skeleton className="h-64 w-full" />;
@@ -237,8 +248,6 @@ export default function ProjectDetail({
           <TabsList variant="line" className="min-w-max">
             <TabsTrigger value="overview">{t.nav.overview}</TabsTrigger>
             {showActions && <TabsTrigger value="tickets">{t.projects.tabTickets}</TabsTrigger>}
-            {showBaseline && <TabsTrigger value="boq">{t.projects.tabBoq}</TabsTrigger>}
-            {showBaseline && <TabsTrigger value="schedule">{t.projects.tabSchedule}</TabsTrigger>}
             {showBaseline && <TabsTrigger value="baseline">{t.projects.tabBaseline}</TabsTrigger>}
             {showProgress && <TabsTrigger value="progress">{t.projects.tabProgress}</TabsTrigger>}
             {showNotes && <TabsTrigger value="notes">{t.notes.tab}</TabsTrigger>}
@@ -250,20 +259,18 @@ export default function ProjectDetail({
           {activeTab === "overview" && <ProjectOverview project={project} />}
         </TabsContent>
 
-        {showBaseline && (["boq", "schedule", "baseline"] as const).map((value) => (
-          <TabsContent key={value} value={value}>
-            {activeTab === value && (
+        {showBaseline && (
+          <TabsContent value="baseline">
+            {activeTab === "baseline" && (
               <BaselineTab
                 projectId={projectId}
                 canEdit={writable}
-                step={BASELINE_STEP_TABS[value]}
-                onStepChange={(next) =>
-                  selectTab(next === "review" ? "baseline" : next)
-                }
+                step={activeBaselineStep}
+                onStepChange={(next) => applyTab("baseline", next)}
               />
             )}
           </TabsContent>
-        ))}
+        )}
 
         {showProgress && <TabsContent value="progress">
           {activeTab === "progress" && (
@@ -272,6 +279,8 @@ export default function ProjectDetail({
               canEdit={writable}
               canReview={canReview && !archived}
               canLock={canLock && !archived}
+              canImport={canUpdateProject && writable}
+              onImportProgress={() => setUpdateOpen(true)}
             />
           )}
         </TabsContent>}
@@ -314,7 +323,7 @@ export default function ProjectDetail({
           currentUserId={currentUserId}
           onOpenChange={setUpdateOpen}
           onUpdated={(result) => {
-            if (result.draftVersionId) selectTab("boq");
+            if (result.draftVersionId) applyTab("baseline", "boq");
             else if (result.sectionsUpdated.length === 1 && result.sectionsUpdated[0] === "progress") {
               selectTab("progress");
             }

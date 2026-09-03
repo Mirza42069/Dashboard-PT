@@ -302,6 +302,20 @@
       "when": 1788241555247,
       "tag": "0042_ambitious_hedge_knight",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1788338977117,
+      "tag": "0043_ordinary_joystick",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1788352414970,
+      "tag": "0044_high_wildside",
+      "breakpoints": true
     }
   ]
 }

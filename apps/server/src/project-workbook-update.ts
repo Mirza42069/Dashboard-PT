@@ -5,6 +5,8 @@ import {
   boqImport,
   boqItem,
   boqVersion,
+  dailyProgressItem,
+  dailyProgressSnapshot,
   progressEntry,
   project,
   projectActualCurve,
@@ -14,6 +16,11 @@ import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { prepareBoqRevision } from "./boq-import";
+import { BOQ_NUMERIC_SCALE, loadWorkbook } from "./boq-import-parse";
+import {
+  parseDailyProgressWorkbook,
+  type ParsedDailyProgressSnapshot,
+} from "./project-daily-progress";
 import {
   hasValidWorkbookReviewStateSignature,
   pdfCalendarDifferences,
@@ -28,6 +35,10 @@ import {
   workbookPlanSchema,
   type ProjectWorkbookCommit,
 } from "./project-workbook";
+import {
+  parsePdfDailyProgress,
+  resolvePdfProgressPeriod,
+} from "./project-pdf-progress";
 
 export type ProjectWorkbookUpdateSections = {
   projectDetails: boolean;
@@ -45,6 +56,7 @@ export type CommitProjectWorkbookUpdateInput = {
   plan: unknown;
   sections: ProjectWorkbookUpdateSections;
   confirmed?: Partial<ProjectWorkbookCommit["project"]>;
+  confirmedProgressDate?: string;
   reviewState: unknown;
   actor: { id: string; name: string };
 };
@@ -115,6 +127,12 @@ function isDivisionByZero(error: unknown) {
   return message.toLowerCase().includes("division by zero");
 }
 
+function chunks<T>(values: T[], size: number) {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
+  return result;
+}
+
 export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUpdateInput) {
   if (!Object.values(input.sections).some(Boolean)) {
     invalid("Select at least one project section to update.", "section_required");
@@ -160,7 +178,14 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
 
   if (
     submittedPlan.profile !== "pdf-ai" &&
-    submittedPlan.sheetName !== input.selectedSheetName
+    submittedPlan.sheetName !== input.selectedSheetName &&
+    !(
+      submittedPlan.dailyProgress &&
+      (input.selectedSheetName === null ||
+        submittedPlan.dailyProgress.sheets.some(
+          (sheet) => sheet.sheetName === input.selectedSheetName,
+        ))
+    )
   ) {
     invalid("The selected worksheet no longer matches the reviewed import plan.", "sheet_mismatch");
   }
@@ -318,20 +343,75 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
   };
 
   let prepared: Awaited<ReturnType<typeof prepareConfirmedWorkbook>> | null = null;
+  let dailyProgress: ParsedDailyProgressSnapshot[] = [];
   let workbookPeriods: Awaited<ReturnType<typeof validateWorkbookCalendar>>["generated"] | null = null;
+  const pdfProgress = analysis.plan.pdf
+    ? parsePdfDailyProgress(analysis.plan.pdf.extraction)
+    : null;
+  if (input.sections.progress && pdfProgress) {
+    if (pdfProgress.errors.length > 0) {
+      throw new ProjectWorkbookError(
+        "The detailed PDF progress report needs attention.",
+        "invalid",
+        pdfProgress.errors.slice(0, 100),
+      );
+    }
+    const resolvedProgress = resolvePdfProgressPeriod(
+      pdfProgress.reportDate,
+      input.confirmedProgressDate,
+      periods,
+    );
+    const reportDate = resolvedProgress.reportDate;
+    if (!reportDate || !z.iso.date().safeParse(reportDate).success) {
+      invalid(
+        "Choose the date represented by this PDF progress report.",
+        "progress_report_date_required",
+      );
+    }
+    if (!resolvedProgress.period) {
+      invalid(
+        "The PDF progress report date is outside the project's reporting calendar.",
+        "progress_report_date_outside_calendar",
+      );
+    }
+    dailyProgress = [{
+      reportDate,
+      sourceSheetName: pdfProgress.sourceSheetName,
+      cumulativePercent: pdfProgress.cumulativePercent,
+      items: pdfProgress.items,
+    }];
+  }
   if (importsBoqAndSchedule) {
     const confirmed = parseOrInvalid(
       projectWorkbookCommitSchema.safeParse({ plan: analysis.plan, project: confirmedProject }),
     );
     prepared = await prepareConfirmedWorkbook(input.bytes, confirmed);
+    if (input.sections.progress && dailyProgress.length === 0) {
+      dailyProgress = prepared.dailyProgress;
+    }
     workbookPeriods = prepared.periods;
   } else if (input.sections.progress) {
-    const projectCalendar = parseOrInvalid(
-      projectWorkbookCommitSchema.shape.project.safeParse(confirmedProject),
-    );
-    workbookPeriods = (
-      await validateWorkbookCalendar(input.bytes, analysis.plan, projectCalendar)
-    ).generated;
+    if (dailyProgress.length === 0 && analysis.plan.dailyProgress) {
+      const parsedDaily = parseDailyProgressWorkbook(
+        await loadWorkbook(input.bytes),
+        analysis.plan.dailyProgress,
+      );
+      if (!parsedDaily || parsedDaily.errors.length > 0) {
+        throw new ProjectWorkbookError(
+          "The dated progress worksheets need attention.",
+          "invalid",
+          parsedDaily?.errors.slice(0, 100) ?? [],
+        );
+      }
+      dailyProgress = parsedDaily.snapshots;
+    } else if (dailyProgress.length === 0) {
+      const projectCalendar = parseOrInvalid(
+        projectWorkbookCommitSchema.shape.project.safeParse(confirmedProject),
+      );
+      workbookPeriods = (
+        await validateWorkbookCalendar(input.bytes, analysis.plan, projectCalendar)
+      ).generated;
+    }
   }
 
   if (workbookPeriods) {
@@ -355,9 +435,46 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     }
   }
 
-  const snapshots = input.sections.progress
+  let snapshots = input.sections.progress
     ? (prepared?.actualSnapshots ?? analysis.actualSnapshots)
     : [];
+  if (input.sections.progress && dailyProgress.length > 0) {
+    const merged = new Map(snapshots.map((snapshot) => [snapshot.periodIndex, snapshot]));
+    const latestDailyByPeriod = new Map<number, ParsedDailyProgressSnapshot>();
+    for (const snapshot of dailyProgress) {
+      const period = periods.find(
+        (candidate) =>
+          snapshot.reportDate >= candidate.startDate && snapshot.reportDate <= candidate.endDate,
+      );
+      if (!period) {
+        invalid(
+          `Daily progress date ${snapshot.reportDate} is outside the project reporting calendar.`,
+          "daily_progress_date_outside_calendar",
+        );
+      }
+      latestDailyByPeriod.set(period.periodIndex, snapshot);
+    }
+    for (const [periodIndex, snapshot] of latestDailyByPeriod) {
+      if (merged.has(periodIndex)) continue;
+      merged.set(periodIndex, {
+        periodIndex,
+        cumulativePercent: snapshot.cumulativePercent,
+        sourceRow:
+          analysis.plan.dailyProgress?.dataEndRow ??
+          analysis.plan.pdf?.extraction.progressReport?.grandTotal.sourceRow ??
+          analysis.plan.dataEndRow,
+        sourceColumn:
+          analysis.plan.dailyProgress?.mapping.cumulativeWeighted ??
+          analysis.plan.mapping.fields.weight ??
+          1,
+        sourceValue:
+          analysis.plan.pdf?.extraction.progressReport?.grandTotal.sourceValue ??
+          snapshot.cumulativePercent.toFixed(8),
+        sourceLabel: snapshot.sourceSheetName,
+      });
+    }
+    snapshots = [...merged.values()].sort((a, b) => a.periodIndex - b.periodIndex);
+  }
   if (input.sections.progress && snapshots.length === 0) {
     invalid("The selected worksheet has no valid actual progress snapshots.", "actual_required");
   }
@@ -514,6 +631,17 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     userExcludedRows: analysis.plan.userExcludedRows,
     parentAssignments: analysis.plan.parentAssignments,
     actualCurve: analysis.plan.actualCurve,
+    dailyProgress:
+      analysis.plan.dailyProgress == null
+        ? null
+        : {
+            ...analysis.plan.dailyProgress,
+            dates: dailyProgress.map((snapshot) => ({
+              reportDate: snapshot.reportDate,
+              cumulativePercent: snapshot.cumulativePercent,
+              itemCount: snapshot.items.length,
+            })),
+          },
     pdf:
       analysis.plan.pdf === null
         ? null
@@ -521,6 +649,11 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
             pageCount: analysis.plan.pdf.pageCount,
             extractionDigest: analysis.plan.pdf.extractionDigest,
             modelReportedMetadataSources: analysis.plan.pdf.extraction.metadataSources,
+            modelReportedProgressReport: analysis.plan.pdf.extraction.progressReport,
+            confirmedProgressDate:
+              analysis.plan.pdf.extraction.progressReport === null
+                ? null
+                : (dailyProgress[0]?.reportDate ?? null),
             rowSources: analysis.plan.pdf.extraction.rows.map((row, index) => ({
               row: index + 2,
               page: row.page,
@@ -545,7 +678,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
           .from(boqItem)
           .where(and(eq(boqItem.boqVersionId, activeVersion.id), isNull(boqItem.deletedAt)))
       : [];
-  const revision = prepared
+  const revision = prepared && importsBoqAndSchedule
     ? prepareBoqRevision({
         projectId: input.projectId,
         rows: prepared.rows,
@@ -561,6 +694,66 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
       })
     : null;
   const updateImportId = revision?.result.importId ?? crypto.randomUUID();
+  const dailyVersionId = revision?.result.versionId ?? activeVersion?.id ?? null;
+  if (dailyProgress.length > 0 && !dailyVersionId) {
+    invalid("Activate a baseline before importing dated item progress.", "active_baseline_required");
+  }
+  const dailySnapshotValues = dailyProgress.map((snapshot) => {
+    const period = periods.find(
+      (candidate) =>
+        snapshot.reportDate >= candidate.startDate && snapshot.reportDate <= candidate.endDate,
+    );
+    if (!period) {
+      invalid(
+        `Daily progress date ${snapshot.reportDate} is outside the project reporting calendar.`,
+        "daily_progress_date_outside_calendar",
+      );
+    }
+    return {
+      id: crypto.randomUUID(),
+      projectId: input.projectId,
+      periodId: period.id,
+      boqVersionId: dailyVersionId!,
+      boqImportId: updateImportId,
+      reportDate: snapshot.reportDate,
+      cumulativePercent: snapshot.cumulativePercent.toFixed(6),
+      sourceFilename: input.filename,
+      sourceSheetName: snapshot.sourceSheetName,
+      sourceHeaderRow: analysis.plan.dailyProgress?.headerRow ?? 1,
+    };
+  });
+  const dailySnapshotIdByDate = new Map(
+    dailySnapshotValues.map((snapshot) => [snapshot.reportDate, snapshot.id]),
+  );
+  const dailyItemValues = dailyProgress.flatMap((snapshot) =>
+    snapshot.items.map((item) => ({
+      id: crypto.randomUUID(),
+      projectId: input.projectId,
+      snapshotId: dailySnapshotIdByDate.get(snapshot.reportDate)!,
+      sourceRow: item.sourceRow,
+      code: item.code,
+      description: item.description,
+      sectionCode: item.sectionCode,
+      sectionDescription: item.sectionDescription,
+      parentCode: item.parentCode,
+      parentDescription: item.parentDescription,
+      unit: item.unit,
+      quantity: item.quantity.toFixed(BOQ_NUMERIC_SCALE),
+      unitRate: item.unitRate.toFixed(BOQ_NUMERIC_SCALE),
+      amount: item.amount.toFixed(BOQ_NUMERIC_SCALE),
+      weight: item.weight.toFixed(6),
+      previousPercent: item.previousPercent.toFixed(6),
+      currentPercent: item.currentPercent === null ? null : item.currentPercent.toFixed(6),
+      cumulativePercent: item.cumulativePercent.toFixed(6),
+      remainingPercent: item.remainingPercent.toFixed(6),
+      previousWeighted: item.previousWeighted.toFixed(8),
+      currentWeighted: item.currentWeighted === null ? null : item.currentWeighted.toFixed(8),
+      cumulativeWeighted: item.cumulativeWeighted.toFixed(8),
+      remainingWeighted: item.remainingWeighted.toFixed(8),
+      remark: item.remark,
+      sourceValues: item.sourceValues,
+    })),
+  );
   const actualCurveValues = snapshots.map((snapshot) => ({
     projectId: input.projectId,
     periodId: periodByIndex.get(snapshot.periodIndex)!.id,
@@ -724,6 +917,24 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
         rowsImported: snapshots.length,
         errorCount: 0,
       }),
+    );
+  }
+
+  if (dailySnapshotValues.length > 0) {
+    statements.push(
+      db.delete(dailyProgressSnapshot).where(
+        and(
+          eq(dailyProgressSnapshot.projectId, input.projectId),
+          inArray(
+            dailyProgressSnapshot.reportDate,
+            dailySnapshotValues.map((snapshot) => snapshot.reportDate),
+          ),
+        ),
+      ),
+      db.insert(dailyProgressSnapshot).values(dailySnapshotValues),
+      ...chunks(dailyItemValues, 250).map((values) =>
+        db.insert(dailyProgressItem).values(values),
+      ),
     );
   }
 

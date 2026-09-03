@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 
-import type { WorkbookInterpretation } from "./workbook-ai";
+import type { DailyProgressInterpretation, WorkbookInterpretation } from "./workbook-ai";
 
 process.env.SKIP_ENV_VALIDATION = "true";
 
-const { interpretWorkbook } = await import("./workbook-ai");
+const { interpretDailyProgressWorkbook, interpretWorkbook } = await import("./workbook-ai");
 
 const usage = {
   inputTokens: {
@@ -92,6 +92,39 @@ test("returns a validated Gateway workbook interpretation", async () => {
   expect(model.doGenerateCalls[0]?.responseFormat).toMatchObject({
     type: "json",
     name: "project_workbook_layout",
+  });
+});
+
+test("returns an AI mapping for a dated daily progress table", async () => {
+  const mapping: DailyProgressInterpretation = {
+    headerRow: 7,
+    dataStartRow: 9,
+    dataEndRow: 170,
+    mapping: {
+      code: 1,
+      description: 3,
+      quantity: 4,
+      unit: 5,
+      unitRate: 6,
+      amount: 7,
+      weight: 8,
+      previousPercent: 9,
+      previousWeighted: 10,
+      currentPercent: 11,
+      currentWeighted: 12,
+      cumulativePercent: 13,
+      cumulativeWeighted: 14,
+      remainingPercent: 15,
+      remainingWeighted: 16,
+      remark: 17,
+    },
+  };
+  const model = modelAnswer(mapping);
+
+  expect(await interpretDailyProgressWorkbook({}, () => {}, model)).toEqual(mapping);
+  expect(model.doGenerateCalls[0]?.responseFormat).toMatchObject({
+    type: "json",
+    name: "daily_progress_workbook_layout",
   });
 });
 

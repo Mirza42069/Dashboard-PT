@@ -19,10 +19,17 @@ import { getServerUrl } from "./server-url";
  *
  * @param path Server-relative, starting with "/".
  * @param fallbackName Used only if the response omits Content-Disposition.
+ * @param init Optional fetch options, used by JSON POST download routes.
  * @throws If the response is not ok. The caller owns the message.
  */
-export async function downloadFromServer(path: string, fallbackName: string, errorMessage: string) {
+export async function downloadFromServer(
+  path: string,
+  fallbackName: string,
+  errorMessage: string,
+  init?: RequestInit,
+) {
   const response = await fetch(`${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}${path}`, {
+    ...init,
     credentials: "include",
   });
   if (!response.ok) throw new Error(errorMessage);
@@ -30,7 +37,16 @@ export async function downloadFromServer(path: string, fallbackName: string, err
   const blob = await response.blob();
   // The server names the file; fall back only if the header is missing.
   const disposition = response.headers.get("Content-Disposition") ?? "";
-  const named = /filename="([^"]+)"/.exec(disposition)?.[1];
+  const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  let named: string | undefined;
+  if (encodedName) {
+    try {
+      named = decodeURIComponent(encodedName);
+    } catch {
+      // Fall through to the ASCII name when a proxy has malformed filename*.
+    }
+  }
+  named ??= /filename="([^"]+)"/.exec(disposition)?.[1];
 
   downloadBlob(blob, named ?? fallbackName);
 }

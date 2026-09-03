@@ -19,7 +19,11 @@ export default async function ProjectDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string | string[]; action?: string | string[] }>;
+  searchParams: Promise<{
+    tab?: string | string[];
+    step?: string | string[];
+    action?: string | string[];
+  }>;
 }) {
   const session = await requireSession();
   const role = roleOf(session.user);
@@ -59,8 +63,7 @@ export default async function ProjectDetailPage({
         ),
       ),
     );
-  } else if (activeTab === "baseline" || activeTab === "boq" || activeTab === "schedule") {
-    // All three render BaselineTab, which opens on listVersions either way.
+  } else if (activeTab === "baseline") {
     prefetches.push(
       queryClient.prefetchQuery(trpc.boq.listVersions.queryOptions({ projectId: id })),
     );

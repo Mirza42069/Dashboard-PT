@@ -3,6 +3,8 @@ import { projectMembershipIds } from "@DashboardV2/api/lib/project-manager";
 import type { Role } from "@DashboardV2/api/lib/permissions";
 import { db } from "@DashboardV2/db";
 import {
+  dailyProgressItem,
+  dailyProgressSnapshot,
   project,
   projectActualCurve,
   projectMember,
@@ -19,6 +21,14 @@ import {
   ProjectWorkbookError,
   type ProjectWorkbookCommit,
 } from "./project-workbook";
+
+function chunks<T>(values: T[], size: number) {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
+}
 
 export async function commitProjectWorkbook(input: {
   bytes: Uint8Array;
@@ -77,6 +87,21 @@ export async function commitProjectWorkbook(input: {
                 sourceRow: entry.sourceRow,
                 sourceColumn: entry.sourceColumn,
               })),
+            },
+      dailyProgress:
+        prepared.plan.dailyProgress === null || prepared.plan.dailyProgress === undefined
+          ? null
+          : {
+              ...prepared.plan.dailyProgress,
+              preview: {
+                sheetCount: prepared.dailyProgress.length,
+                itemCount: prepared.dailyProgress[0]?.items.length ?? 0,
+                dates: prepared.dailyProgress.map((snapshot) => snapshot.reportDate),
+                aggregates: prepared.dailyProgress.map((snapshot) => ({
+                  reportDate: snapshot.reportDate,
+                  cumulativePercent: snapshot.cumulativePercent,
+                })),
+              },
             },
       pdf:
         prepared.plan.pdf === null
@@ -143,6 +168,62 @@ export async function commitProjectWorkbook(input: {
       recordedById: input.actor.id,
     };
   });
+  const dailySnapshotValues = prepared.dailyProgress.map((snapshot) => {
+    const period = periods.find(
+      (candidate) =>
+        snapshot.reportDate >= candidate.startDate && snapshot.reportDate <= candidate.endDate,
+    );
+    if (!period) {
+      throw new ProjectWorkbookError(
+        `Daily progress date ${snapshot.reportDate} is outside the reporting calendar.`,
+        "invalid",
+      );
+    }
+    return {
+      id: crypto.randomUUID(),
+      projectId,
+      periodId: period.id,
+      boqVersionId: revision.result.versionId,
+      boqImportId: revision.result.importId,
+      reportDate: snapshot.reportDate,
+      cumulativePercent: snapshot.cumulativePercent.toFixed(6),
+      sourceFilename: input.filename,
+      sourceSheetName: snapshot.sourceSheetName,
+      sourceHeaderRow: prepared.plan.dailyProgress?.headerRow ?? 1,
+    };
+  });
+  const dailySnapshotIdByDate = new Map(
+    dailySnapshotValues.map((snapshot) => [snapshot.reportDate, snapshot.id]),
+  );
+  const dailyItemValues = prepared.dailyProgress.flatMap((snapshot) =>
+    snapshot.items.map((item) => ({
+      id: crypto.randomUUID(),
+      projectId,
+      snapshotId: dailySnapshotIdByDate.get(snapshot.reportDate)!,
+      sourceRow: item.sourceRow,
+      code: item.code,
+      description: item.description,
+      sectionCode: item.sectionCode,
+      sectionDescription: item.sectionDescription,
+      parentCode: item.parentCode,
+      parentDescription: item.parentDescription,
+      unit: item.unit,
+      quantity: item.quantity.toFixed(BOQ_NUMERIC_SCALE),
+      unitRate: item.unitRate.toFixed(BOQ_NUMERIC_SCALE),
+      amount: item.amount.toFixed(BOQ_NUMERIC_SCALE),
+      weight: item.weight.toFixed(6),
+      previousPercent: item.previousPercent.toFixed(6),
+      currentPercent: item.currentPercent === null ? null : item.currentPercent.toFixed(6),
+      cumulativePercent: item.cumulativePercent.toFixed(6),
+      remainingPercent: item.remainingPercent.toFixed(6),
+      previousWeighted: item.previousWeighted.toFixed(8),
+      currentWeighted: item.currentWeighted === null ? null : item.currentWeighted.toFixed(8),
+      cumulativeWeighted: item.cumulativeWeighted.toFixed(8),
+      remainingWeighted: item.remainingWeighted.toFixed(8),
+      remark: item.remark,
+      sourceValues: item.sourceValues,
+    })),
+  );
   const latestActual = prepared.actualSnapshots.at(-1);
   const dataDate = latestActual
     ? (periodByIndex.get(latestActual.periodIndex)?.endDate ?? null)
@@ -181,6 +262,10 @@ export async function commitProjectWorkbook(input: {
     ...(actualCurveValues.length > 0
       ? [db.insert(projectActualCurve).values(actualCurveValues)]
       : []),
+    ...(dailySnapshotValues.length > 0
+      ? [db.insert(dailyProgressSnapshot).values(dailySnapshotValues)]
+      : []),
+    ...chunks(dailyItemValues, 250).map((values) => db.insert(dailyProgressItem).values(values)),
   ]);
 
   return { projectId, ...revision.result, periodCount: periods.length };

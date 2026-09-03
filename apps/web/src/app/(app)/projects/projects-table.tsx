@@ -110,7 +110,7 @@ export default function ProjectsTable({
 
   const debouncedSearch = useDebounced(search);
 
-  const COLUMNS = canDelete ? 5 : 4;
+  const COLUMNS = 5;
 
   // What the empty state needs to know: is this list empty because nothing
   // exists, or because the filters hid it?
@@ -185,12 +185,23 @@ export default function ProjectsTable({
   }
 
   async function downloadSpreadsheet() {
+    const ids = selection.selectedIds;
+    if (ids.length === 0) return;
+    if (ids.length > 100) {
+      toast.error(t.projects.bulkExportLimit);
+      return;
+    }
     setExporting(true);
     try {
       await downloadFromServer(
-        `/projects/export?locale=${locale}`,
-        "projects.xlsx",
+        "/projects/export",
+        ids.length === 1 ? "project.xlsx" : "projects.zip",
         t.projects.exportFailed,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectIds: ids, locale }),
+        },
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.projects.exportFailed);
@@ -223,6 +234,9 @@ export default function ProjectsTable({
       <p role="status" aria-live="polite" className="sr-only">
         {projectsQuery.isPending ? t.common.loading : ""}
       </p>
+      <p role="status" aria-live="polite" className="sr-only">
+        {exporting ? t.projects.exporting : ""}
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <Input
           value={search}
@@ -240,7 +254,8 @@ export default function ProjectsTable({
                 <Button
                   variant="outline"
                   size="icon-sm"
-                  aria-label={t.projects.exportLabel}
+                  aria-label={plural(t.projects.exportSelectedLabel, selection.selectedCount)}
+                  aria-busy={exporting}
                   disabled={exporting}
                   onClick={() => void downloadSpreadsheet()}
                 />
@@ -248,7 +263,9 @@ export default function ProjectsTable({
             >
               {exporting ? <Loader2 className="animate-spin" /> : <Download />}
             </TooltipTrigger>
-            <TooltipContent side="bottom">{t.projects.exportLabel}</TooltipContent>
+            <TooltipContent side="bottom">
+              {plural(t.projects.exportSelectedLabel, selection.selectedCount)}
+            </TooltipContent>
           </Tooltip>
         )}
 
@@ -317,17 +334,15 @@ export default function ProjectsTable({
           <Table className="min-w-[44rem] table-fixed">
           <TableHeader>
             <TableRow>
-              {canDelete && (
-                <TableHead className="w-10 pl-4">
-                  <Checkbox
-                    checked={selection.allSelected}
-                    indeterminate={selection.someSelected}
-                    onCheckedChange={selection.toggleAll}
-                    aria-label={t.common.selectAll}
-                  />
-                </TableHead>
-              )}
-              <TableHead className={canDelete ? "w-[40%]" : "w-[45%] pl-4"}>
+              <TableHead className="w-10 pl-4">
+                <Checkbox
+                  checked={selection.allSelected}
+                  indeterminate={selection.someSelected}
+                  onCheckedChange={selection.toggleAll}
+                  aria-label={t.common.selectAll}
+                />
+              </TableHead>
+              <TableHead className="w-[40%]">
                 {t.projects.project}
               </TableHead>
               <TableHead className="w-40">
@@ -399,16 +414,14 @@ export default function ProjectsTable({
                 className="relative cursor-pointer"
                 data-state={selection.isSelected(row.id) ? "selected" : undefined}
               >
-                {canDelete && (
-                  <TableCell className="relative z-10 pl-4">
-                    <Checkbox
-                      checked={selection.isSelected(row.id)}
-                      onCheckedChange={() => selection.toggle(row.id)}
-                      aria-label={interpolate(t.common.selectRow, { name: row.name })}
-                    />
-                  </TableCell>
-                )}
-                <TableCell className={canDelete ? "min-w-0" : "min-w-0 pl-4"}>
+                <TableCell className="relative z-10 pl-4">
+                  <Checkbox
+                    checked={selection.isSelected(row.id)}
+                    onCheckedChange={() => selection.toggle(row.id)}
+                    aria-label={interpolate(t.common.selectRow, { name: row.name })}
+                  />
+                </TableCell>
+                <TableCell className="min-w-0">
                   <Link
                     href={`/projects/${row.id}`}
                     className="block truncate font-medium outline-none after:absolute after:inset-0 after:content-[''] hover:underline focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
@@ -456,7 +469,7 @@ export default function ProjectsTable({
           canManageMembers={canManageMembers}
           currentUserId={currentUserId}
           onCreated={(projectId) =>
-            router.push(`/projects/${projectId}?tab=boq` as Route)
+            router.push(`/projects/${projectId}?tab=baseline&step=boq` as Route)
           }
         />
       )}
@@ -484,7 +497,7 @@ export default function ProjectsTable({
           trialAiCredits={trialAiCredits}
           onCreated={(projectId) => {
             void queryClient.invalidateQueries(trpc.project.pathFilter());
-            router.push(`/projects/${projectId}?tab=boq` as Route);
+            router.push(`/projects/${projectId}?tab=baseline&step=boq` as Route);
           }}
         />
       )}

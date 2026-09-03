@@ -74,6 +74,14 @@ type WorkbookAnalysis = {
       previousPeriodIndex: number;
       currentPeriodIndex: number;
     } | null;
+    dailyProgress?: {
+      version: 1;
+      mappingSource: "deterministic" | "ai";
+      headerRow: number;
+      dataStartRow: number;
+      dataEndRow: number;
+      sheets: { sheetName: string; reportDate: string }[];
+    } | null;
   };
   summary: {
     sectionCount: number;
@@ -102,6 +110,15 @@ type WorkbookAnalysis = {
     cumulativePercent: number;
     sourceValue: string;
   }[];
+  pdfProgressErrorCount?: number;
+  dailyProgressPreview?: {
+    sheetCount: number;
+    itemCount: number;
+    dates: string[];
+    movementDates: string[];
+    latestCumulativePercent: number;
+    ignoredSheets: string[];
+  };
   rowPreview: {
     row: number;
     sourcePage?: number;
@@ -131,6 +148,13 @@ type WorkbookAnalysis = {
     periodType: string;
     periodLengthDays: number | null;
   };
+  reportingPeriods: {
+    id: string;
+    periodIndex: number;
+    label: string | null;
+    startDate: string;
+    endDate: string;
+  }[];
   existingActualSnapshots: {
     periodIndex: number;
     cumulativePercent: number;
@@ -217,7 +241,7 @@ export default function ProjectWorkbookUpdateDialog({
   onUpdated: (result: WorkbookUpdateResult) => void;
 }) {
   const t = useT();
-  const { money } = useFormat();
+  const { money, formatDate } = useFormat();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<SheetCandidate[] | null>(null);
@@ -225,6 +249,7 @@ export default function ProjectWorkbookUpdateDialog({
   const [sheetChoice, setSheetChoice] = useState("");
   const [recommendedSheetName, setRecommendedSheetName] = useState("");
   const [analysis, setAnalysis] = useState<WorkbookAnalysis | null>(null);
+  const [confirmedProgressDate, setConfirmedProgressDate] = useState("");
   const [sections, setSections] = useState<Sections>({
     projectDetails: false,
     boq: false,
@@ -236,15 +261,39 @@ export default function ProjectWorkbookUpdateDialog({
   const [error, setError] = useState<string | null>(null);
 
   const baseUrl = `${getServerUrl(env.NEXT_PUBLIC_SERVER_URL)}/projects/${projectId}/workbook-update`;
-  const selectedSheetName =
-    sheetChoice === AUTO_SHEET ? recommendedSheetName : sheetChoice;
+  const selectedSheetName = sheetChoice === AUTO_SHEET ? "" : sheetChoice;
+  const previewSheetName = sheetChoice === AUTO_SHEET ? recommendedSheetName : sheetChoice;
   const selectedSheet =
-    sheets?.find((candidate) => candidate.sheetName === selectedSheetName) ?? null;
+    sheets?.find((candidate) => candidate.sheetName === previewSheetName) ?? null;
   const draftBlocked =
     (analysis?.summary.validationErrors.length ?? 0) > 0 ||
-    analysis?.plan.weeklyProgress != null;
+    analysis?.plan.weeklyProgress != null ||
+    (analysis?.plan.profile === "pdf-ai" && analysis.summary.scheduledCount === 0);
   const weeklyUpdateOnly = analysis?.plan.weeklyProgress != null;
-  const progressAvailable = (analysis?.actualSnapshots.length ?? 0) > 0;
+  const pdfProgressInvalid = (analysis?.pdfProgressErrorCount ?? 0) > 0;
+  const progressAvailable =
+    !pdfProgressInvalid &&
+    ((analysis?.actualSnapshots.length ?? 0) > 0 || analysis?.dailyProgressPreview != null);
+  const needsProgressDate = Boolean(
+    analysis?.plan.profile === "pdf-ai" &&
+      analysis.dailyProgressPreview &&
+      analysis.dailyProgressPreview.dates.length === 0,
+  );
+  const confirmedProgressPeriod = analysis?.reportingPeriods.find(
+    (period) =>
+      confirmedProgressDate >= period.startDate && confirmedProgressDate <= period.endDate,
+  );
+  const progressDateInvalid = Boolean(
+    sections.progress &&
+      needsProgressDate &&
+      (!confirmedProgressDate || !confirmedProgressPeriod),
+  );
+  const actualPreviewCount =
+    (analysis?.actualSnapshots.length ?? 0) || (analysis?.dailyProgressPreview ? 1 : 0);
+  const latestActualPercent =
+    analysis?.summary.latestActualPercent ??
+    analysis?.dailyProgressPreview?.latestCumulativePercent ??
+    null;
   const reviewRows = analysis?.rowPreview ?? [];
   const existingActualByPeriod = new Map(
     analysis?.existingActualSnapshots.map((snapshot) => [
@@ -310,6 +359,7 @@ export default function ProjectWorkbookUpdateDialog({
     setSheetChoice("");
     setRecommendedSheetName("");
     setAnalysis(null);
+    setConfirmedProgressDate("");
     setError(null);
     setBusy("discover");
     setStatus(t.projectUpdate.uploadingDiscover);
@@ -344,8 +394,9 @@ export default function ProjectWorkbookUpdateDialog({
   }
 
   async function analyze() {
-    if (!file || (pdfPageCount === null && !selectedSheetName)) return;
+    if (!file || (pdfPageCount === null && !selectedSheetName && sheetChoice !== AUTO_SHEET)) return;
     setAnalysis(null);
+    setConfirmedProgressDate("");
     setSections({
       projectDetails: false,
       boq: false,
@@ -362,8 +413,11 @@ export default function ProjectWorkbookUpdateDialog({
       if (!result.plan || !result.summary || !result.actualSnapshots) {
         throw new Error(t.projectUpdate.analysisFailed);
       }
-      const hasActuals = result.actualSnapshots.length > 0;
+      const hasActuals =
+        (result.pdfProgressErrorCount ?? 0) === 0 &&
+        (result.actualSnapshots.length > 0 || result.dailyProgressPreview != null);
       setAnalysis(result);
+      setConfirmedProgressDate(result.dailyProgressPreview?.dates[0] ?? "");
       setSections({
         projectDetails: false,
         boq: false,
@@ -380,7 +434,7 @@ export default function ProjectWorkbookUpdateDialog({
   }
 
   async function commit() {
-    if (!file || !analysis || !hasSelection) return;
+    if (!file || !analysis || !hasSelection || progressDateInvalid) return;
     setError(null);
     setBusy("commit");
     setStatus(t.projectUpdate.uploadingCommit);
@@ -390,6 +444,7 @@ export default function ProjectWorkbookUpdateDialog({
         plan: analysis.plan,
         sections,
         reviewState: analysis.reviewState,
+        ...(confirmedProgressDate ? { confirmedProgressDate } : {}),
       });
       if (!result.sectionsUpdated) throw new Error(t.projectUpdate.updateFailed);
       await Promise.all([
@@ -397,6 +452,7 @@ export default function ProjectWorkbookUpdateDialog({
         queryClient.invalidateQueries(trpc.boq.pathFilter()),
         queryClient.invalidateQueries(trpc.schedule.pathFilter()),
         queryClient.invalidateQueries(trpc.progress.pathFilter()),
+        queryClient.invalidateQueries(trpc.dailyProgress.pathFilter()),
       ]);
       toast.success(t.projectUpdate.updateSucceeded);
       onOpenChange(false);
@@ -407,6 +463,7 @@ export default function ProjectWorkbookUpdateDialog({
         (caught.code === "review_stale" || caught.code === "project_update_conflict");
       if (outdated) {
         setAnalysis(null);
+        setConfirmedProgressDate("");
         setSections({
           projectDetails: false,
           boq: false,
@@ -486,6 +543,7 @@ export default function ProjectWorkbookUpdateDialog({
                 setSheetChoice("");
                 setRecommendedSheetName("");
                 setAnalysis(null);
+                setConfirmedProgressDate("");
                 setSections({
                   projectDetails: false,
                   boq: false,
@@ -542,6 +600,7 @@ export default function ProjectWorkbookUpdateDialog({
                   onValueChange={(value) => {
                     setSheetChoice(value ?? "");
                     setAnalysis(null);
+                    setConfirmedProgressDate("");
                     setSections({
                       projectDetails: false,
                       boq: false,
@@ -663,13 +722,71 @@ export default function ProjectWorkbookUpdateDialog({
                 <div>
                   <dt className="text-muted-foreground">{t.projectUpdate.summaryActuals}</dt>
                   <dd className="font-medium tabular-nums">
-                    {analysis.actualSnapshots.length}
-                    {analysis.summary.latestActualPercent !== null
-                      ? ` · ${analysis.summary.latestActualPercent.toFixed(2)}%`
+                    {actualPreviewCount}
+                    {latestActualPercent !== null
+                      ? ` · ${latestActualPercent.toFixed(2)}%`
                       : ""}
                   </dd>
                 </div>
               </dl>
+
+              {analysis.dailyProgressPreview && (
+                <div className="rounded-lg border p-3">
+                  <h4 className="font-medium">{t.projectImport.dailyProgressTitle}</h4>
+                  <p className="mt-1 text-muted-foreground">
+                    {needsProgressDate
+                      ? interpolate(t.projectUpdate.pdfProgressDescription, {
+                          items: analysis.dailyProgressPreview.itemCount,
+                        })
+                      : interpolate(t.projectImport.dailyProgressDescription, {
+                          sheets: analysis.dailyProgressPreview.sheetCount,
+                          first: analysis.dailyProgressPreview.dates[0] ?? "-",
+                          last: analysis.dailyProgressPreview.dates.at(-1) ?? "-",
+                          items: analysis.dailyProgressPreview.itemCount,
+                          movement: analysis.dailyProgressPreview.movementDates.length,
+                        })}
+                  </p>
+                  <p className="mt-2 font-medium tabular-nums">
+                    {analysis.dailyProgressPreview.latestCumulativePercent.toFixed(4)}%
+                  </p>
+                  {needsProgressDate && (
+                    <div className="mt-3 max-w-sm space-y-1.5">
+                      <Label htmlFor="workbook-update-progress-date">
+                        {t.projectUpdate.progressDateLabel}
+                      </Label>
+                      <Input
+                        id="workbook-update-progress-date"
+                        type="date"
+                        value={confirmedProgressDate}
+                        min={analysis.reportingPeriods[0]?.startDate}
+                        max={analysis.reportingPeriods.at(-1)?.endDate}
+                        disabled={busy !== null}
+                        aria-describedby="workbook-update-progress-date-hint"
+                        aria-invalid={confirmedProgressDate !== "" && !confirmedProgressPeriod}
+                        onChange={(event) => setConfirmedProgressDate(event.target.value)}
+                      />
+                      <p
+                        id="workbook-update-progress-date-hint"
+                        className={
+                          confirmedProgressDate !== "" && !confirmedProgressPeriod
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                        }
+                      >
+                        {confirmedProgressPeriod
+                          ? interpolate(t.projectUpdate.progressDatePeriod, {
+                              period: confirmedProgressPeriod.label ?? confirmedProgressPeriod.periodIndex,
+                              start: formatDate(confirmedProgressPeriod.startDate),
+                              end: formatDate(confirmedProgressPeriod.endDate),
+                            })
+                          : confirmedProgressDate
+                            ? t.projectUpdate.progressDateOutside
+                            : t.projectUpdate.progressDateHint}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-2 rounded-lg border p-3">
                 <h4 className="font-medium">{t.projectImport.rowReviewTitle}</h4>
@@ -1048,7 +1165,11 @@ export default function ProjectWorkbookUpdateDialog({
         {analysis && (
           <DialogFooter>
             {!hasSelection && <p className="me-auto text-destructive">{t.projectUpdate.selectOne}</p>}
-            <Button type="button" disabled={busy !== null || !hasSelection} onClick={() => void commit()}>
+            <Button
+              type="button"
+              disabled={busy !== null || !hasSelection || progressDateInvalid}
+              onClick={() => void commit()}
+            >
               {busy === "commit" && <Loader2 className="animate-spin motion-reduce:animate-none" />}
               {t.projectUpdate.updateAction}
             </Button>

@@ -97,6 +97,14 @@ type Plan = {
     previousPeriodIndex: number;
     currentPeriodIndex: number;
   } | null;
+  dailyProgress?: {
+    version: 1;
+    mappingSource: "deterministic" | "ai";
+    headerRow: number;
+    dataStartRow: number;
+    dataEndRow: number;
+    sheets: { sheetName: string; reportDate: string }[];
+  } | null;
 };
 type Analysis = {
   plan: Plan;
@@ -129,6 +137,14 @@ type Analysis = {
     aggregatePreviousPercent: number | null;
     aggregateCurrentPercent: number;
     confirmationRequired: boolean;
+  };
+  dailyProgressPreview?: {
+    sheetCount: number;
+    itemCount: number;
+    dates: string[];
+    movementDates: string[];
+    latestCumulativePercent: number;
+    ignoredSheets: string[];
   };
   rowPreview: {
     row: number;
@@ -1012,10 +1028,10 @@ export default function ProjectWorkbookImportDialog({
   const weeklyPeriods = multiSheetWeekly ? reportingPeriodPreview(answers) : [];
   const progressConfirmationError =
     error === t.projectImport.progressConfirmationRequired;
-  const selectedSheetName =
-    sheetChoice === AUTO_SHEET ? recommendedSheetName : sheetChoice;
+  const selectedSheetName = sheetChoice === AUTO_SHEET ? "" : sheetChoice;
+  const previewSheetName = sheetChoice === AUTO_SHEET ? recommendedSheetName : sheetChoice;
   const selectedSheet =
-    sheets?.find((candidate) => candidate.sheetName === selectedSheetName) ?? null;
+    sheets?.find((candidate) => candidate.sheetName === previewSheetName) ?? null;
   const scheduleIssue = analysis && reviewing
     ? getWorkbookScheduleIssue(scheduleAnswers(answers), analysis.plan) ?? serverScheduleIssue
     : null;
@@ -1255,9 +1271,9 @@ export default function ProjectWorkbookImportDialog({
                 <Button
                   type="button"
                   className="w-full"
-                  disabled={busy || !file || !selectedSheetName}
+                  disabled={busy || !file || (!selectedSheetName && sheetChoice !== AUTO_SHEET)}
                   onClick={() => {
-                    if (file && selectedSheetName) void analyze(file, selectedSheetName);
+                    if (file) void analyze(file, selectedSheetName || undefined);
                   }}
                 >
                   {busy && <Loader2 className="animate-spin motion-reduce:animate-none" />}
@@ -1601,6 +1617,26 @@ export default function ProjectWorkbookImportDialog({
                     )}
                   </div>
                 )}
+              </div>
+            )}
+            {analysis.dailyProgressPreview && (
+              <div className="rounded-lg border p-4">
+                <h3 className="font-medium">{t.projectImport.dailyProgressTitle}</h3>
+                <p className="mt-1 text-muted-foreground">
+                  {interpolate(t.projectImport.dailyProgressDescription, {
+                    sheets: analysis.dailyProgressPreview.sheetCount,
+                    first: analysis.dailyProgressPreview.dates[0] ?? "-",
+                    last: analysis.dailyProgressPreview.dates.at(-1) ?? "-",
+                    items: analysis.dailyProgressPreview.itemCount,
+                    movement: analysis.dailyProgressPreview.movementDates.length,
+                  })}
+                </p>
+                <p className="mt-2 font-medium tabular-nums">
+                  {analysis.dailyProgressPreview.latestCumulativePercent.toFixed(4)}%
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  {t.projectImport.dailyProgressIgnored}
+                </p>
               </div>
             )}
             <div className="rounded-lg border p-4">

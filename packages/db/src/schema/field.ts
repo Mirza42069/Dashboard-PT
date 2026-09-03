@@ -1,10 +1,27 @@
-import { relations } from "drizzle-orm";
-import { boolean, date, index, integer, numeric, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
+import {
+  boolean,
+  check,
+  date,
+  foreignKey,
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  unique,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 
 import { user } from "./auth";
 import {
   bytea,
+  boqImport,
   boqItem,
+  boqVersion,
   createdAt,
   id,
   project,
@@ -103,6 +120,114 @@ export const dailyReport = pgTable(
     uniqueIndex("dailyReport_project_date_idx").on(table.projectId, table.reportDate),
     index("dailyReport_projectId_status_idx").on(table.projectId, table.status),
     index("dailyReport_periodId_idx").on(table.periodId),
+  ],
+);
+
+/**
+ * One dated progress worksheet imported from a contractor workbook.
+ *
+ * This is deliberately separate from progressEntry. A weekly reporting period
+ * can contain several daily readings, while progressEntry has one canonical
+ * reading per item and period. Keeping the source readings here preserves that
+ * history without changing the reporting cadence used by the S-curve.
+ */
+export const dailyProgressSnapshot = pgTable(
+  "daily_progress_snapshot",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    periodId: text("period_id")
+      .notNull()
+      .references(() => reportingPeriod.id, { onDelete: "cascade" }),
+    boqVersionId: text("boq_version_id")
+      .notNull()
+      .references(() => boqVersion.id, { onDelete: "cascade" }),
+    boqImportId: text("boq_import_id").references(() => boqImport.id, { onDelete: "set null" }),
+    reportDate: date("report_date").notNull(),
+    cumulativePercent: numeric("cumulative_percent", { precision: 9, scale: 6 }).notNull(),
+    sourceFilename: text("source_filename").notNull(),
+    sourceSheetName: text("source_sheet_name").notNull(),
+    sourceHeaderRow: integer("source_header_row").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("dailyProgressSnapshot_project_date_idx").on(table.projectId, table.reportDate),
+    unique("dailyProgressSnapshot_project_id_idx").on(table.projectId, table.id),
+    index("dailyProgressSnapshot_periodId_idx").on(table.periodId),
+    index("dailyProgressSnapshot_boqVersionId_idx").on(table.boqVersionId),
+    index("dailyProgressSnapshot_boqImportId_idx").on(table.boqImportId),
+    foreignKey({
+      columns: [table.projectId, table.periodId],
+      foreignColumns: [reportingPeriod.projectId, reportingPeriod.id],
+      name: "daily_progress_snapshot_project_period_fk",
+    }).onDelete("cascade"),
+    check(
+      "daily_progress_snapshot_percent_check",
+      sql`${table.cumulativePercent} between 0 and 100`,
+    ),
+    check("daily_progress_snapshot_header_row_check", sql`${table.sourceHeaderRow} > 0`),
+  ],
+);
+
+/** Full source line behind a dated progress snapshot. */
+export const dailyProgressItem = pgTable(
+  "daily_progress_item",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    snapshotId: text("snapshot_id")
+      .notNull()
+      .references(() => dailyProgressSnapshot.id, { onDelete: "cascade" }),
+    /** Optional because detailed daily lines can be finer than the S-curve baseline. */
+    boqItemId: text("boq_item_id").references(() => boqItem.id, { onDelete: "set null" }),
+    sourceRow: integer("source_row").notNull(),
+    code: text("code"),
+    description: text("description").notNull(),
+    sectionCode: text("section_code"),
+    sectionDescription: text("section_description"),
+    parentCode: text("parent_code"),
+    parentDescription: text("parent_description"),
+    unit: text("unit"),
+    quantity: numeric("quantity", { precision: 24, scale: 8 }),
+    unitRate: numeric("unit_rate", { precision: 24, scale: 8 }),
+    amount: numeric("amount", { precision: 26, scale: 8 }),
+    weight: numeric("weight", { precision: 9, scale: 6 }).notNull(),
+    previousPercent: numeric("previous_percent", { precision: 9, scale: 6 }),
+    currentPercent: numeric("current_percent", { precision: 9, scale: 6 }),
+    cumulativePercent: numeric("cumulative_percent", { precision: 9, scale: 6 }).notNull(),
+    remainingPercent: numeric("remaining_percent", { precision: 9, scale: 6 }),
+    previousWeighted: numeric("previous_weighted", { precision: 12, scale: 8 }),
+    currentWeighted: numeric("current_weighted", { precision: 12, scale: 8 }),
+    cumulativeWeighted: numeric("cumulative_weighted", { precision: 12, scale: 8 }).notNull(),
+    remainingWeighted: numeric("remaining_weighted", { precision: 12, scale: 8 }),
+    remark: text("remark"),
+    /** Exact normalized source cells, including optional columns mapped by AI. */
+    sourceValues: jsonb("source_values").$type<Record<string, string | number | null>>().notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex("dailyProgressItem_snapshot_row_idx").on(table.snapshotId, table.sourceRow),
+    index("dailyProgressItem_projectId_idx").on(table.projectId),
+    index("dailyProgressItem_boqItemId_idx").on(table.boqItemId),
+    foreignKey({
+      columns: [table.projectId, table.snapshotId],
+      foreignColumns: [dailyProgressSnapshot.projectId, dailyProgressSnapshot.id],
+      name: "daily_progress_item_project_snapshot_fk",
+    }).onDelete("cascade"),
+    check("daily_progress_item_source_row_check", sql`${table.sourceRow} > 0`),
+    check("daily_progress_item_weight_check", sql`${table.weight} between 0 and 100`),
+    check(
+      "daily_progress_item_percent_check",
+      sql`(${table.previousPercent} is null or ${table.previousPercent} between 0 and 100)
+        and (${table.currentPercent} is null or ${table.currentPercent} between 0 and 100)
+        and ${table.cumulativePercent} between 0 and 100
+        and (${table.remainingPercent} is null or ${table.remainingPercent} between 0 and 100)`,
+    ),
   ],
 );
 
