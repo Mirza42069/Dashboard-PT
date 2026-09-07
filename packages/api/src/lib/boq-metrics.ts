@@ -381,29 +381,3 @@ export async function projectExceptions(where: SQL | undefined) {
     };
   });
 }
-
-/**
- * Recomputes a project's data date from its readings. One statement, so it can
- * ride along in the same batch as the progress upsert it follows.
- */
-export function refreshDataDateStatement(projectId: string) {
-  return sql`
-    update project
-    set data_date = (
-      select max(reported.end_date)
-      from (
-        select period.end_date
-        from progress_entry entry
-        join reporting_period period on period.id = entry.period_id
-        where period.project_id = ${projectId}
-          and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
-        union all
-        select period.end_date
-        from project_actual_curve snapshot
-        join reporting_period period on period.id = snapshot.period_id
-        where snapshot.project_id = ${projectId}
-      ) reported
-    )
-    where id = ${projectId}
-  `;
-}

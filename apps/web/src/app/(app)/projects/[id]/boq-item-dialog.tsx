@@ -108,8 +108,10 @@ export default function BoqItemDialog({
         } else {
           await createItem.mutateAsync({ versionId, parentId, ...payload });
         }
-        await queryClient.invalidateQueries(trpc.boq.pathFilter());
-        await queryClient.invalidateQueries(trpc.progress.pathFilter());
+        await Promise.all([
+          queryClient.invalidateQueries(trpc.boq.pathFilter()),
+          queryClient.invalidateQueries(trpc.progress.pathFilter()),
+        ]);
         toast.success(t.boq.saved);
         onOpenChange(false);
       } catch (error) {

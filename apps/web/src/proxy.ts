@@ -43,6 +43,6 @@ export const config = {
     // serves /apple-icon and /opengraph-image with no file extension, so the
     // extension rule below misses them and the auth gate would redirect iOS
     // and crawlers to /login instead of returning the image.
-    "/((?!api|_next/static|_next/image|favicon.ico|icon|apple-icon|opengraph-image|twitter-image|manifest.webmanifest|robots.txt|sitemap.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!api|_next/static|_next/image|_vercel/|favicon.ico|icon|apple-icon|opengraph-image|twitter-image|manifest.webmanifest|robots.txt|sitemap.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

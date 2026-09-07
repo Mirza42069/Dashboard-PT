@@ -267,10 +267,12 @@ function BaselineReview({
   async function activateBaseline() {
     try {
       await activate.mutateAsync({ versionId });
-      await queryClient.invalidateQueries(trpc.boq.pathFilter());
-      await queryClient.invalidateQueries(trpc.progress.pathFilter());
-      await queryClient.invalidateQueries(trpc.schedule.pathFilter());
-      await queryClient.invalidateQueries(trpc.project.pathFilter());
+      await Promise.all([
+        queryClient.invalidateQueries(trpc.boq.pathFilter()),
+        queryClient.invalidateQueries(trpc.progress.pathFilter()),
+        queryClient.invalidateQueries(trpc.schedule.pathFilter()),
+        queryClient.invalidateQueries(trpc.project.pathFilter()),
+      ]);
       setConfirming(false);
       onActivated();
       toast.success(t.baseline.activated);

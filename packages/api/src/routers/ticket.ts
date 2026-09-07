@@ -36,6 +36,7 @@ import {
   assertProjectAccess,
   assertProjectWritable,
   assertUserAssignable,
+  projectAccessFilter,
   type ProjectScopeCtx,
 } from "../lib/scope";
 
@@ -146,9 +147,8 @@ async function ticketInScope(ctx: ProjectScopeCtx, ticketId: string) {
 /**
  * The bulk counterpart of ticketInScope.
  *
- * One query for the scope check rather than one per id, and one assertMember
- * per distinct project rather than per ticket — a selection of thirty tickets
- * on one project should not be thirty membership round trips.
+ * One query for both tenant and membership scope, regardless of how many
+ * projects the selection spans. EXISTS keeps one row per ticket.
  *
  * Cross-tenant ids are not rejected, they are simply not matched: the company
  * filter shares its where clause with the id filter, so an id from another
@@ -165,17 +165,12 @@ async function ticketsInScope(ctx: ProjectScopeCtx, ticketIds: string[]) {
     })
     .from(ticket)
     .innerJoin(project, eq(ticket.projectId, project.id))
-    .where(and(inArray(ticket.id, ticketIds), eq(project.companyId, ctx.companyId)));
+    .where(and(inArray(ticket.id, ticketIds), projectAccessFilter(ctx)));
   if (rows.length === 0) {
     throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.ticket.noneFound });
   }
   if (rows.length !== new Set(ticketIds).size) {
     throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.ticket.someNotFound });
-  }
-  if (roleOf(ctx.session.user) === "user") {
-    for (const projectId of new Set(rows.map((row) => row.projectId))) {
-      await assertMember(projectId, ctx.session.user.id, "Ticket not found");
-    }
   }
   return rows;
 }

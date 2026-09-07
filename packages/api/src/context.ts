@@ -11,14 +11,21 @@ export type CreateContextOptions = {
 
 export async function createContext({ context }: CreateContextOptions) {
   const headers = context.req.raw.headers;
+  const session = await auth.api.getSession({ headers });
 
+  return createContextFromSession({ headers, session });
+}
+
+/** Server-only callers must supply the session resolved by auth for these headers. */
+export function createContextFromSession({ headers, session }: {
+  headers: Headers;
+  session: Awaited<ReturnType<typeof auth.api.getSession>>;
+}) {
   // Resolved once per request, from the same cookie apps/web writes. Every
   // throw site downstream reaches for `ctx.t` rather than plumbing a locale of
   // its own, and the Hono routes outside tRPC call localeFromHeaders directly.
   const locale = localeFromHeaders(headers);
   const t = dictionaryFor(locale);
-
-  const session = await auth.api.getSession({ headers });
 
   // Memoized, not resolved eagerly. httpBatchLink packs several procedures into
   // a single HTTP request and they all share this one context, so without the

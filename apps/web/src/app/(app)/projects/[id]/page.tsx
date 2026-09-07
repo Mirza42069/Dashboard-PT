@@ -67,6 +67,10 @@ export default async function ProjectDetailPage({
     prefetches.push(
       queryClient.prefetchQuery(trpc.boq.listVersions.queryOptions({ projectId: id })),
     );
+  } else if (activeTab === "progress") {
+    prefetches.push(
+      queryClient.prefetchQuery(trpc.progress.report.queryOptions({ projectId: id })),
+    );
   }
 
   await Promise.all(prefetches);

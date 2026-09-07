@@ -578,6 +578,9 @@ export async function buildProjectDetailWorkbook({
     ]);
 
   const versionIds = versions.map((version) => version.id);
+  const activeVersion = versions.find(
+    (version) => version.status === "active" && version.scheduleStatus === "active",
+  );
   const allItems = versionIds.length
     ? await db
         .select({ item: boqItem, versionNo: boqVersion.versionNo, versionTitle: boqVersion.title })
@@ -613,7 +616,7 @@ export async function buildProjectDetailWorkbook({
             asc(boqItem.sortOrder),
           )
       : Promise.resolve([]),
-    versionIds.length
+    activeVersion
       ? db
           .select({
             boqVersionId: boqItem.boqVersionId,
@@ -623,7 +626,7 @@ export async function buildProjectDetailWorkbook({
           })
           .from(boqItemDistribution)
           .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
-          .where(inArray(boqItem.boqVersionId, versionIds))
+          .where(eq(boqItem.boqVersionId, activeVersion.id))
       : Promise.resolve([]),
   ]);
 
@@ -653,9 +656,6 @@ export async function buildProjectDetailWorkbook({
     : [];
   const actorName = new Map(actors.map((actor) => [actor.id, actor.name]));
 
-  const activeVersion = versions.find(
-    (version) => version.status === "active" && version.scheduleStatus === "active",
-  );
   const itemVersionById = new Map(
     allItems.map((row) => [row.item.id, row.item.boqVersionId]),
   );

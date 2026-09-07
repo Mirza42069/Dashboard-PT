@@ -1,13 +1,27 @@
+import { Suspense } from "react";
+
 import AppShell from "@/components/app-shell";
+import RouteLoading from "@/components/route-loading";
 import { requireSession } from "@/lib/session";
 import { getSidebarCollapsed } from "@/lib/sidebar";
 import { getTextScale } from "@/lib/text-scale";
 
-export default async function AppLayout({ children }: { children: React.ReactNode }) {
+export default function AppLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense fallback={<RouteLoading />}>
+      <AuthenticatedShell>{children}</AuthenticatedShell>
+    </Suspense>
+  );
+}
+
+async function AuthenticatedShell({ children }: { children: React.ReactNode }) {
   // Authoritative gate for every page in this group. proxy.ts only checks that
   // a session cookie exists; this verifies it actually resolves.
-  const session = await requireSession();
-  const [collapsed, textScale] = await Promise.all([getSidebarCollapsed(), getTextScale()]);
+  const [session, collapsed, textScale] = await Promise.all([
+    requireSession(),
+    getSidebarCollapsed(),
+    getTextScale(),
+  ]);
 
   return (
     <AppShell
