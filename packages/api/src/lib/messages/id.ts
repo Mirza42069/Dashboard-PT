@@ -58,6 +58,8 @@ export const id = {
     pickOne: "Pilih perusahaan untuk akun ini",
   },
   user: {
+    passwordResetFailed: "Tidak dapat mengatur ulang kata sandi. Muat ulang daftar akun dan coba lagi jika akun masih memenuhi syarat.",
+    passwordChangeFailed: "Tidak dapat mengganti kata sandi. Periksa kata sandi saat ini atau masuk kembali dan coba lagi.",
     notFound: "Pengguna tidak ditemukan",
     someNotFound: "Satu atau beberapa pengguna tidak ditemukan",
     emailExists: "Sudah ada akun dengan email tersebut",
@@ -68,7 +70,6 @@ export const id = {
     ownCompanyOnly: "Anda hanya dapat membuat pengguna di perusahaan Anda sendiri",
     couldNotAssignCompany:
       "Perusahaan tidak dapat ditetapkan — akun tidak jadi dibuat. Silakan coba lagi.",
-    accountEmailNotConfigured: "Pengiriman email akun sedang dinonaktifkan.",
     currentPasswordRequired: "Kata sandi saat ini wajib diisi",
     passwordTooShort: "Kata sandi minimal 12 karakter",
     passwordMustDiffer: "Pilih kata sandi yang berbeda dari yang sekarang",

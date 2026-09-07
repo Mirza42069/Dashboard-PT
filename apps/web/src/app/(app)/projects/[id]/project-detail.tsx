@@ -8,20 +8,20 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AiFile, Archive, ArrowLeft, Pencil, SlidersHorizontal } from "@DashboardV2/ui/components/icons";
-import type { Route } from "next";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { QueryError } from "@/components/query-error";
-import ProjectBuildingScene from "@/components/project-building-scene";
+import ProjectBuildingBanner from "@/components/project-building-banner";
 import { StatusBadge } from "@/components/status-badge";
 import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import {
   type BaselineStep,
   isProjectTabVisible,
+  projectTabUrl,
   resolveBaselineStep,
   resolveProjectTab,
 } from "@/lib/project-navigation";
@@ -63,8 +63,6 @@ export default function ProjectDetail({
 }) {
   const t = useT();
   const { formatDateTime } = useFormat();
-  const pathname = usePathname();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [editValues, setEditValues] = useState<ProjectFormValues | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -82,17 +80,12 @@ export default function ProjectDetail({
 
   function applyTab(value: string, baselineStep?: BaselineStep) {
     const resolved = resolveProjectTab(value, hiddenModules, canManageMembers);
-    const next = new URLSearchParams(searchParams.toString());
-    if (resolved === "overview") next.delete("tab");
-    else next.set("tab", resolved);
-    if (resolved === "baseline") {
-      next.set("step", baselineStep ?? resolveBaselineStep(value, null));
-    } else {
-      next.delete("step");
-    }
-    if (resolved !== "tickets") next.delete("action");
-    const query = next.toString();
-    router.replace((query ? `${pathname}?${query}` : pathname) as Route, { scroll: false });
+    // Next syncs useSearchParams without rerunning the page's server prefetches.
+    window.history.replaceState(
+      null,
+      "",
+      projectTabUrl(window.location.href, resolved, baselineStep ?? resolveBaselineStep(value, null)),
+    );
   }
 
   function selectTab(value: string) {
@@ -216,7 +209,7 @@ export default function ProjectDetail({
               </span>
             </div>
           </div>
-          <ProjectBuildingScene seed={project.code} className="h-full min-h-0" />
+          <ProjectBuildingBanner seed={project.code} />
         </CardContent>
       </Card>
 

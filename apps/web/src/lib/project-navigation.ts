@@ -64,3 +64,14 @@ export function projectTabPath(
     ? `${base}?tab=baseline&step=${baselineStep}`
     : `${base}?tab=${tab}`;
 }
+
+/** Update only client-owned tab state, retaining unrelated query params and anchors. */
+export function projectTabUrl(url: string, tab: ProjectTab, step: BaselineStep = "review") {
+  const next = new URL(url);
+  if (tab === "overview") next.searchParams.delete("tab");
+  else next.searchParams.set("tab", tab);
+  if (tab === "baseline") next.searchParams.set("step", step);
+  else next.searchParams.delete("step");
+  if (tab !== "tickets") next.searchParams.delete("action");
+  return `${next.pathname}${next.search}${next.hash}`;
+}

@@ -283,40 +283,38 @@ export const progressRouter = router({
    * can never disagree with the line the user is looking at.
    */
   report: companyPermissionProcedure("project:read")
-    .input(z.object({ projectId: z.string().min(1), versionId: z.string().min(1).optional() }))
+    .input(z.object({
+      projectId: z.string().min(1),
+      versionId: z.string().min(1).optional(),
+      /** Skip actuals queries; entries and actualSnapshots are empty in this mode. */
+      planOnly: z.boolean().default(false),
+    }))
     .query(async ({ ctx, input }) => {
       await assertProjectAccess(ctx, input.projectId);
 
-      const [target] = await db
-        .select({
-          dataDate: project.dataDate,
-          periodType: project.periodType,
-          periodLengthDays: project.periodLengthDays,
-          startDate: project.startDate,
-          scheduleStart: project.scheduleStart,
-          endDate: project.endDate,
-        })
-        .from(project)
-        .where(eq(project.id, input.projectId));
-
-      if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
-      }
-
-      const versions = await db
-        .select()
-        .from(boqVersion)
-        .where(eq(boqVersion.projectId, input.projectId))
-        .orderBy(desc(boqVersion.versionNo));
-
-      const current = input.versionId
-        ? versions.find((row) => row.id === input.versionId)
-        : versions.find((row) => row.status === "active");
-      if (input.versionId && !current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.versionNotFound });
-      }
-
-      const [periods, actualSnapshots] = await Promise.all([
+      const [[target], [current], periods, actualSnapshots] = await Promise.all([
+        db
+          .select({
+            dataDate: project.dataDate,
+            periodType: project.periodType,
+            periodLengthDays: project.periodLengthDays,
+            startDate: project.startDate,
+            scheduleStart: project.scheduleStart,
+            endDate: project.endDate,
+          })
+          .from(project)
+          .where(eq(project.id, input.projectId)),
+        db
+          .select()
+          .from(boqVersion)
+          .where(and(
+            eq(boqVersion.projectId, input.projectId),
+            input.versionId
+              ? eq(boqVersion.id, input.versionId)
+              : eq(boqVersion.status, "active"),
+          ))
+          .orderBy(desc(boqVersion.versionNo))
+          .limit(1),
         db
           .select({
             id: reportingPeriod.id,
@@ -329,7 +327,7 @@ export const progressRouter = router({
           .from(reportingPeriod)
           .where(eq(reportingPeriod.projectId, input.projectId))
           .orderBy(asc(reportingPeriod.periodIndex)),
-        db
+        input.planOnly ? Promise.resolve([]) : db
           .select({
             periodId: projectActualCurve.periodId,
             cumulativePercent: projectActualCurve.cumulativePercent,
@@ -337,6 +335,13 @@ export const progressRouter = router({
           .from(projectActualCurve)
           .where(eq(projectActualCurve.projectId, input.projectId)),
       ]);
+
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
+      }
+      if (input.versionId && !current) {
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.versionNotFound });
+      }
 
       const serializedSnapshots = actualSnapshots.map((row) => ({
         periodId: row.periodId,
@@ -370,7 +375,7 @@ export const progressRouter = router({
           .from(boqItemDistribution)
           .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
           .where(eq(boqItem.boqVersionId, current.id)),
-        db
+        input.planOnly ? Promise.resolve([]) : db
           .select({
             boqItemId: progressEntry.boqItemId,
             periodId: progressEntry.periodId,

@@ -1,7 +1,6 @@
 import { hasPermission, type Permission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { trialHasEnded } from "@DashboardV2/api/lib/trial";
 import { auth } from "@DashboardV2/auth";
-import type { Route } from "next";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
@@ -37,6 +36,8 @@ export const getSession = cache(async () => {
 });
 
 type RequireSessionOptions = {
+  /** Only the standalone password-change page may bypass the dashboard gate. */
+  skipPasswordChangeRedirect?: boolean;
   /** Set on /trial-ended itself, for the same reason. */
   skipTrialEndedRedirect?: boolean;
 };
@@ -48,15 +49,15 @@ export async function requireSession(options: RequireSessionOptions = {}) {
     redirect("/login");
   }
 
-  if (session.user.mustChangePassword) {
-    redirect("/set-password?error=SETUP_REQUIRED" as Route);
-  }
-
   // Sign-in is already refused for a lapsed trial in packages/auth, but that
   // hook fires only when a session is created — one opened five minutes before
   // the deadline outlives it. This catches that one, on the next navigation.
   if (!options.skipTrialEndedRedirect && trialHasEnded(session.user)) {
     redirect("/trial-ended");
+  }
+
+  if (session.user.mustChangePassword && !options.skipPasswordChangeRedirect) {
+    redirect("/change-password");
   }
 
   return session;

@@ -38,15 +38,17 @@ import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { isValidAccountName } from "@DashboardV2/auth/username";
 import { trpc } from "@/utils/trpc";
+import type { TemporaryPasswordResult } from "./temp-password-dialog";
+import { useTemporaryPasswordProtection } from "./use-temporary-password-protection";
 
 type CreateRole = "super_admin" | "admin" | "user";
 
 export default function CreateUserDialog({
   actorRole,
-  accountEmailEnabled,
+  onTemporaryPassword,
 }: {
   actorRole: Role;
-  accountEmailEnabled: boolean;
+  onTemporaryPassword: (result: TemporaryPasswordResult) => void;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -54,12 +56,13 @@ export default function CreateUserDialog({
   const isSuperAdmin = actorRole === "super_admin";
   const formRef = useRef<HTMLFormElement>(null);
 
-  const createUser = useMutation(trpc.admin.createUser.mutationOptions());
+  const createUser = useMutation({ ...trpc.admin.createUser.mutationOptions(), gcTime: 0 });
+  useTemporaryPasswordProtection(createUser.isPending);
   // company.list is super-admin-only server-side; a company admin creates
   // Users in their own company only, so there is nothing to pick from.
   const companies = useQuery({
     ...trpc.company.list.queryOptions(),
-    enabled: isSuperAdmin && accountEmailEnabled,
+    enabled: isSuperAdmin,
   });
   const roleItems = isSuperAdmin
     ? [
@@ -93,7 +96,7 @@ export default function CreateUserDialog({
     // Super admins are unpinned and pick an active company instead; an admin
     // or a regular account with no company cannot resolve a scope and is
     // locked out.
-    .refine((value) => value.role === "super_admin" || value.companyId !== "", {
+    .refine((value) => !isSuperAdmin || value.role === "super_admin" || value.companyId !== "", {
       message: t.company.required,
       path: ["companyId"],
     })
@@ -136,13 +139,14 @@ export default function CreateUserDialog({
             ? { days: Number(value.trialDays), aiCredits: Number(value.trialAiCredits) }
             : undefined,
         });
-        await queryClient.invalidateQueries(trpc.admin.pathFilter());
         setOpen(false);
         formApi.reset();
-        if (data.invitationSent) toast.success(t.users.createdInviteSent);
-        else toast.error(t.users.createdInviteFailed, { duration: 8000 });
+        onTemporaryPassword({ name: data.user.name, email: data.user.email, temporaryPassword: data.temporaryPassword });
+        void queryClient.invalidateQueries(trpc.admin.pathFilter());
       } catch (error) {
         toast.error(error instanceof Error ? error.message : t.users.createFailed);
+      } finally {
+        createUser.reset();
       }
     },
     validators: {
@@ -150,19 +154,11 @@ export default function CreateUserDialog({
     },
   });
 
-  if (!accountEmailEnabled) {
-    return (
-      <Button size="sm" disabled aria-describedby="account-email-disabled-description">
-        <UserPlus />
-        {t.users.newUser}
-      </Button>
-    );
-  }
-
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
+        if (createUser.isPending) return;
         setOpen(next);
         if (!next) form.reset();
       }}
@@ -378,7 +374,7 @@ export default function CreateUserDialog({
           </form.Subscribe>
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+            <Button type="button" variant="outline" disabled={createUser.isPending} onClick={() => setOpen(false)}>
               {t.common.cancel}
             </Button>
             <form.Subscribe

@@ -1,19 +1,19 @@
-import { auth } from "@DashboardV2/auth";
+import { changeOwnPassword } from "@DashboardV2/auth";
 import { TRPCError } from "@trpc/server";
 import z from "zod";
 
-import { protectedProcedure, router } from "../index";
+import { authenticatedProcedure, router } from "../index";
 
 export const accountRouter = router({
   /**
-   * Changes an active account's password after verifying the current one.
-   * Accounts waiting for setup use the emailed one-time token instead.
+   * The only pending-session mutation. The target is always the session owner,
+   * and password verification, unlocking and revocation form one atomic change.
    */
-  changePassword: protectedProcedure
+  changePassword: authenticatedProcedure
     .input(
       z.object({
-        currentPassword: z.string(),
-        newPassword: z.string(),
+        currentPassword: z.string().max(128),
+        newPassword: z.string().max(128),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -23,17 +23,12 @@ export const accountRouter = router({
       if (input.newPassword.length < 12) {
         throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.passwordTooShort });
       }
-      if (input.currentPassword === input.newPassword) {
+      if (input.currentPassword.normalize("NFKC") === input.newPassword.normalize("NFKC")) {
         throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.passwordMustDiffer });
       }
-      await auth.api.changePassword({
-        headers: ctx.headers,
-        body: {
-          currentPassword: input.currentPassword,
-          newPassword: input.newPassword,
-          revokeOtherSessions: true,
-        },
-      });
+      if (!await changeOwnPassword(ctx.session.user.id, ctx.session.session.id, input.currentPassword, input.newPassword)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.passwordChangeFailed });
+      }
 
       return { success: true };
     }),

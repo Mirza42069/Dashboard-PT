@@ -3,11 +3,31 @@ import { describe, expect, test } from "bun:test";
 import {
   isProjectTabVisible,
   projectTabPath,
+  projectTabUrl,
   resolveBaselineStep,
   resolveProjectTab,
 } from "./project-navigation";
 
 describe("project navigation", () => {
+  test("tab updates preserve unrelated query parameters and anchors", () => {
+    expect(projectTabUrl("https://example.com/projects/p1?filter=open&filter=late&tab=tickets&action=t1#details", "progress"))
+      .toBe("/projects/p1?filter=open&filter=late&tab=progress#details");
+  });
+
+  test("baseline steps and overview remove obsolete client state", () => {
+    expect(projectTabUrl("https://example.com/projects/p1?tab=schedule&action=t1", "baseline", "schedule"))
+      .toBe("/projects/p1?tab=baseline&step=schedule");
+    expect(projectTabUrl("https://example.com/projects/p1?tab=baseline&step=boq&action=t1#details", "overview"))
+      .toBe("/projects/p1#details");
+  });
+
+  test("ticket deep links retain the action and canonical updates are idempotent", () => {
+    const url = "https://example.com/projects/p1?tab=tickets&action=t1&step=boq";
+    const next = projectTabUrl(url, "tickets");
+    expect(next).toBe("/projects/p1?tab=tickets&action=t1");
+    expect(projectTabUrl(`https://example.com${next}`, "tickets")).toBe(next);
+  });
+
   test("shows every configurable module by default", () => {
     for (const tab of ["tickets", "baseline", "progress", "notes"] as const) {
       expect(resolveProjectTab(tab, [], false)).toBe(tab);

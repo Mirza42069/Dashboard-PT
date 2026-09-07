@@ -32,7 +32,7 @@ export async function generateMetadata(): Promise<Metadata> {
  */
 export default async function TrialEndedPage() {
   // skipTrialEndedRedirect, or this page would redirect to itself forever.
-  const session = await requireSession({ skipTrialEndedRedirect: true });
+  const session = await requireSession({ skipTrialEndedRedirect: true, skipPasswordChangeRedirect: true });
 
   // Reachable by URL. An account whose trial was extended while it sat here
   // should not be told it is over.

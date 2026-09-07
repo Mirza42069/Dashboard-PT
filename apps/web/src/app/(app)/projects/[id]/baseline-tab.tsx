@@ -232,7 +232,7 @@ function BaselineReview({
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const overview = useQuery(trpc.boq.overview.queryOptions({ projectId, versionId }));
-  const report = useQuery(trpc.progress.report.queryOptions({ projectId, versionId }));
+  const report = useQuery(trpc.progress.report.queryOptions({ projectId, versionId, planOnly: true }));
   const activate = useMutation(trpc.boq.activate.mutationOptions());
 
   if (overview.isPending || report.isPending) return <Skeleton className="h-64 w-full" />;

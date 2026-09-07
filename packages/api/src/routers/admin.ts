@@ -1,7 +1,8 @@
 import {
-  accountEmailConfigured,
   auth,
-  sendPasswordSetupLink,
+  generateTemporaryPassword,
+  resetTemporaryPassword,
+  hashInaccessiblePassword,
 } from "@DashboardV2/auth";
 import {
   isValidAccountName,
@@ -9,11 +10,11 @@ import {
   normalizeUsername,
 } from "@DashboardV2/auth/username";
 import { db } from "@DashboardV2/db";
-import { user } from "@DashboardV2/db/schema/auth";
+import { account, session, user, verification } from "@DashboardV2/db/schema/auth";
 import { company } from "@DashboardV2/db/schema/company";
 import { project, projectMember } from "@DashboardV2/db/schema/construction";
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, ilike, inArray, ne, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, like, ne, or } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, permissionProcedure, router } from "../index";
@@ -34,24 +35,6 @@ import {
   trialDeadline,
 } from "../lib/trial";
 import { planProjectAccessReconciliation } from "../lib/user-project-access";
-
-const PASSWORD_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-const LOCKED_PASSWORD_LENGTH = 32;
-
-/** A valid credential that is never shown or sent; only the setup link can replace it. */
-function generateLockedPassword() {
-  const values = new Uint32Array(LOCKED_PASSWORD_LENGTH);
-  crypto.getRandomValues(values);
-  return Array.from(values, (value) =>
-    PASSWORD_ALPHABET.charAt(value % PASSWORD_ALPHABET.length),
-  ).join("");
-}
-
-function assertAccountEmailConfigured(t: MessageDictionary) {
-  if (!accountEmailConfigured()) {
-    throw new TRPCError({ code: "PRECONDITION_FAILED", message: t.user.accountEmailNotConfigured });
-  }
-}
 
 function accountConflictField(error: unknown): "email" | "name" | null {
   const values: string[] = [];
@@ -87,24 +70,6 @@ function accountConflictField(error: unknown): "email" | "name" | null {
     return "email";
   }
   return null;
-}
-
-async function trySendPasswordSetupLink({
-  userId,
-  email,
-  headers,
-}: {
-  userId: string;
-  email: string;
-  headers: Headers;
-}) {
-  try {
-    await sendPasswordSetupLink({ userId, email, headers });
-    return true;
-  } catch (error) {
-    console.error("Failed to send password setup email", { userId, error });
-    return false;
-  }
 }
 
 const roleSchema = z.enum(["super_admin", "admin", "user"]);
@@ -176,10 +141,24 @@ async function reconcileProjectAccess(
     memberships,
     role,
   });
+  const inaccessiblePassword = accountChanges ? await hashInaccessiblePassword() : null;
 
   await runBatch([
     ...(accountChanges
-      ? [db.update(user).set(accountChanges).where(eq(user.id, userId))]
+      ? [
+          // Advance the credential revision under the same lock, so an in-flight
+          // password change cannot cross a role or tenant transition.
+          db.update(user).set({ ...accountChanges, passwordSetupTokenHash: crypto.randomUUID() }).where(eq(user.id, userId)),
+          db.delete(verification).where(and(eq(verification.value, userId), like(verification.identifier, "reset-password:%"))),
+          db.delete(session).where(eq(session.userId, userId)),
+          // Evaluate pending status under the user lock, not a pre-read. A
+          // credential shared by the old tenant must not survive this move.
+          db.update(account).set({ password: inaccessiblePassword }).where(and(
+            eq(account.userId, userId), eq(account.providerId, "credential"),
+            inArray(account.userId, db.select({ id: user.id }).from(user)
+              .where(and(eq(user.id, userId), eq(user.mustChangePassword, true)))),
+          )),
+        ]
       : []),
     db
       .update(project)
@@ -371,13 +350,11 @@ export const adminRouter = router({
       return {
         users: rows,
         total: total?.value ?? 0,
-        accountEmailEnabled: accountEmailConfigured(),
       };
     }),
 
   /**
-   * Creates the account and returns the generated password ONCE. It is never
-   * stored in plaintext and never logged — if the admin loses it, they reset it.
+   * Returns a temporary password once to the authorized caller, never the audit log.
    */
   createUser: companyPermissionProcedure("user:manage")
     .input(
@@ -392,7 +369,6 @@ export const adminRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      assertAccountEmailConfigured(ctx.t);
       const email = input.email.toLowerCase();
       if (!isValidAccountName(input.name)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.nameInvalid });
@@ -442,14 +418,14 @@ export const adminRouter = router({
       }
 
       const trial = resolveTrialInput(ctx.t, input.trial, role);
-      const lockedPassword = generateLockedPassword();
+      const temporaryPassword = generateTemporaryPassword();
 
       const created = await auth.api
         .createUser({
           headers: ctx.headers,
           body: {
             email,
-            password: lockedPassword,
+            password: temporaryPassword,
             name,
             role,
             data: {
@@ -461,12 +437,12 @@ export const adminRouter = router({
         .catch((error: unknown) => {
           const conflict = accountConflictField(error);
           if (conflict === "name") {
-            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists, cause: error });
+            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists });
           }
           if (conflict === "email") {
-            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.emailExists, cause: error });
+            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.emailExists });
           }
-          throw error;
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: ctx.t.user.couldNotAssignCompany });
         });
 
       // companyId is `input: false` on the auth side — it must never come in on
@@ -492,12 +468,6 @@ export const adminRouter = router({
         }
       }
 
-      const invitationSent = await trySendPasswordSetupLink({
-        userId: created.user.id,
-        email,
-        headers: ctx.headers,
-      });
-
       await recordActivity({ session: ctx.session, companyId: companyId ?? ctx.companyId }, {
         action: "created",
         entityType: "user",
@@ -506,7 +476,7 @@ export const adminRouter = router({
         detail: trial ? `${role} (trial)` : role,
       });
 
-      return { user: created.user, invitationSent };
+      return { user: created.user, temporaryPassword };
     }),
 
   renameUser: companyPermissionProcedure("user:rename")
@@ -586,9 +556,8 @@ export const adminRouter = router({
     }),
 
   resetPassword: companyPermissionProcedure("user:manage")
-    .input(userIdSchema)
+    .input(userIdSchema.extend({ pendingOnly: z.boolean().default(false) }))
     .mutation(async ({ ctx, input }) => {
-      assertAccountEmailConfigured(ctx.t);
       assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "resetPassword");
       await assertTargetManageable(ctx, input.userId);
 
@@ -598,36 +567,30 @@ export const adminRouter = router({
           name: user.name,
           companyId: user.companyId,
           role: user.role,
+          mustChangePassword: user.mustChangePassword,
         })
         .from(user)
         .where(eq(user.id, input.userId));
       if (!target) {
         throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
       }
-      if (target.role === "super_admin") {
+      const actorIsSuperAdmin = roleOf(ctx.session.user) === "super_admin";
+      if (!actorIsSuperAdmin && (target.role !== "user" || target.companyId !== ctx.companyId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
+      }
+      if (target.role === "super_admin" && !target.mustChangePassword) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: ctx.t.user.systemPasswordResetNotAllowed,
         });
       }
 
-      await db
-        .update(user)
-        .set({ mustChangePassword: true, passwordSetupTokenHash: null })
-        .where(eq(user.id, input.userId));
-
-      await auth.api.setUserPassword({
-        headers: ctx.headers,
-        body: { userId: input.userId, newPassword: generateLockedPassword() },
-      });
-      await auth.api.revokeUserSessions({
-        headers: ctx.headers,
-        body: { userId: input.userId },
-      });
-      const invitationSent = await trySendPasswordSetupLink({
-        userId: input.userId,
-        email: target.email,
-        headers: ctx.headers,
+      const temporaryPassword = await resetTemporaryPassword(input.userId, {
+        role: target.role,
+        companyId: target.companyId,
+        pendingOnly: input.pendingOnly || target.role === "super_admin",
+      }).catch(() => {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: ctx.t.user.passwordResetFailed });
       });
 
       if (target.companyId) {
@@ -638,12 +601,12 @@ export const adminRouter = router({
             entityType: "user",
             entityId: input.userId,
             entityLabel: `${target.name} - ${target.email}`,
-            detail: invitationSent ? "Password setup email sent" : "Password setup email failed",
+            detail: "Temporary password issued",
           },
         );
       }
 
-      return { invitationSent };
+      return { temporaryPassword };
     }),
 
   /** Moves an account to another company. Super admins stay unpinned. */

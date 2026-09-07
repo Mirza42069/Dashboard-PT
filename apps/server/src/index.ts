@@ -8,11 +8,7 @@ import {
 import { recordActivity } from "@DashboardV2/api/lib/activity";
 import { hasPermission, roleOf } from "@DashboardV2/api/lib/permissions";
 import { appRouter } from "@DashboardV2/api/routers/index";
-import {
-  auth,
-  PASSWORD_SETUP_HASH_HEADER,
-  verifyPasswordSetupToken,
-} from "@DashboardV2/auth";
+import { auth } from "@DashboardV2/auth";
 import { projectAccessFilter, resolveCompanyIdForSession } from "@DashboardV2/api/lib/scope";
 import {
   MAX_SUPPORT_SCREENSHOT_BYTES,
@@ -78,7 +74,13 @@ const NDJSON_CONTENT_TYPE = "application/x-ndjson";
 
 const app = new Hono();
 
-app.use(logger());
+app.use(async (c, next) => {
+  // Legacy reset callbacks/query strings can contain bearer tokens.
+  if (c.req.path.startsWith("/api/auth/reset-password")) return next();
+  // Mutation bodies are never logged; redact query strings too, including
+  // accidentally submitted credentials on rejected GET requests.
+  return logger((message) => console.log(message.replace(/\?\S*/g, "?[redacted]")))(c, next);
+});
 app.use(
   "/*",
   cors({
@@ -118,8 +120,7 @@ app.use("/api/auth/admin/*", async (c, next) => {
 // Closing the generic raw update route also keeps usernames immutable.
 app.use("/api/auth/admin/update-user", async (c) => c.json({ error: "Not found" }, 404));
 
-// Password setup emails are admin-issued. Keeping this raw endpoint closed
-// prevents unauthenticated visitors from using it to send account email.
+// Credentials are only issued through authorized admin mutations.
 app.use("/api/auth/request-password-reset", async (c) => c.json({ error: "Not found" }, 404));
 // The in-app account procedure owns current-password verification, password
 // policy, session revocation, and clearing the forced-change flag as one flow.
@@ -128,22 +129,8 @@ app.use("/api/auth/change-password", async (c) => c.json({ error: "Not found" },
 // generic route would let users change the name without the uniqueness checks.
 app.use("/api/auth/update-user", async (c) => c.json({ error: "Not found" }, 404));
 
-app.post("/api/auth/reset-password", async (c) => {
-  let token: string | undefined;
-  try {
-    const body = (await c.req.raw.clone().json()) as { token?: unknown };
-    token = typeof body.token === "string" ? body.token : undefined;
-  } catch {
-    return c.json({ error: "Invalid password setup request" }, 400);
-  }
-  if (!token) token = new URL(c.req.url).searchParams.get("token") ?? undefined;
-  const tokenHash = token ? await verifyPasswordSetupToken(token) : null;
-  if (!tokenHash) return c.json({ error: "Invalid or expired password setup link" }, 400);
-
-  const headers = new Headers(c.req.raw.headers);
-  headers.set(PASSWORD_SETUP_HASH_HEADER, tokenHash);
-  return auth.handler(new Request(c.req.raw, { headers }));
-});
+app.use("/api/auth/reset-password", async (c) => c.json({ error: "Not found" }, 404));
+app.use("/api/auth/reset-password/*", async (c) => c.json({ error: "Not found" }, 404));
 
 app.use("/api/auth/*", async (c, next) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
@@ -154,14 +141,12 @@ app.use("/api/auth/*", async (c, next) => {
   const path = c.req.path;
   if (
     path === "/api/auth/get-session" ||
-    path === "/api/auth/sign-out" ||
-    path === "/api/auth/reset-password" ||
-    path.startsWith("/api/auth/reset-password/")
+    path === "/api/auth/sign-out"
   ) {
     await next();
     return;
   }
-  return c.json({ error: "Password setup required" }, 403);
+  return c.json({ error: "Password change required" }, 403);
 });
 
 app.on(["POST", "GET"], "/api/auth/*", (c) => auth.handler(c.req.raw));
@@ -1740,6 +1725,10 @@ app.get("/projects/:id/boq-import/:importId/errors.csv", async (c) => {
 
 app.use(
   "/trpc/*",
+  async (c, next) => {
+    c.header("Cache-Control", "private, no-store");
+    await next();
+  },
   trpcServer({
     router: appRouter,
     createContext: (_opts, context) => {

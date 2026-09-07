@@ -11,7 +11,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@DashboardV2/ui/components/alert-dialog";
-import { Alert, AlertDescription, AlertTitle } from "@DashboardV2/ui/components/alert";
 import { Badge } from "@DashboardV2/ui/components/badge";
 import { Button } from "@DashboardV2/ui/components/button";
 import { Card, CardContent } from "@DashboardV2/ui/components/card";
@@ -62,6 +61,8 @@ import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
 import CreateUserDialog from "./create-user-dialog";
+import TempPasswordDialog, { type TemporaryPasswordResult } from "./temp-password-dialog";
+import { useTemporaryPasswordProtection } from "./use-temporary-password-protection";
 import SetTrialDialog, { type TrialTarget } from "./set-trial-dialog";
 import RenameUserDialog, { type RenameTarget } from "./rename-user-dialog";
 
@@ -81,6 +82,7 @@ export default function UsersTable({
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");
+  const [temporaryPassword, setTemporaryPassword] = useState<TemporaryPasswordResult | null>(null);
   const [page, setPage] = useState(0);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [companyTarget, setCompanyTarget] = useState<{ id: string; name: string } | null>(null);
@@ -109,7 +111,8 @@ export default function UsersTable({
     await queryClient.invalidateQueries(trpc.admin.pathFilter());
   }
 
-  const resetPassword = useMutation(trpc.admin.resetPassword.mutationOptions());
+  const resetPassword = useMutation({ ...trpc.admin.resetPassword.mutationOptions(), gcTime: 0 });
+  useTemporaryPasswordProtection(temporaryPassword !== null || resetPassword.isPending);
   const setRole = useMutation(trpc.admin.setRole.mutationOptions());
   const setBanned = useMutation(trpc.admin.setBanned.mutationOptions());
   const setTrial = useMutation(trpc.admin.setTrial.mutationOptions());
@@ -139,7 +142,6 @@ export default function UsersTable({
 
   const users = usersQuery.data?.users ?? [];
   const total = usersQuery.data?.total ?? 0;
-  const accountEmailEnabled = usersQuery.data?.accountEmailEnabled === true;
   const hasNextPage = (page + 1) * PAGE_SIZE < total;
 
   return (
@@ -157,18 +159,12 @@ export default function UsersTable({
         />
         <CreateUserDialog
           actorRole={actorRole}
-          accountEmailEnabled={accountEmailEnabled}
+          onTemporaryPassword={setTemporaryPassword}
         />
       </div>
 
-      {usersQuery.data && !accountEmailEnabled && (
-        <Alert role="status">
-          <Lock />
-          <AlertTitle>{t.users.accountEmailDisabledTitle}</AlertTitle>
-          <AlertDescription id="account-email-disabled-description">
-            {t.users.accountEmailDisabledDescription}
-          </AlertDescription>
-        </Alert>
+      {temporaryPassword && (
+        <TempPasswordDialog result={temporaryPassword} onDismiss={() => setTemporaryPassword(null)} />
       )}
 
       <Card>
@@ -294,21 +290,20 @@ export default function UsersTable({
 
                           <DropdownMenuItem
                             disabled={
-                              !accountEmailEnabled || !manageable || isSelf || isSuperAdmin
+                              resetPassword.isPending || !manageable || isSelf || (isSuperAdmin && !user.mustChangePassword)
                             }
-                            aria-describedby={
-                              accountEmailEnabled
-                                ? undefined
-                                : "account-email-disabled-description"
-                            }
-                            onClick={() =>
-                              run(async () => {
-                                const data = await resetPassword.mutateAsync({ userId: user.id });
-                                if (!data.invitationSent) {
-                                  throw new Error(t.users.passwordSetupFailed);
-                                }
-                              }, t.users.passwordSetupSent)
-                            }
+                            onClick={async () => {
+                              try {
+                                const data = await resetPassword.mutateAsync({ userId: user.id, pendingOnly: user.mustChangePassword });
+                                setTemporaryPassword({ name: user.name, email: user.email, temporaryPassword: data.temporaryPassword });
+                                void refresh();
+                              } catch (error) {
+                                toast.error(error instanceof Error ? error.message : t.common.somethingWentWrong);
+                              } finally {
+                                resetPassword.reset();
+                                void refresh();
+                              }
+                            }}
                           >
                             <KeyRound />
                             {t.users.resetPassword}

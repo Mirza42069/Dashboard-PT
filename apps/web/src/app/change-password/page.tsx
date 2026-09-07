@@ -19,7 +19,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function ChangePasswordPage() {
-  const session = await requireSession();
+  const session = await requireSession({ skipPasswordChangeRedirect: true });
   const dict = getDictionary(await getLocale());
 
   return (
@@ -30,9 +30,10 @@ export default async function ChangePasswordPage() {
             {/* This page renders bare — no app chrome, no page header — so the
                 card title is the document's only heading and takes the h1. */}
             <CardTitle as="h1">
-              {dict.password.changeTitle}
+              {session.user.mustChangePassword ? dict.password.requiredTitle : dict.password.changeTitle}
             </CardTitle>
             <CardDescription>
+              {session.user.mustChangePassword && <span className="mb-2 block">{dict.password.requiredDescription}</span>}
               {interpolate(dict.password.signedInAs, { email: session.user.email })}
             </CardDescription>
           </CardHeader>

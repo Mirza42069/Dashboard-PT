@@ -21,9 +21,10 @@ export const user = pgTable("user", {
   banned: boolean("banned").default(false).notNull(),
   banReason: text("ban_reason"),
   banExpires: timestamp("ban_expires"),
-  // Blocks product access until the account's one-time setup link succeeds.
+  // Blocks product access until the owner changes their temporary password.
   mustChangePassword: boolean("must_change_password").default(true).notNull(),
-  // HMAC of the only password-setup token currently allowed to clear the lock.
+  // Legacy column reused as an opaque credential revision for atomic password
+  // and scope transitions. Never a plaintext password or redeemable token.
   passwordSetupTokenHash: text("password_setup_token_hash"),
   /**
    * Trial accounts: two limits that expire independently.

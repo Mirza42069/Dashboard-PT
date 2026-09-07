@@ -13,7 +13,7 @@ import { and, asc, count, desc, eq, ilike, inArray, isNotNull, notInArray, or, s
 import z from "zod";
 
 import { companyPermissionProcedure, companyProcedure, router } from "../index";
-import { recordActivity } from "../lib/activity";
+import { recordActivities, recordActivity } from "../lib/activity";
 import {
   createdAtCursorCondition,
   createdAtCursorSchema,
@@ -357,12 +357,14 @@ export const projectRouter = router({
         limit: input?.limit ?? 25,
         offset: input?.offset ?? 0,
       };
-      const rows = await projectExceptions(and(projectAccessFilter(ctx), liveProjectsOnly));
-      const canReview = hasPermission(roleOf(ctx.session.user), "progress:review");
-
       // Cancelled and completed projects are not exceptions — nobody is going to
-      // act on a variance from a job that finished.
-      const live = rows.filter((row) => row.status !== "completed" && row.status !== "cancelled");
+      // act on a variance from a job that finished. Exclude them before computing metrics.
+      const live = await projectExceptions(and(
+        projectAccessFilter(ctx),
+        liveProjectsOnly,
+        notInArray(project.status, ["completed", "cancelled"]),
+      ));
+      const canReview = hasPermission(roleOf(ctx.session.user), "progress:review");
 
       const behind = live.filter((row) => isBehindDeviation(row.deviation));
       const stale = live.filter(
@@ -806,14 +808,12 @@ export const projectRouter = router({
         .set({ archivedAt: input.archived ? new Date() : null })
         .where(inArray(project.id, ids));
 
-      for (const target of targets) {
-        await recordActivity(ctx, {
-          action: input.archived ? "archived" : "restored",
-          entityType: "project",
-          entityId: target.id,
-          entityLabel: `${target.code} - ${target.name}`,
-        });
-      }
+      await recordActivities(ctx, targets.map((target) => ({
+        action: input.archived ? "archived" : "restored",
+        entityType: "project",
+        entityId: target.id,
+        entityLabel: `${target.code} - ${target.name}`,
+      })));
 
       return { success: true, count: targets.length };
     }),
@@ -852,14 +852,12 @@ export const projectRouter = router({
 
       await db.delete(project).where(inArray(project.id, ids));
 
-      for (const target of targets) {
-        await recordActivity(ctx, {
-          action: "deleted",
-          entityType: "project",
-          entityId: target.id,
-          entityLabel: `${target.code} - ${target.name}`,
-        });
-      }
+      await recordActivities(ctx, targets.map((target) => ({
+        action: "deleted",
+        entityType: "project",
+        entityId: target.id,
+        entityLabel: `${target.code} - ${target.name}`,
+      })));
 
       return {
         success: true,

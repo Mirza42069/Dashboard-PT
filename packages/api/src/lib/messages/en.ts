@@ -59,6 +59,8 @@ export const en = {
     pickOne: "Pick a company for this account",
   },
   user: {
+    passwordResetFailed: "Could not reset the password. Refresh the account list and try again if the account is still eligible.",
+    passwordChangeFailed: "Could not change the password. Check your current password or sign in again and retry.",
     notFound: "User not found",
     someNotFound: "One or more users were not found",
     emailExists: "An account with that email exists",
@@ -67,7 +69,6 @@ export const en = {
     onlySuperAdminCreatesAdmins: "Only a Super Admin can create admin or super admin accounts",
     ownCompanyOnly: "You can only create users in your own company",
     couldNotAssignCompany: "Could not assign the company — the account was not created. Try again.",
-    accountEmailNotConfigured: "Account email delivery is currently disabled.",
     currentPasswordRequired: "Current password is required",
     passwordTooShort: "Password must be at least 12 characters",
     passwordMustDiffer: "Choose a password different from your current one",

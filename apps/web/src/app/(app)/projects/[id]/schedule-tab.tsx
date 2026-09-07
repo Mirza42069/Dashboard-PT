@@ -170,7 +170,7 @@ export default function ScheduleTab({
   const [monthFold, setMonthFold] = useState<MonthFoldState>(() => new Set());
 
   const reportQuery = useQuery(
-    trpc.progress.report.queryOptions({ projectId, versionId: targetVersionId }),
+    trpc.progress.report.queryOptions({ projectId, versionId: targetVersionId, planOnly: true }),
   );
   const matrixPeriods = reportQuery.data?.periods ?? [];
   // Built here rather than after the early returns, because the selection hook

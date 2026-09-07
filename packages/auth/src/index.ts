@@ -7,12 +7,9 @@ import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, defaultStatements, userAc } from "better-auth/plugins/admin/access";
 import { admin } from "better-auth/plugins";
 import { username } from "better-auth/plugins/username";
-import { APIError } from "better-auth/api";
-import { hashPassword } from "better-auth/crypto";
-import { and, eq, like } from "drizzle-orm";
-import { Resend } from "resend";
-
-import { passwordSetupEmail } from "./password-setup-email";
+import { APIError, createAuthMiddleware } from "better-auth/api";
+import { hashPassword, verifyPassword } from "better-auth/crypto";
+import { and, eq, inArray, isNull, like, sql } from "drizzle-orm";
 import {
   isValidAccountName,
   normalizeAccountName,
@@ -21,18 +18,21 @@ import {
   USERNAME_MIN_LENGTH,
 } from "./username";
 
-const PASSWORD_SETUP_HASH_HEADER = "x-fushin-password-setup-hash";
+export function generateTemporaryPassword() {
+  // Exclude ambiguous glyphs; rejection sampling avoids modulo bias.
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  let password = "";
+  while (password.length < 16) {
+    for (const value of crypto.getRandomValues(new Uint8Array(32))) {
+      if (value < 256 - (256 % alphabet.length)) password += alphabet[value % alphabet.length];
+      if (password.length === 16) break;
+    }
+  }
+  return password;
+}
 
-async function hashPasswordSetupToken(token: string) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(env.BETTER_AUTH_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(token));
-  return Buffer.from(signed).toString("hex");
+export async function hashInaccessiblePassword() {
+  return hashPassword(Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url"));
 }
 
 /**
@@ -73,91 +73,85 @@ export type CreateAuthOptions = {
 
 export function createAuth(opts: CreateAuthOptions = {}) {
   const db = createDb();
+  const adapter = drizzleAdapter(db, { provider: "pg", schema });
 
   return betterAuth({
-    database: drizzleAdapter(db, {
-      provider: "pg",
-
-      schema: schema,
-    }),
+    database: (options: Parameters<typeof adapter>[0]) => {
+      const delegate = adapter(options);
+      const create = async <T extends Record<string, unknown>, R = T>(input: {
+        model: string; data: Omit<T, "id">; select?: string[]; forceAllowId?: boolean;
+      }): Promise<R> => {
+          if (input.model !== "session") return delegate.create(input);
+          const { credentialRevision, ...data } = input.data as unknown as typeof schema.session.$inferInsert & { credentialRevision?: string | null };
+          if (credentialRevision === undefined) throw new Error("Session credential binding required");
+          try {
+            // Serialize insertion with reset/change/scope transactions. A before
+            // hook alone leaves a gap between checking the revision and INSERT.
+            const [, inserted] = await db.batch([
+              db.select({ id: schema.user.id }).from(schema.user).where(eq(schema.user.id, data.userId)).for("update"),
+              db.insert(schema.session).select(db.select({
+                id: sql<string>`${data.id ?? crypto.randomUUID()}`.as("id"),
+                expiresAt: sql<Date>`${new Date(data.expiresAt).toISOString()}::timestamp`.as("expires_at"),
+                token: sql<string>`${data.token}`.as("token"),
+                createdAt: sql<Date>`${(data.createdAt ?? new Date()).toISOString()}::timestamp`.as("created_at"),
+                updatedAt: sql<Date>`${(data.updatedAt ?? new Date()).toISOString()}::timestamp`.as("updated_at"),
+                ipAddress: sql<string | null>`${data.ipAddress ?? null}`.as("ip_address"),
+                userAgent: sql<string | null>`${data.userAgent ?? null}`.as("user_agent"),
+                userId: schema.user.id,
+                impersonatedBy: sql<string | null>`${data.impersonatedBy ?? null}`.as("impersonated_by"),
+              }).from(schema.user).where(and(
+                eq(schema.user.id, data.userId),
+                credentialRevision === null ? isNull(schema.user.passwordSetupTokenHash) : eq(schema.user.passwordSetupTokenHash, credentialRevision),
+                eq(schema.user.banned, false),
+                sql`(${schema.user.trialEndsAt} IS NULL OR ${schema.user.trialEndsAt} > now())`,
+              ))).returning(),
+            ]);
+            if (!inserted[0]) throw new Error("Stale credential");
+            return inserted[0] as R;
+          } catch {
+            throw APIError.from("UNAUTHORIZED", { code: "INVALID_EMAIL_OR_PASSWORD", message: "Sign in again with your current password." });
+          }
+        };
+      return { ...delegate, create };
+    },
     // Not just CORS_ORIGIN: a preview is reachable on both its per-build and
     // its per-branch hostname. See trustedOrigins in packages/env/src/server.ts.
     trustedOrigins,
+    // Only the scoped application procedures may write credentials.
+    disabledPaths: ["/reset-password", "/request-password-reset", "/change-password", "/admin/set-user-password", "/admin/set-role"],
+    hooks: {
+      before: createAuthMiddleware(async (ctx) => {
+        if (["/reset-password", "/request-password-reset", "/change-password", "/admin/set-user-password"].includes(ctx.path)) {
+          throw APIError.from("NOT_FOUND", { code: "NOT_FOUND", message: "Not found" });
+        }
+        if (ctx.path === "/sign-in/email" || ctx.path === "/sign-in/username") {
+          const identifier = ctx.path === "/sign-in/email" ? ctx.body?.email : ctx.body?.username;
+          if (typeof identifier !== "string") return;
+          const [snapshot] = await db.select({ id: schema.user.id, revision: schema.user.passwordSetupTokenHash })
+            .from(schema.user).where(ctx.path === "/sign-in/email"
+              ? eq(schema.user.email, identifier.toLowerCase())
+              : eq(schema.user.username, normalizeUsername(identifier)));
+          return { context: { context: { credentialSnapshot: snapshot ?? null } } };
+        }
+        if (ctx.path === "/admin/impersonate-user" && typeof ctx.body?.userId === "string") {
+          // Better Auth still authorizes impersonation; bind its resulting
+          // session to the target's pre-operation revision as well.
+          const [snapshot] = await db.select({ id: schema.user.id, revision: schema.user.passwordSetupTokenHash })
+            .from(schema.user).where(eq(schema.user.id, ctx.body.userId));
+          return { context: { context: { credentialSnapshot: snapshot ?? null } } };
+        }
+      }),
+    },
     emailAndPassword: {
       enabled: true,
       disableSignUp: !opts.allowSignUp,
       minPasswordLength: 12,
       maxPasswordLength: 128,
-      resetPasswordTokenExpiresIn: 24 * 60 * 60,
-      revokeSessionsOnPasswordReset: true,
-      async sendResetPassword({ user, url, token }) {
-        if (!env.RESEND_API_KEY) {
-          throw new Error("Account email delivery is not configured.");
-        }
-        const armed = await db
-          .update(schema.user)
-          .set({ passwordSetupTokenHash: await hashPasswordSetupToken(token) })
-          .where(
-            and(
-              eq(schema.user.id, user.id),
-              eq(schema.user.mustChangePassword, true),
-            ),
-          )
-          .returning({ id: schema.user.id });
-        if (armed.length === 0) {
-          throw new Error("This account no longer requires password setup.");
-        }
-        const message = passwordSetupEmail({ name: user.name, email: user.email, url });
-        const result = await new Resend(env.RESEND_API_KEY).emails.send({
-          from: env.ACCOUNT_EMAIL_FROM,
-          to: user.email,
-          ...message,
-        });
-        if (result.error) throw new Error(result.error.message);
-      },
-      async onPasswordReset({ user }, request) {
-        const tokenHash = request?.headers.get(PASSWORD_SETUP_HASH_HEADER);
-        if (!tokenHash) {
-          throw APIError.from("BAD_REQUEST", {
-            code: "INVALID_TOKEN",
-            message: "The password setup link is invalid or has expired.",
-          });
-        }
-        const unlocked = await db
-          .update(schema.user)
-          .set({ mustChangePassword: false, passwordSetupTokenHash: null })
-          .where(
-            and(
-              eq(schema.user.id, user.id),
-              eq(schema.user.passwordSetupTokenHash, tokenHash),
-            ),
-          )
-          .returning({ id: schema.user.id });
-        if (unlocked.length === 0) {
-          const replacement = await hashPassword(`${crypto.randomUUID()}${crypto.randomUUID()}`);
-          await Promise.all([
-            db
-              .update(schema.account)
-              .set({ password: replacement })
-              .where(
-                and(
-                  eq(schema.account.userId, user.id),
-                  eq(schema.account.providerId, "credential"),
-                ),
-              ),
-            db.delete(schema.session).where(eq(schema.session.userId, user.id)),
-          ]);
-          throw APIError.from("BAD_REQUEST", {
-            code: "INVALID_TOKEN",
-            message: "A newer password setup link has been issued.",
-          });
-        }
-      },
     },
     user: {
       additionalFields: {
-        // Set while an account is waiting for password setup; cleared once the
-        // one-time link succeeds. `input: false` keeps it out of every request body —
+        // Set until the owner changes their temporary password. `input: false`
+        // keeps it out of every request body —
         // it is only ever written server-side.
         mustChangePassword: {
           type: "boolean",
@@ -209,6 +203,11 @@ export function createAuth(opts: CreateAuthOptions = {}) {
       session: {
         create: {
           async before(session, ctx) {
+            const snapshot = (ctx?.context as { credentialSnapshot?: { id: string; revision: string | null } } | undefined)?.credentialSnapshot;
+            if (!snapshot || snapshot.id !== session.userId) {
+              // Bootstrap sign-up is the only non-password session issuer.
+              if (!opts.allowSignUp || ctx?.path !== "/sign-up/email") return false;
+            }
             const account = await ctx?.context.internalAdapter.findUserById(session.userId);
             const endsAt = (account as { trialEndsAt?: Date | string | null } | null)?.trialEndsAt;
             if (endsAt && new Date(endsAt).getTime() <= Date.now()) {
@@ -217,6 +216,7 @@ export function createAuth(opts: CreateAuthOptions = {}) {
                 code: TRIAL_ENDED_CODE,
               });
             }
+            return { data: { ...session, credentialRevision: snapshot?.revision ?? null } };
           },
         },
       },
@@ -252,10 +252,10 @@ export function createAuth(opts: CreateAuthOptions = {}) {
       admin({
         defaultRole: "user",
         // "admin" is here, not just "super_admin", because packages/api's
-        // admin router calls auth.api.createUser/setUserPassword/banUser/
+        // admin router calls auth.api.createUser/banUser/
         // unbanUser/removeUser with the *caller's* headers — better-auth
         // checks the caller against this list on every one of those calls,
-        // and company admins must keep creating/resetting/banning their own
+        // and company admins must keep creating/banning their own
         // users. The raw HTTP admin surface this also unlocks is closed for
         // non-super-admins in apps/server/src/index.ts, since nothing but a
         // super admin needs it and tRPC (which does its own tenant scoping
@@ -269,53 +269,82 @@ export function createAuth(opts: CreateAuthOptions = {}) {
 
 export const auth = createAuth();
 
-export function accountEmailConfigured() {
-  return env.ACCOUNT_EMAIL_ENABLED && Boolean(env.RESEND_API_KEY);
-}
-
-export async function verifyPasswordSetupToken(token: string) {
-  const db = createDb();
-  const [verification] = await db
-    .select({ expiresAt: schema.verification.expiresAt, userId: schema.verification.value })
-    .from(schema.verification)
-    .where(eq(schema.verification.identifier, `reset-password:${token}`));
-  if (!verification || verification.expiresAt <= new Date()) return null;
-
-  const [account] = await db
-    .select({ tokenHash: schema.user.passwordSetupTokenHash })
-    .from(schema.user)
-    .where(eq(schema.user.id, verification.userId));
-  const tokenHash = await hashPasswordSetupToken(token);
-  if (!account?.tokenHash || account.tokenHash !== tokenHash) return null;
-  return tokenHash;
-}
-
-export { PASSWORD_SETUP_HASH_HEADER };
-
-export async function sendPasswordSetupLink({
-  userId,
-  email,
-  headers,
-}: {
-  userId: string;
-  email: string;
-  headers: Headers;
+/** Server-only: the authorized target snapshot is rechecked under the row lock. */
+export async function resetTemporaryPassword(userId: string, target: {
+  role: string;
+  companyId: string | null;
+  pendingOnly: boolean;
 }) {
-  if (!accountEmailConfigured()) {
-    throw new Error("Account email delivery is not configured.");
-  }
-  await createDb()
-    .delete(schema.verification)
-    .where(
-      and(
-        eq(schema.verification.value, userId),
+  const temporaryPassword = generateTemporaryPassword();
+  const db = createDb();
+  try {
+    // Reuse the persisted setup binding as an opaque credential revision, never
+    // as a bearer token. A fresh revision also invalidates in-flight changes.
+    const revision = crypto.randomUUID();
+    const password = await hashPassword(temporaryPassword);
+    const armedUser = db.select({ id: schema.user.id }).from(schema.user).where(and(
+      eq(schema.user.id, userId), eq(schema.user.passwordSetupTokenHash, revision),
+    ));
+    // Neon HTTP batch is a transaction; lock the user before all other writes.
+    const [armed] = await db.batch([
+      db.update(schema.user)
+        .set({ mustChangePassword: true, passwordSetupTokenHash: revision })
+        .where(and(
+          eq(schema.user.id, userId),
+          eq(schema.user.role, target.role),
+          target.companyId === null ? isNull(schema.user.companyId) : eq(schema.user.companyId, target.companyId),
+          // A System account can ONLY be reissued while it is still pending,
+          // even if it completed setup after the router's initial read.
+          target.pendingOnly || target.role === "super_admin" ? eq(schema.user.mustChangePassword, true) : undefined,
+          inArray(schema.user.id, db.select({ id: schema.account.userId }).from(schema.account).where(eq(schema.account.providerId, "credential"))),
+        ))
+        .returning({ id: schema.user.id }),
+      db.update(schema.account).set({ password, updatedAt: new Date() }).where(and(
+        inArray(schema.account.userId, armedUser), eq(schema.account.providerId, "credential"),
+      )),
+      db.delete(schema.session).where(inArray(schema.session.userId, armedUser)),
+      db.delete(schema.verification).where(and(
+        inArray(schema.verification.value, armedUser),
         like(schema.verification.identifier, "reset-password:%"),
-      ),
-    );
-  await auth.api.requestPasswordReset({
-    headers,
-    body: { email, redirectTo: `${env.CORS_ORIGIN}/set-password` },
-  });
+      )),
+    ]);
+    if (armed.length === 0) throw new Error("Account not found");
+  } catch {
+    // Never expose driver errors or hashes through logs or error causes.
+    throw new Error("Could not reset the password. Try again.");
+  }
+  return temporaryPassword;
+}
+
+export async function changeOwnPassword(userId: string, sessionId: string, currentPassword: string, newPassword: string): Promise<boolean> {
+  if (!currentPassword || currentPassword.length > 128 || newPassword.length < 12 || newPassword.length > 128) return false;
+  // Reject equivalent Unicode spellings, not just identical input strings.
+  if (currentPassword.normalize("NFKC") === newPassword.normalize("NFKC")) return false;
+  try {
+    const db = createDb();
+    const [credential] = await db.select({ password: schema.account.password, revision: schema.user.passwordSetupTokenHash })
+      .from(schema.user).innerJoin(schema.account, eq(schema.account.userId, schema.user.id))
+      .where(and(eq(schema.user.id, userId), eq(schema.account.providerId, "credential")));
+    if (!credential?.password || !await verifyPassword({ hash: credential.password, password: currentPassword })) return false;
+    const password = await hashPassword(newPassword);
+    const revision = crypto.randomUUID();
+    const changedUser = db.select({ id: schema.user.id }).from(schema.user)
+      .where(and(eq(schema.user.id, userId), eq(schema.user.passwordSetupTokenHash, revision)));
+    const [changed] = await db.batch([
+      db.update(schema.user).set({ mustChangePassword: false, passwordSetupTokenHash: revision, updatedAt: new Date() })
+        .where(and(eq(schema.user.id, userId),
+          credential.revision === null ? isNull(schema.user.passwordSetupTokenHash) : eq(schema.user.passwordSetupTokenHash, credential.revision),
+          sql`EXISTS (SELECT 1 FROM session WHERE id = ${sessionId} AND user_id = ${userId} AND expires_at > now())`,
+          sql`EXISTS (SELECT 1 FROM account WHERE user_id = ${userId} AND provider_id = 'credential' AND password = ${credential.password})`,
+        )).returning({ id: schema.user.id }),
+      db.update(schema.account).set({ password, updatedAt: new Date() }).where(and(inArray(schema.account.userId, changedUser), eq(schema.account.providerId, "credential"))),
+      db.delete(schema.session).where(and(inArray(schema.session.userId, changedUser), sql`${schema.session.id} <> ${sessionId}`)),
+      db.delete(schema.verification).where(and(inArray(schema.verification.value, changedUser), like(schema.verification.identifier, "reset-password:%"))),
+    ]);
+    return changed.length === 1;
+  } catch {
+    throw new Error("Could not change the password. Try again.");
+  }
 }
 
 export type Auth = ReturnType<typeof createAuth>;

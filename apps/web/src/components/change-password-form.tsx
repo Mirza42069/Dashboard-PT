@@ -21,21 +21,22 @@ export default function ChangePasswordForm() {
 
   const schema = z
     .object({
-      currentPassword: z.string().min(1, t.password.currentRequired),
-      newPassword: z.string().min(12, t.password.minLength),
+      currentPassword: z.string().min(1, t.password.currentRequired).max(128, t.password.maxLength),
+      newPassword: z.string().min(12, t.password.minLength).max(128, t.password.maxLength),
       confirmPassword: z.string().min(1, t.password.confirmRequired),
     })
     .refine((value) => value.newPassword === value.confirmPassword, {
       message: t.password.mismatch,
       path: ["confirmPassword"],
     })
-    .refine((value) => value.newPassword !== value.currentPassword, {
+    .refine((value) => value.newPassword.normalize("NFKC") !== value.currentPassword.normalize("NFKC"), {
       message: t.password.mustDiffer,
       path: ["newPassword"],
     });
 
   const changePassword = useMutation(
     trpc.account.changePassword.mutationOptions({
+      gcTime: 0,
       onSuccess: () => {
         toast.success(t.password.updated);
         router.push("/dashboard");
@@ -53,11 +54,18 @@ export default function ChangePasswordForm() {
       newPassword: "",
       confirmPassword: "",
     },
-    onSubmit: async ({ value }) => {
-      await changePassword.mutateAsync({
-        currentPassword: value.currentPassword,
-        newPassword: value.newPassword,
-      });
+    onSubmit: async ({ value, formApi }) => {
+      try {
+        await changePassword.mutateAsync({
+          currentPassword: value.currentPassword,
+          newPassword: value.newPassword,
+        });
+        formApi.reset();
+      } catch {
+        // The mutation's onError reports failure without exposing credentials.
+      } finally {
+        changePassword.reset();
+      }
     },
     validators: {
       onSubmit: schema,
@@ -106,14 +114,14 @@ export default function ChangePasswordForm() {
       </div>
 
       <form.Subscribe
-        selector={(state) => ({ canSubmit: state.canSubmit, isSubmitting: state.isSubmitting })}
+        selector={(state) => ({ isSubmitting: state.isSubmitting })}
       >
-        {({ canSubmit, isSubmitting }) => (
+        {({ isSubmitting }) => (
           <Button
             type="submit"
             size="lg"
             className="w-full"
-            disabled={!canSubmit || isSubmitting}
+            disabled={isSubmitting}
           >
             {isSubmitting ? t.password.updating : t.password.update}
           </Button>

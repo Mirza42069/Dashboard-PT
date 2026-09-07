@@ -14,6 +14,8 @@ local.db-*
 .agents/
 .claude/
 reference/
+opencode.json
+AUDIO-2026-08-20-12-16-08.m4a
 
 # Build outputs are recreated by each Vercel service build.
 dist/
