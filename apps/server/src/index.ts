@@ -74,6 +74,17 @@ const NDJSON_CONTENT_TYPE = "application/x-ndjson";
 
 const app = new Hono();
 
+app.use(async (c, next): Promise<Response | void> => {
+  // Services can forward the original URL despite the configured path transform.
+  // Normalize the Request too, since tRPC reads its URL independently of Hono.
+  const url = new URL(c.req.url);
+  if (url.pathname.startsWith("/api/") && !/^\/api\/auth(?:\/|$)/.test(url.pathname)) {
+    url.pathname = url.pathname.slice(4);
+    return app.fetch(new Request(url.href, c.req.raw), c.env);
+  }
+  await next();
+});
+
 app.use(async (c, next) => {
   // Legacy reset callbacks/query strings can contain bearer tokens.
   if (c.req.path.startsWith("/api/auth/reset-password")) return next();
