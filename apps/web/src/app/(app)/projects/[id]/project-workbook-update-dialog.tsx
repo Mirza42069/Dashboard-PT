@@ -542,7 +542,7 @@ export default function ProjectWorkbookUpdateDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[min(90svh,52rem)] overflow-y-auto sm:max-w-2xl"
+        className="max-h-[min(90svh,52rem)] overflow-y-auto sm:max-w-4xl"
         closeLabel={t.common.close}
       >
         <DialogHeader>

@@ -70,7 +70,7 @@ import {
 import { cadenceLabel } from "@/lib/cadence";
 import { Hint } from "@/components/hint";
 import { useLocale, useT } from "@/i18n/provider";
-import { computePlannedCurve, distributionMap, scheduleRows } from "@/lib/boq/curves";
+import { computePlannedCurve, distributionMap, scheduleRows } from "@DashboardV2/api/lib/curves";
 import { datePickerLabels } from "@/lib/date-picker-labels";
 import { COMPACT_CELL_WIDTH, MAX_PERIOD_WIDTH, fitMatrix } from "@/lib/matrix-fit";
 import { toggleFold, type MonthFoldState } from "@/lib/month-fold";

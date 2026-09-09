@@ -23,14 +23,12 @@ function builderWith(
   return (input) => Promise.resolve(files[input.projectId] ?? null);
 }
 
-describe("the Effect project export pipeline", () => {
+describe("the project export pipeline", () => {
   test("one selection passes the workbook through as an xlsx", async () => {
-    const result = await Effect.runPromise(
-      buildSelectedProjectExport(
-        { projectIds: ["a"], locale: "en", includeTeam: false },
-        builderWith({ a: file("A") }),
-      ),
-    );
+    const result = await Effect.runPromise(buildSelectedProjectExport(
+      { projectIds: ["a"], locale: "en", includeTeam: false },
+      builderWith({ a: file("A") }),
+    ));
 
     expect(result).toMatchObject({
       filename: "A.xlsx",
@@ -40,12 +38,10 @@ describe("the Effect project export pipeline", () => {
   });
 
   test("several selections become a zip carrying every workbook", async () => {
-    const result = await Effect.runPromise(
-      buildSelectedProjectExport(
-        { projectIds: ["a", "b"], locale: "id", includeTeam: false },
-        builderWith({ a: file("A"), b: file("B") }),
-      ),
-    );
+    const result = await Effect.runPromise(buildSelectedProjectExport(
+      { projectIds: ["a", "b"], locale: "id", includeTeam: false },
+      builderWith({ a: file("A"), b: file("B") }),
+    ));
 
     expect(result.contentType).toBe(ZIP_CONTENT_TYPE);
     expect(result.filename).toMatch(/^projects-\d{4}-\d{2}-\d{2}\.zip$/);
@@ -57,28 +53,30 @@ describe("the Effect project export pipeline", () => {
 
   test("builds strictly in request order", async () => {
     const calls: string[] = [];
-    const ordered: ProjectDetailWorkbookBuilder = (input) => {
+    let active = 0;
+    const ordered: ProjectDetailWorkbookBuilder = async (input) => {
+      expect(active++).toBe(0);
+      await Bun.sleep(1);
       calls.push(input.projectId);
-      return Promise.resolve(file(input.projectId.toUpperCase()));
+      active--;
+      return file(input.projectId.toUpperCase());
     };
 
-    await Effect.runPromise(
-      buildSelectedProjectExport(
-        { projectIds: ["b", "a", "c"], locale: "en", includeTeam: false },
-        ordered,
-      ),
-    );
+    await Effect.runPromise(buildSelectedProjectExport(
+      { projectIds: ["b", "a", "c"], locale: "en", includeTeam: false },
+      ordered,
+    ));
 
     expect(calls).toEqual(["b", "a", "c"]);
   });
 
-  test("a missing project fails with the tagged unavailable error", async () => {
-    const effect = buildSelectedProjectExport(
+  test("a missing project fails with the unavailable error", async () => {
+    const pending = buildSelectedProjectExport(
       { projectIds: ["a", "missing"], locale: "en", includeTeam: false },
       builderWith({ a: file("A") }),
     );
 
-    const error = await Effect.runPromise(effect).then(
+    const error = await Effect.runPromise(pending).then(
       () => null,
       (caught: unknown) => caught,
     );
@@ -87,19 +85,20 @@ describe("the Effect project export pipeline", () => {
     expect(error).toMatchObject({ projectId: "missing" });
   });
 
-  test("a builder failure keeps its cause on the tagged error", async () => {
+  test("a builder failure keeps its project ID and cause", async () => {
     const cause = new Error("database vanished");
     const failing: ProjectDetailWorkbookBuilder = () => Promise.reject(cause);
 
-    const error = await Effect.runPromise(
-      buildSelectedProjectExport({ projectIds: ["a"], locale: "en", includeTeam: false }, failing),
-    ).then(
+    const error = await Effect.runPromise(buildSelectedProjectExport(
+      { projectIds: ["a"], locale: "en", includeTeam: false },
+      failing,
+    )).then(
       () => null,
       (caught: unknown) => caught,
     );
 
     expect(error).toBeInstanceOf(ProjectExportBuildFailed);
-    expect(error).toMatchObject({ cause });
+    expect(error).toMatchObject({ projectId: "a", cause });
   });
 
   test("the report date and locale reach the workbook builder", async () => {
@@ -109,17 +108,15 @@ describe("the Effect project export pipeline", () => {
       return file("A");
     };
 
-    await Effect.runPromise(
-      buildSelectedProjectExport(
-        {
-          projectIds: ["a"],
-          locale: "id",
-          includeTeam: true,
-          dailyReportDate: "2026-08-22",
-        },
-        recording,
-      ),
-    );
+    await Effect.runPromise(buildSelectedProjectExport(
+      {
+        projectIds: ["a"],
+        locale: "id",
+        includeTeam: true,
+        dailyReportDate: "2026-08-22",
+      },
+      recording,
+    ));
 
     expect(seen).toEqual([
       {

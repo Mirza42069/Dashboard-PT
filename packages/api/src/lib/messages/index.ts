@@ -8,8 +8,7 @@ import { id } from "./id";
  *   grep -rn 'message: "' packages/api/src
  *   grep -n  'error: "'   apps/server/src/index.ts
  *
- * Both should return only the deliberate English survivors — `routers/index.ts`
- * ("This is private" is the health-probe payload, not an error) and the opaque
+ * Both should return only the deliberate English survivors — the opaque
  * `Unauthorized` / `Not found` responses, which are HTTP status names rather
  * than copy. The 404s are deliberately indistinguishable from one another; see
  * the note above the guards in lib/scope.ts. Anything else showing up in that

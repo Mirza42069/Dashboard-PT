@@ -13,6 +13,7 @@ import {
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
 import { del, head } from "@vercel/blob";
+import { Effect } from "effect";
 import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import z from "zod";
 
@@ -22,6 +23,7 @@ import {
   createdAtCursorSchema,
   exactCursorTimestamp,
 } from "../lib/created-at-cursor";
+import { attempt, runProcedure } from "../lib/effect";
 import { interpolate, type MessageDictionary } from "../lib/messages/index";
 import { roleOf } from "../lib/permissions";
 import {
@@ -410,83 +412,94 @@ export const supportRouter = router({
         screenshots: z.array(screenshotInputSchema).max(MAX_SUPPORT_SCREENSHOTS).default([]),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      if (roleOf(ctx.session.user) === "super_admin") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: ctx.t.support.systemCannotSubmit,
-        });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          if (roleOf(ctx.session.user) === "super_admin") {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: ctx.t.support.systemCannotSubmit,
+            });
+          }
 
-      const companyId = await ctx.getCompanyId();
-      const [identity] = await db
-        .select({
-          requesterId: user.id,
-          requesterName: user.name,
-          requesterEmail: user.email,
-          companyId: company.id,
-          companyName: company.name,
-          companyCode: company.code,
-        })
-        .from(user)
-        .innerJoin(company, eq(company.id, user.companyId))
-        .where(
-          and(
-            eq(user.id, ctx.session.user.id),
-            eq(company.id, companyId),
-            inArray(user.role, ["admin", "user"]),
-          ),
-        );
-      if (!identity) {
-        throw new TRPCError({ code: "FORBIDDEN", message: ctx.t.auth.companyAccountRequired });
-      }
+          const companyId = yield* attempt(() => ctx.getCompanyId());
+          const [identity] = yield* attempt(() =>
+            db
+              .select({
+                requesterId: user.id,
+                requesterName: user.name,
+                requesterEmail: user.email,
+                companyId: company.id,
+                companyName: company.name,
+                companyCode: company.code,
+              })
+              .from(user)
+              .innerJoin(company, eq(company.id, user.companyId))
+              .where(
+                and(
+                  eq(user.id, ctx.session.user.id),
+                  eq(company.id, companyId),
+                  inArray(user.role, ["admin", "user"]),
+                ),
+              ),
+          );
+          if (!identity) {
+            throw new TRPCError({ code: "FORBIDDEN", message: ctx.t.auth.companyAccountRequired });
+          }
 
-      const attachments = await inspectScreenshots(
-        ctx.t,
-        ctx.session.user.id,
-        input.screenshots,
-      );
-      const requestId = crypto.randomUUID();
-      const requestInsert = db
-        .insert(supportRequest)
-        .values({ id: requestId, ...identity, subject: input.subject, message: input.message })
-        .returning({
-          id: supportRequest.id,
-          status: supportRequest.status,
-          createdAt: supportRequest.createdAt,
-        });
-      let createdRows;
-      if (attachments.length > 0) {
-        [createdRows] = await db.batch([
-          requestInsert,
-          db.insert(supportAttachment).values(
-            attachments.map((attachment) => ({ ...attachment, requestId })),
-          ),
-        ]);
-      } else {
-        createdRows = await requestInsert;
-      }
-      const [created] = createdRows;
-      if (!created) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      return created;
-    }),
+          const attachments = yield* attempt(() =>
+            inspectScreenshots(ctx.t, ctx.session.user.id, input.screenshots),
+          );
+          const requestId = crypto.randomUUID();
+          const requestInsert = db
+            .insert(supportRequest)
+            .values({ id: requestId, ...identity, subject: input.subject, message: input.message })
+            .returning({
+              id: supportRequest.id,
+              status: supportRequest.status,
+              createdAt: supportRequest.createdAt,
+            });
+          const createdRows = yield* (attachments.length > 0
+            ? attempt(() =>
+                db
+                  .batch([
+                    requestInsert,
+                    db.insert(supportAttachment).values(
+                      attachments.map((attachment) => ({ ...attachment, requestId })),
+                    ),
+                  ])
+                  .then(([first]) => first),
+              )
+            : attempt(() => requestInsert));
+          const [created] = createdRows;
+          if (!created) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+          return created;
+        }),
+      ),
+    ),
 
   discardScreenshots: protectedProcedure
     .input(z.object({ pathnames: z.array(z.string().min(1).max(500)).max(MAX_SUPPORT_SCREENSHOTS) }))
-    .mutation(async ({ ctx, input }) => {
-      const owned = [...new Set(input.pathnames)].filter((pathname) =>
-        isOwnedSupportScreenshotPath(pathname, ctx.session.user.id),
-      );
-      if (owned.length === 0) return { success: true };
-      const linked = await db
-        .select({ pathname: supportAttachment.pathname })
-        .from(supportAttachment)
-        .where(inArray(supportAttachment.pathname, owned));
-      const linkedPaths = new Set(linked.map(({ pathname }) => pathname));
-      const disposable = owned.filter((pathname) => !linkedPaths.has(pathname));
-      if (disposable.length > 0) await del(disposable).catch(() => undefined);
-      return { success: true };
-    }),
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const owned = [...new Set(input.pathnames)].filter((pathname) =>
+            isOwnedSupportScreenshotPath(pathname, ctx.session.user.id),
+          );
+          if (owned.length === 0) return { success: true };
+          const linked = yield* attempt(() =>
+            db
+              .select({ pathname: supportAttachment.pathname })
+              .from(supportAttachment)
+              .where(inArray(supportAttachment.pathname, owned)),
+          );
+          const linkedPaths = new Set(linked.map(({ pathname }) => pathname));
+          const disposable = owned.filter((pathname) => !linkedPaths.has(pathname));
+          if (disposable.length > 0) yield* attempt(() => del(disposable).catch(() => undefined));
+          return { success: true };
+        }),
+      ),
+    ),
 
   list: permissionProcedure("support:manage")
     .input(
@@ -497,63 +510,77 @@ export const supportRouter = router({
         cursor: createdAtCursorSchema.optional(),
       }),
     )
-    .query(async ({ input }) => {
-      const baseFilter = and(
-        input.status ? eq(supportRequest.status, input.status) : undefined,
-        input.search
-          ? or(
-              ilike(supportRequest.subject, `%${input.search}%`),
-              ilike(supportRequest.requesterName, `%${input.search}%`),
-              ilike(supportRequest.requesterEmail, `%${input.search}%`),
-              ilike(supportRequest.companyName, `%${input.search}%`),
-              ilike(supportRequest.companyCode, `%${input.search}%`),
-            )
-          : undefined,
-      );
-      const cursorFilter =
-        input.cursor
-          ? createdAtCursorCondition(supportRequest.updatedAt, supportRequest.id, input.cursor)
-          : undefined;
-      const rows = await db
-        .select({
-          row: supportRequest,
-          cursorCreatedAt: exactCursorTimestamp(supportRequest.updatedAt),
-        })
-        .from(supportRequest)
-        .where(
-          and(baseFilter, cursorFilter),
-        )
-        .orderBy(desc(supportRequest.updatedAt), desc(supportRequest.id))
-        .limit(input.limit + 1);
+    .query(({ input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const baseFilter = and(
+            input.status ? eq(supportRequest.status, input.status) : undefined,
+            input.search
+              ? or(
+                  ilike(supportRequest.subject, `%${input.search}%`),
+                  ilike(supportRequest.requesterName, `%${input.search}%`),
+                  ilike(supportRequest.requesterEmail, `%${input.search}%`),
+                  ilike(supportRequest.companyName, `%${input.search}%`),
+                  ilike(supportRequest.companyCode, `%${input.search}%`),
+                )
+              : undefined,
+          );
+          const cursorFilter =
+            input.cursor
+              ? createdAtCursorCondition(supportRequest.updatedAt, supportRequest.id, input.cursor)
+              : undefined;
+          const rows = yield* attempt(() =>
+            db
+              .select({
+                row: supportRequest,
+                cursorCreatedAt: exactCursorTimestamp(supportRequest.updatedAt),
+              })
+              .from(supportRequest)
+              .where(
+                and(baseFilter, cursorFilter),
+              )
+              .orderBy(desc(supportRequest.updatedAt), desc(supportRequest.id))
+              .limit(input.limit + 1),
+          );
 
-      const hasMore = rows.length > input.limit;
-      const page = hasMore ? rows.slice(0, input.limit) : rows;
-      const requests = page.map(({ row }) => row);
-      const last = page.at(-1);
-      return {
-        requests,
-        nextCursor:
-          hasMore && last ? { createdAt: last.cursorCreatedAt, id: last.row.id } : null,
-      };
-    }),
+          const hasMore = rows.length > input.limit;
+          const page = hasMore ? rows.slice(0, input.limit) : rows;
+          const requests = page.map(({ row }) => row);
+          const last = page.at(-1);
+          return {
+            requests,
+            nextCursor:
+              hasMore && last ? { createdAt: last.cursorCreatedAt, id: last.row.id } : null,
+          };
+        }),
+      ),
+    ),
 
   get: permissionProcedure("support:manage")
     .input(idSchema)
-    .query(async ({ ctx, input }) => {
-      const request = await requestOrThrow(ctx.t, input.id);
-      return { ...request, attachments: await attachmentsFor(request.id) };
-    }),
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const request = yield* attempt(() => requestOrThrow(ctx.t, input.id));
+          return { ...request, attachments: yield* attempt(() => attachmentsFor(request.id)) };
+        }),
+      ),
+    ),
 
   accept: permissionProcedure("support:manage")
     .input(idSchema)
     .mutation(({ ctx, input }) =>
-      transitionWithNotice({
-        t: ctx.t,
-        id: input.id,
-        action: "accept",
-        actorId: ctx.session.user.id,
-        actorName: ctx.session.user.name,
-      }),
+      runProcedure(
+        attempt(() =>
+          transitionWithNotice({
+            t: ctx.t,
+            id: input.id,
+            action: "accept",
+            actorId: ctx.session.user.id,
+            actorName: ctx.session.user.name,
+          }),
+        ),
+      ),
     ),
 
   /** Repeatable: support answers as many times as the conversation needs. */
@@ -564,130 +591,158 @@ export const supportRouter = router({
       }),
     )
     .mutation(({ ctx, input }) =>
-      appendMessage({
-        t: ctx.t,
-        requestId: input.id,
-        action: "reply",
-        body: input.reply,
-        authorId: ctx.session.user.id,
-        authorName: ctx.session.user.name,
-        authorSide: "support",
-      }),
+      runProcedure(
+        attempt(() =>
+          appendMessage({
+            t: ctx.t,
+            requestId: input.id,
+            action: "reply",
+            body: input.reply,
+            authorId: ctx.session.user.id,
+            authorName: ctx.session.user.name,
+            authorSide: "support",
+          }),
+        ),
+      ),
     ),
 
   /** The transcript behind the inbox's detail sheet. */
   thread: permissionProcedure("support:manage")
     .input(idSchema)
-    .query(({ input }) => messagesFor(input.id)),
+    .query(({ input }) => runProcedure(attempt(() => messagesFor(input.id)))),
 
   close: permissionProcedure("support:manage")
     .input(idSchema)
     .mutation(({ ctx, input }) =>
-      transitionWithNotice({
-        t: ctx.t,
-        id: input.id,
-        action: "close",
-        actorId: ctx.session.user.id,
-        actorName: ctx.session.user.name,
-      }),
+      runProcedure(
+        attempt(() =>
+          transitionWithNotice({
+            t: ctx.t,
+            id: input.id,
+            action: "close",
+            actorId: ctx.session.user.id,
+            actorName: ctx.session.user.name,
+          }),
+        ),
+      ),
     ),
 
   delete: permissionProcedure("support:manage")
     .input(idSchema)
-    .mutation(async ({ ctx, input }) => {
-      const request = await requestOrThrow(ctx.t, input.id);
-      if (!canDeleteSupportRequest(request.status)) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: ctx.t.support.closeBeforeDelete,
-        });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const request = yield* attempt(() => requestOrThrow(ctx.t, input.id));
+          if (!canDeleteSupportRequest(request.status)) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: ctx.t.support.closeBeforeDelete,
+            });
+          }
 
-      const paths = await db
-        .select({ pathname: supportAttachment.pathname })
-        .from(supportAttachment)
-        .where(eq(supportAttachment.requestId, input.id));
-      const result = await db.execute<{ id: string }>(sql`
-        with deleted_request as (
-          delete from "support_request"
-          where "id" = ${input.id} and "status" = 'closed'
-          returning "id"
-        ), deleted_notifications as (
-          delete from "notification" as notice
-          using deleted_request as request
-          where notice."entity_type" = 'support_request'
-            and notice."entity_id" = request."id"
-          returning notice."id"
-        )
-        select "id" from deleted_request
-      `);
-      if (result.rows.length === 0) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: ctx.t.support.changedRefresh,
-        });
-      }
-      if (paths.length > 0) {
-        await del(paths.map(({ pathname }) => pathname)).catch(() => undefined);
-      }
-      return { success: true };
-    }),
+          const paths = yield* attempt(() =>
+            db
+              .select({ pathname: supportAttachment.pathname })
+              .from(supportAttachment)
+              .where(eq(supportAttachment.requestId, input.id)),
+          );
+          const result = yield* attempt(() =>
+            db.execute<{ id: string }>(sql`
+              with deleted_request as (
+                delete from "support_request"
+                where "id" = ${input.id} and "status" = 'closed'
+                returning "id"
+              ), deleted_notifications as (
+                delete from "notification" as notice
+                using deleted_request as request
+                where notice."entity_type" = 'support_request'
+                  and notice."entity_id" = request."id"
+                returning notice."id"
+              )
+              select "id" from deleted_request
+            `),
+          );
+          if (result.rows.length === 0) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: ctx.t.support.changedRefresh,
+            });
+          }
+          if (paths.length > 0) {
+            yield* attempt(() => del(paths.map(({ pathname }) => pathname)).catch(() => undefined));
+          }
+          return { success: true };
+        }),
+      ),
+    ),
 
   /**
    * The requester's own threads. Scoped by requesterId rather than by company —
    * a support request belongs to the person who filed it, and moving companies
    * should not hand their conversation to a stranger or take it away from them.
    */
-  myRequests: protectedProcedure.query(async ({ ctx }) => {
-    const unreadByRequest = db
-      .select({
-        entityId: notification.entityId,
-        unread: count().as("unread"),
-      })
-      .from(notification)
-      .where(
-        and(
-          eq(notification.userId, ctx.session.user.id),
-          eq(notification.entityType, "support_request"),
-          isNull(notification.readAt),
-          inArray(notification.kind, supportNoticeKinds),
-        ),
-      )
-      .groupBy(notification.entityId)
-      .as("unread_by_request");
+  myRequests: protectedProcedure.query(({ ctx }) =>
+    runProcedure(
+      Effect.gen(function* () {
+        const unreadByRequest = db
+          .select({
+            entityId: notification.entityId,
+            unread: count().as("unread"),
+          })
+          .from(notification)
+          .where(
+            and(
+              eq(notification.userId, ctx.session.user.id),
+              eq(notification.entityType, "support_request"),
+              isNull(notification.readAt),
+              inArray(notification.kind, supportNoticeKinds),
+            ),
+          )
+          .groupBy(notification.entityId)
+          .as("unread_by_request");
 
-    return db
-      .select({
-        id: supportRequest.id,
-        subject: supportRequest.subject,
-        status: supportRequest.status,
-        createdAt: supportRequest.createdAt,
-        updatedAt: supportRequest.updatedAt,
-        unread: sql<number>`coalesce(${unreadByRequest.unread}, 0)`.mapWith(Number),
-      })
-      .from(supportRequest)
-      .leftJoin(unreadByRequest, eq(unreadByRequest.entityId, supportRequest.id))
-      .where(eq(supportRequest.requesterId, ctx.session.user.id))
-      .orderBy(desc(supportRequest.updatedAt), desc(supportRequest.id))
-      .limit(100);
-  }),
+        return yield* attempt(() =>
+          db
+            .select({
+              id: supportRequest.id,
+              subject: supportRequest.subject,
+              status: supportRequest.status,
+              createdAt: supportRequest.createdAt,
+              updatedAt: supportRequest.updatedAt,
+              unread: sql<number>`coalesce(${unreadByRequest.unread}, 0)`.mapWith(Number),
+            })
+            .from(supportRequest)
+            .leftJoin(unreadByRequest, eq(unreadByRequest.entityId, supportRequest.id))
+            .where(eq(supportRequest.requesterId, ctx.session.user.id))
+            .orderBy(desc(supportRequest.updatedAt), desc(supportRequest.id))
+            .limit(100),
+        );
+      }),
+    ),
+  ),
 
   /** One of the requester's own threads, opening message included. */
-  myThread: protectedProcedure.input(idSchema).query(async ({ ctx, input }) => {
-    const request = await ownThreadOrThrow(ctx.t, input.id, ctx.session.user.id);
-    return {
-      request: {
-        id: request.id,
-        subject: request.subject,
-        status: request.status,
-        message: request.message,
-        requesterName: request.requesterName,
-        createdAt: request.createdAt,
-        attachments: await attachmentsFor(request.id),
-      },
-      messages: await messagesFor(request.id),
-    };
-  }),
+  myThread: protectedProcedure.input(idSchema).query(({ ctx, input }) =>
+    runProcedure(
+      Effect.gen(function* () {
+        const request = yield* attempt(() =>
+          ownThreadOrThrow(ctx.t, input.id, ctx.session.user.id),
+        );
+        return {
+          request: {
+            id: request.id,
+            subject: request.subject,
+            status: request.status,
+            message: request.message,
+            requesterName: request.requesterName,
+            createdAt: request.createdAt,
+            attachments: yield* attempt(() => attachmentsFor(request.id)),
+          },
+          messages: yield* attempt(() => messagesFor(request.id)),
+        };
+      }),
+    ),
+  ),
 
   /** The requester's side of the conversation. */
   postMessage: protectedProcedure
@@ -696,60 +751,80 @@ export const supportRouter = router({
         body: z.string().trim().min(1, "Message is required").max(10_000),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const request = await ownThreadOrThrow(ctx.t, input.id, ctx.session.user.id);
-      if (request.status === "closed") {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: ctx.t.support.conversationClosed,
-        });
-      }
-      await appendMessage({
-        t: ctx.t,
-        requestId: request.id,
-        action: "userReply",
-        body: input.body,
-        authorId: ctx.session.user.id,
-        authorName: ctx.session.user.name,
-        authorSide: "requester",
-      });
-      return { success: true };
-    }),
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const request = yield* attempt(() =>
+            ownThreadOrThrow(ctx.t, input.id, ctx.session.user.id),
+          );
+          if (request.status === "closed") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: ctx.t.support.conversationClosed,
+            });
+          }
+          yield* attempt(() =>
+            appendMessage({
+              t: ctx.t,
+              requestId: request.id,
+              action: "userReply",
+              body: input.body,
+              authorId: ctx.session.user.id,
+              authorName: ctx.session.user.name,
+              authorSide: "requester",
+            }),
+          );
+          return { success: true };
+        }),
+      ),
+    ),
 
   /**
    * Clears the badge for one thread. Marks read rather than deleting, so the
    * notification stays a record of what was sent — the old dismiss-to-delete
    * behaviour threw that away.
    */
-  markThreadRead: protectedProcedure.input(idSchema).mutation(async ({ ctx, input }) => {
-    await db
-      .update(notification)
-      .set({ readAt: new Date() })
-      .where(
-        and(
-          eq(notification.userId, ctx.session.user.id),
-          eq(notification.entityType, "support_request"),
-          eq(notification.entityId, input.id),
-          isNull(notification.readAt),
-          inArray(notification.kind, supportNoticeKinds),
-        ),
-      );
-    return { success: true };
-  }),
+  markThreadRead: protectedProcedure.input(idSchema).mutation(({ ctx, input }) =>
+    runProcedure(
+      Effect.gen(function* () {
+        yield* attempt(() =>
+          db
+            .update(notification)
+            .set({ readAt: new Date() })
+            .where(
+              and(
+                eq(notification.userId, ctx.session.user.id),
+                eq(notification.entityType, "support_request"),
+                eq(notification.entityId, input.id),
+                isNull(notification.readAt),
+                inArray(notification.kind, supportNoticeKinds),
+              ),
+            ),
+        );
+        return { success: true };
+      }),
+    ),
+  ),
 
   /** Drives the badge on the Support nav item. */
-  unreadCount: protectedProcedure.query(async ({ ctx }) => {
-    const [row] = await db
-      .select({ value: count() })
-      .from(notification)
-      .where(
-        and(
-          eq(notification.userId, ctx.session.user.id),
-          eq(notification.entityType, "support_request"),
-          isNull(notification.readAt),
-          inArray(notification.kind, supportNoticeKinds),
-        ),
-      );
-    return { unread: row?.value ?? 0 };
-  }),
+  unreadCount: protectedProcedure.query(({ ctx }) =>
+    runProcedure(
+      Effect.gen(function* () {
+        const [row] = yield* attempt(() =>
+          db
+            .select({ value: count() })
+            .from(notification)
+            .where(
+              and(
+                eq(notification.userId, ctx.session.user.id),
+                eq(notification.entityType, "support_request"),
+                isNull(notification.readAt),
+                inArray(notification.kind, supportNoticeKinds),
+              ),
+            ),
+        );
+        return { unread: row?.value ?? 0 };
+      }),
+    ),
+  ),
 });

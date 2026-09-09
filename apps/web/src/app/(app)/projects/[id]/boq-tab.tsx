@@ -45,7 +45,7 @@ import { QueryError } from "@/components/query-error";
 import { interpolate, plural } from "@/i18n";
 import { Hint } from "@/components/hint";
 import { useT } from "@/i18n/provider";
-import { buildSections, sectionAmount, sectionWeight, totalLeafWeight } from "@/lib/boq/curves";
+import { buildSections, sectionAmount, sectionWeight, totalLeafWeight } from "@DashboardV2/api/lib/curves";
 import { BulkActionsBar } from "@/components/bulk-actions-bar";
 import { SelectAllHead, SelectRowCell, ToolbarAction } from "@/components/table-selection";
 import { summarizeSelection } from "@/lib/summarize-selection";

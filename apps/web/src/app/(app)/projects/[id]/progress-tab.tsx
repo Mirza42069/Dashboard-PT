@@ -49,7 +49,7 @@ import {
   distributionMap,
   latestPosition,
   scheduleRows,
-} from "@/lib/boq/curves";
+} from "@DashboardV2/api/lib/curves";
 import { isEditable } from "@DashboardV2/api/lib/progress-workflow";
 import { isBehindDeviation } from "@DashboardV2/api/lib/deviation";
 import { COMPACT_CELL_WIDTH, MAX_PERIOD_WIDTH, fitMatrix } from "@/lib/matrix-fit";

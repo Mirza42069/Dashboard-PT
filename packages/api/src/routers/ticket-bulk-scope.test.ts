@@ -101,4 +101,11 @@ describe.skipIf(!process.env.DATABASE_URL)("bulk ticket scope", () => {
       .toEqual({ success: true, count: 0 });
     expect(queries).toHaveLength(1);
   });
+
+  test("single-ticket writes reject archived projects before any write", async () => {
+    const queries = intercept([row("archived", "project-1", new Date(0))]);
+    await expect(ticketRouter.createCaller(ctx("admin")).setStatus({ id: "archived", status: "resolved" }))
+      .rejects.toMatchObject({ code: "CONFLICT", message: t.archived.project });
+    expect(queries).toHaveLength(1);
+  });
 });

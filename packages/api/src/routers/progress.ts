@@ -13,12 +13,14 @@ import {
 } from "@DashboardV2/db/schema";
 import type { ActivityAction, PeriodStatus } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
+import { Effect } from "effect";
 import { aliasedTable, and, asc, desc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import z from "zod";
 
 import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { computePctComplete, leafPredicate, serializeItem, serializeVersion } from "../lib/boq";
+import { attempt, attemptSync, fail, runProcedure } from "../lib/effect";
 import { interpolate, type MessageDictionary, plural } from "../lib/messages/index";
 import { toAmount } from "../lib/money";
 import { hasPermission, roleOf } from "../lib/permissions";
@@ -214,66 +216,79 @@ export const progressRouter = router({
   /** Top-level baseline progress for the project overview, without the report matrix. */
   workStages: companyPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1) }))
-    .query(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectAccess(ctx, input.projectId));
 
-      const [[target], [active]] = await Promise.all([
-        db.select({ dataDate: project.dataDate }).from(project).where(eq(project.id, input.projectId)),
-        db
-          .select({ id: boqVersion.id })
-          .from(boqVersion)
-          .where(and(eq(boqVersion.projectId, input.projectId), eq(boqVersion.status, "active")))
-          .limit(1),
-      ]);
-      if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
-      }
-      if (!active) return [];
+          const [[target], [active]] = yield* Effect.all([
+            attempt(() =>
+              db.select({ dataDate: project.dataDate }).from(project).where(eq(project.id, input.projectId)),
+            ),
+            attempt(() =>
+              db
+                .select({ id: boqVersion.id })
+                .from(boqVersion)
+                .where(and(eq(boqVersion.projectId, input.projectId), eq(boqVersion.status, "active")))
+                .limit(1),
+            ),
+          ], { concurrency: "unbounded" });
+          if (!target) {
+            return yield* fail("NOT_FOUND", ctx.t.project.notFound);
+          }
+          if (!active) return [];
 
-      const [items, latestReadings] = await Promise.all([
-        db
-          .select({
-            id: boqItem.id,
-            parentId: boqItem.parentId,
-            code: boqItem.code,
-            description: boqItem.description,
-            weight: boqItem.weight,
-            sortOrder: boqItem.sortOrder,
-          })
-          .from(boqItem)
-          .where(and(eq(boqItem.boqVersionId, active.id), isNull(boqItem.deletedAt))),
-        target.dataDate
-          ? db
-              .selectDistinctOn([progressEntry.boqItemId], {
-                boqItemId: progressEntry.boqItemId,
-                pctComplete: progressEntry.pctComplete,
-              })
-              .from(progressEntry)
-              .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
-              .innerJoin(reportingPeriod, eq(reportingPeriod.id, progressEntry.periodId))
-              .where(
-                and(
-                  eq(boqItem.boqVersionId, active.id),
-                  isNull(boqItem.deletedAt),
-                  lte(reportingPeriod.endDate, target.dataDate),
-                  or(
-                    isNotNull(progressEntry.cumulativeQuantity),
-                    isNotNull(progressEntry.cumulativePercent),
-                  ),
-                ),
-              )
-              .orderBy(progressEntry.boqItemId, desc(reportingPeriod.periodIndex))
-          : Promise.resolve([]),
-      ]);
+          const dataDate = target.dataDate;
+          const [items, latestReadings] = yield* Effect.all([
+            attempt(() =>
+              db
+                .select({
+                  id: boqItem.id,
+                  parentId: boqItem.parentId,
+                  code: boqItem.code,
+                  description: boqItem.description,
+                  weight: boqItem.weight,
+                  sortOrder: boqItem.sortOrder,
+                })
+                .from(boqItem)
+                .where(and(eq(boqItem.boqVersionId, active.id), isNull(boqItem.deletedAt))),
+            ),
+            dataDate
+              ? attempt(() =>
+                  db
+                    .selectDistinctOn([progressEntry.boqItemId], {
+                      boqItemId: progressEntry.boqItemId,
+                      pctComplete: progressEntry.pctComplete,
+                    })
+                    .from(progressEntry)
+                    .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
+                    .innerJoin(reportingPeriod, eq(reportingPeriod.id, progressEntry.periodId))
+                    .where(
+                      and(
+                        eq(boqItem.boqVersionId, active.id),
+                        isNull(boqItem.deletedAt),
+                        lte(reportingPeriod.endDate, dataDate),
+                        or(
+                          isNotNull(progressEntry.cumulativeQuantity),
+                          isNotNull(progressEntry.cumulativePercent),
+                        ),
+                      ),
+                    )
+                    .orderBy(progressEntry.boqItemId, desc(reportingPeriod.periodIndex)),
+                )
+              : Effect.succeed([]),
+          ], { concurrency: "unbounded" });
 
-      return aggregateWorkStages(
-        items.map((item) => ({ ...item, weight: toAmount(item.weight) })),
-        latestReadings.map((reading) => ({
-          boqItemId: reading.boqItemId,
-          pctComplete: toAmount(reading.pctComplete),
-        })),
-      );
-    }),
+          return aggregateWorkStages(
+            items.map((item) => ({ ...item, weight: toAmount(item.weight) })),
+            latestReadings.map((reading) => ({
+              boqItemId: reading.boqItemId,
+              pctComplete: toAmount(reading.pctComplete),
+            })),
+          );
+        }),
+      ),
+    ),
 
   /**
    * Everything the BoQ, schedule and progress tabs need, in one round trip.
@@ -290,131 +305,153 @@ export const progressRouter = router({
       /** Skip actuals queries; entries and actualSnapshots are empty in this mode. */
       planOnly: z.boolean().default(false),
     }))
-    .query(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectAccess(ctx, input.projectId));
 
-      const [[target], [current], periods, actualSnapshots] = await Promise.all([
-        db
-          .select({
-            dataDate: project.dataDate,
-            periodType: project.periodType,
-            periodLengthDays: project.periodLengthDays,
-            startDate: project.startDate,
-            scheduleStart: project.scheduleStart,
-            endDate: project.endDate,
-          })
-          .from(project)
-          .where(eq(project.id, input.projectId)),
-        db
-          .select()
-          .from(boqVersion)
-          .where(and(
-            eq(boqVersion.projectId, input.projectId),
-            input.versionId
-              ? eq(boqVersion.id, input.versionId)
-              : eq(boqVersion.status, "active"),
-          ))
-          .orderBy(desc(boqVersion.versionNo))
-          .limit(1),
-        db
-          .select({
-            id: reportingPeriod.id,
-            periodIndex: reportingPeriod.periodIndex,
-            label: reportingPeriod.label,
-            startDate: reportingPeriod.startDate,
-            endDate: reportingPeriod.endDate,
-            status: reportingPeriod.status,
-          })
-          .from(reportingPeriod)
-          .where(eq(reportingPeriod.projectId, input.projectId))
-          .orderBy(asc(reportingPeriod.periodIndex)),
-        input.planOnly ? Promise.resolve([]) : db
-          .select({
-            periodId: projectActualCurve.periodId,
-            cumulativePercent: projectActualCurve.cumulativePercent,
-          })
-          .from(projectActualCurve)
-          .where(eq(projectActualCurve.projectId, input.projectId)),
-      ]);
+          const versionId = input.versionId;
+          const planOnly = input.planOnly;
+          const [[target], [current], periods, actualSnapshots] = yield* Effect.all([
+            attempt(() =>
+              db
+                .select({
+                  dataDate: project.dataDate,
+                  periodType: project.periodType,
+                  periodLengthDays: project.periodLengthDays,
+                  startDate: project.startDate,
+                  scheduleStart: project.scheduleStart,
+                  endDate: project.endDate,
+                })
+                .from(project)
+                .where(eq(project.id, input.projectId)),
+            ),
+            attempt(() =>
+              db
+                .select()
+                .from(boqVersion)
+                .where(and(
+                  eq(boqVersion.projectId, input.projectId),
+                  versionId ? eq(boqVersion.id, versionId) : eq(boqVersion.status, "active"),
+                ))
+                .orderBy(desc(boqVersion.versionNo))
+                .limit(1),
+            ),
+            attempt(() =>
+              db
+                .select({
+                  id: reportingPeriod.id,
+                  periodIndex: reportingPeriod.periodIndex,
+                  label: reportingPeriod.label,
+                  startDate: reportingPeriod.startDate,
+                  endDate: reportingPeriod.endDate,
+                  status: reportingPeriod.status,
+                })
+                .from(reportingPeriod)
+                .where(eq(reportingPeriod.projectId, input.projectId))
+                .orderBy(asc(reportingPeriod.periodIndex)),
+            ),
+            planOnly
+              ? Effect.succeed([])
+              : attempt(() =>
+                  db
+                    .select({
+                      periodId: projectActualCurve.periodId,
+                      cumulativePercent: projectActualCurve.cumulativePercent,
+                    })
+                    .from(projectActualCurve)
+                    .where(eq(projectActualCurve.projectId, input.projectId)),
+                ),
+          ], { concurrency: "unbounded" });
 
-      if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
-      }
-      if (input.versionId && !current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.versionNotFound });
-      }
+          if (!target) {
+            return yield* fail("NOT_FOUND", ctx.t.project.notFound);
+          }
+          if (versionId && !current) {
+            return yield* fail("NOT_FOUND", ctx.t.boq.versionNotFound);
+          }
 
-      const serializedSnapshots = actualSnapshots.map((row) => ({
-        periodId: row.periodId,
-        cumulativePercent: toAmount(row.cumulativePercent),
-      }));
+          const serializedSnapshots = actualSnapshots.map((row) => ({
+            periodId: row.periodId,
+            cumulativePercent: toAmount(row.cumulativePercent),
+          }));
 
-      if (!current) {
-        return {
-          project: target,
-          version: null,
-          items: [],
-          periods,
-          distribution: [],
-          entries: [],
-          actualSnapshots: serializedSnapshots,
-        };
-      }
+          if (!current) {
+            return {
+              project: target,
+              version: null,
+              items: [],
+              periods,
+              distribution: [],
+              entries: [],
+              actualSnapshots: serializedSnapshots,
+            };
+          }
 
-      const [items, distribution, entries] = await Promise.all([
-        db
-          .select()
-          .from(boqItem)
-          .where(and(eq(boqItem.boqVersionId, current.id), isNull(boqItem.deletedAt)))
-          .orderBy(asc(boqItem.sortOrder), asc(boqItem.code)),
-        db
-          .select({
-            boqItemId: boqItemDistribution.boqItemId,
-            periodId: boqItemDistribution.periodId,
-            plannedPct: boqItemDistribution.plannedPct,
-          })
-          .from(boqItemDistribution)
-          .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
-          .where(eq(boqItem.boqVersionId, current.id)),
-        input.planOnly ? Promise.resolve([]) : db
-          .select({
-            boqItemId: progressEntry.boqItemId,
-            periodId: progressEntry.periodId,
-            cumulativeQuantity: progressEntry.cumulativeQuantity,
-            cumulativePercent: progressEntry.cumulativePercent,
-            pctComplete: progressEntry.pctComplete,
-            noProgress: progressEntry.noProgress,
-            note: progressEntry.note,
-          })
-          .from(progressEntry)
-          .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
-          .where(eq(boqItem.boqVersionId, current.id)),
-      ]);
+          const [items, distribution, entries] = yield* Effect.all([
+            attempt(() =>
+              db
+                .select()
+                .from(boqItem)
+                .where(and(eq(boqItem.boqVersionId, current.id), isNull(boqItem.deletedAt)))
+                .orderBy(asc(boqItem.sortOrder), asc(boqItem.code)),
+            ),
+            attempt(() =>
+              db
+                .select({
+                  boqItemId: boqItemDistribution.boqItemId,
+                  periodId: boqItemDistribution.periodId,
+                  plannedPct: boqItemDistribution.plannedPct,
+                })
+                .from(boqItemDistribution)
+                .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
+                .where(eq(boqItem.boqVersionId, current.id)),
+            ),
+            planOnly
+              ? Effect.succeed([])
+              : attempt(() =>
+                  db
+                    .select({
+                      boqItemId: progressEntry.boqItemId,
+                      periodId: progressEntry.periodId,
+                      cumulativeQuantity: progressEntry.cumulativeQuantity,
+                      cumulativePercent: progressEntry.cumulativePercent,
+                      pctComplete: progressEntry.pctComplete,
+                      noProgress: progressEntry.noProgress,
+                      note: progressEntry.note,
+                    })
+                    .from(progressEntry)
+                    .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
+                    .where(eq(boqItem.boqVersionId, current.id)),
+                ),
+          ], { concurrency: "unbounded" });
 
-      return {
-        project: target,
-        version: serializeVersion(current),
-        items: items.map(serializeItem),
-        periods,
-        distribution: distribution.map((row) => ({
-          boqItemId: row.boqItemId,
-          periodId: row.periodId,
-          plannedPct: toAmount(row.plannedPct),
-        })),
-        entries: entries.map((row) => ({
-          boqItemId: row.boqItemId,
-          periodId: row.periodId,
-          // Null is meaningful here — it marks a cleared cell, which carries the
-          // previous reading forward instead of resetting the line to zero.
-          cumulativeQuantity: row.cumulativeQuantity === null ? null : toAmount(row.cumulativeQuantity),
-          cumulativePercent: row.cumulativePercent === null ? null : toAmount(row.cumulativePercent),
-          pctComplete: toAmount(row.pctComplete),
-          noProgress: row.noProgress,
-          note: row.note,
-        })),
-        actualSnapshots: serializedSnapshots,
-      };
-    }),
+          return {
+            project: target,
+            version: serializeVersion(current),
+            items: items.map(serializeItem),
+            periods,
+            distribution: distribution.map((row) => ({
+              boqItemId: row.boqItemId,
+              periodId: row.periodId,
+              plannedPct: toAmount(row.plannedPct),
+            })),
+            entries: entries.map((row) => ({
+              boqItemId: row.boqItemId,
+              periodId: row.periodId,
+              // Null is meaningful here — it marks a cleared cell, which carries the
+              // previous reading forward instead of resetting the line to zero.
+              cumulativeQuantity: row.cumulativeQuantity === null ? null : toAmount(row.cumulativeQuantity),
+              cumulativePercent: row.cumulativePercent === null ? null : toAmount(row.cumulativePercent),
+              pctComplete: toAmount(row.pctComplete),
+              noProgress: row.noProgress,
+              note: row.note,
+            })),
+            actualSnapshots: serializedSnapshots,
+          };
+        }),
+      ),
+    ),
 
   /**
    * Records the readings for one period.
@@ -444,185 +481,189 @@ export const progressRouter = router({
           .max(1000),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const period = await requireEditablePeriod(ctx, input.periodId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const period = yield* attempt(() => requireEditablePeriod(ctx, input.periodId));
 
-      const [active] = await db
-        .select()
-        .from(boqVersion)
-        .where(and(eq(boqVersion.projectId, period.projectId), eq(boqVersion.status, "active")));
+          const [active] = yield* attempt(() =>
+            db
+              .select()
+              .from(boqVersion)
+              .where(and(eq(boqVersion.projectId, period.projectId), eq(boqVersion.status, "active"))),
+          );
 
-      if (!active) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: ctx.t.progress.needsBaseline,
-        });
-      }
-      if (active.scheduleStatus !== "active") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: ctx.t.progress.needsSchedule,
-        });
-      }
+          if (!active) {
+            return yield* fail("BAD_REQUEST", ctx.t.progress.needsBaseline);
+          }
+          if (active.scheduleStatus !== "active") {
+            return yield* fail("BAD_REQUEST", ctx.t.progress.needsSchedule);
+          }
 
-      const itemIds = [...new Set(input.entries.map((entry) => entry.boqItemId))];
-      const leaves = await db
-        .select({
-          id: boqItem.id,
-          progressMode: boqItem.progressMode,
-          quantity: boqItem.quantity,
-        })
-        .from(boqItem)
-        .where(
-          and(
-            eq(boqItem.boqVersionId, active.id),
-            inArray(boqItem.id, itemIds),
-            isNull(boqItem.deletedAt),
-            leafPredicate("boq_item"),
-          ),
-        );
+          const itemIds = [...new Set(input.entries.map((entry) => entry.boqItemId))];
+          const leaves = yield* attempt(() =>
+            db
+              .select({
+                id: boqItem.id,
+                progressMode: boqItem.progressMode,
+                quantity: boqItem.quantity,
+              })
+              .from(boqItem)
+              .where(
+                and(
+                  eq(boqItem.boqVersionId, active.id),
+                  inArray(boqItem.id, itemIds),
+                  isNull(boqItem.deletedAt),
+                  leafPredicate("boq_item"),
+                ),
+              ),
+          );
 
-      const byId = new Map(leaves.map((row) => [row.id, row]));
-      if (byId.size !== itemIds.length) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: ctx.t.progress.onlyPricedLines,
-        });
-      }
+          const byId = new Map(leaves.map((row) => [row.id, row]));
+          if (byId.size !== itemIds.length) {
+            return yield* fail("BAD_REQUEST", ctx.t.progress.onlyPricedLines);
+          }
 
-      const [projectRow] = await db
-        .select({ code: project.code, name: project.name })
-        .from(project)
-        .where(eq(project.id, period.projectId));
+          const [projectRow] = yield* attempt(() =>
+            db
+              .select({ code: project.code, name: project.name })
+              .from(project)
+              .where(eq(project.id, period.projectId)),
+          );
 
-      const values = input.entries.map((entry) => {
-        const item = byId.get(entry.boqItemId);
-        if (!item) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.boq.unknownLine });
-        }
+          const values = yield* attemptSync(() =>
+            input.entries.map((entry) => {
+              const item = byId.get(entry.boqItemId);
+              if (!item) {
+                throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.boq.unknownLine });
+              }
 
-        const cumulativeQuantity = entry.cumulativeQuantity ?? null;
-        const cumulativePercent = entry.cumulativePercent ?? null;
+              const cumulativeQuantity = entry.cumulativeQuantity ?? null;
+              const cumulativePercent = entry.cumulativePercent ?? null;
 
-        const pctComplete = computePctComplete({
-          progressMode: item.progressMode,
-          quantity: item.quantity === null ? null : toAmount(item.quantity),
-          cumulativeQuantity,
-          cumulativePercent,
-        });
+              const pctComplete = computePctComplete({
+                progressMode: item.progressMode,
+                quantity: item.quantity === null ? null : toAmount(item.quantity),
+                cumulativeQuantity,
+                cumulativePercent,
+              });
 
-        return {
-          id: crypto.randomUUID(),
-          projectId: period.projectId,
-          periodId: input.periodId,
-          boqItemId: entry.boqItemId,
-          cumulativeQuantity: cumulativeQuantity === null ? null : cumulativeQuantity.toFixed(4),
-          cumulativePercent: cumulativePercent === null ? null : cumulativePercent.toFixed(4),
-          pctComplete: pctComplete.toFixed(4),
-          // A typed figure supersedes a "no progress" mark on the same line.
-          noProgress: false,
-          note: entry.note ?? null,
-          recordedById: ctx.session.user.id,
-        };
-      });
+              return {
+                id: crypto.randomUUID(),
+                projectId: period.projectId,
+                periodId: input.periodId,
+                boqItemId: entry.boqItemId,
+                cumulativeQuantity: cumulativeQuantity === null ? null : cumulativeQuantity.toFixed(4),
+                cumulativePercent: cumulativePercent === null ? null : cumulativePercent.toFixed(4),
+                pctComplete: pctComplete.toFixed(4),
+                // A typed figure supersedes a "no progress" mark on the same line.
+                noProgress: false,
+                note: entry.note ?? null,
+                recordedById: ctx.session.user.id,
+              };
+            }),
+          );
 
-      const [, changed] = await db.batch([
-        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${period.projectId}, 0))`),
-        db.execute<{ id: string }>(sql`
-        with input_rows as (
-          select * from jsonb_to_recordset(${JSON.stringify(values)}::jsonb) as value(
-            id text, "projectId" text, "periodId" text, "boqItemId" text,
-            "cumulativeQuantity" numeric, "cumulativePercent" numeric,
-            "pctComplete" numeric, "noProgress" boolean, note text, "recordedById" text
-          )
-        ), editable as (
-          update reporting_period
-          set status = case when status = 'open' then 'draft' else status end,
-              updated_at = ${new Date()}
-          where id = ${input.periodId} and status in ('open', 'draft', 'returned')
-            and not exists (
-              select 1 from input_rows input
-              where not exists (
-                select 1
-                from boq_item item
-                join boq_version version on version.id = item.boq_version_id
-                where item.id = input."boqItemId"
-                  and item.deleted_at is null
-                  and version.project_id = ${period.projectId}
-                  and version.status = 'active'
-              )
-            )
-          returning id
-        ), upserted as (
-          insert into progress_entry
-            (id, project_id, period_id, boq_item_id, cumulative_quantity, cumulative_percent,
-             pct_complete, no_progress, note, recorded_by_id)
-          select
-            input_rows.id, input_rows."projectId", input_rows."periodId", input_rows."boqItemId",
-            input_rows."cumulativeQuantity", input_rows."cumulativePercent", input_rows."pctComplete",
-            input_rows."noProgress", input_rows.note, input_rows."recordedById"
-          from input_rows cross join editable
-          on conflict (period_id, boq_item_id) do update set
-            cumulative_quantity = excluded.cumulative_quantity,
-            cumulative_percent = excluded.cumulative_percent,
-            pct_complete = excluded.pct_complete,
-            no_progress = excluded.no_progress,
-            note = excluded.note,
-            recorded_by_id = excluded.recorded_by_id,
-            updated_at = ${new Date()}
-          returning id
-        ), refreshed as (
-          update project set data_date = (
-            select max(reported.end_date)
-            from (
-              select period.end_date
-              from reporting_period period
-              where period.project_id = ${period.projectId}
-                and (
-                  exists (
-                    select 1 from progress_entry entry
-                    where entry.period_id = period.id
-                      and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
-                      and not exists (
-                        select 1 from input_rows input
-                        where input."periodId" = entry.period_id
-                          and input."boqItemId" = entry.boq_item_id
-                      )
-                  )
-                  or exists (
-                    select 1 from input_rows input
-                    where input."periodId" = period.id
-                      and (input."cumulativePercent" is not null or input."cumulativeQuantity" is not null)
-                  )
+          const [, changed] = yield* attempt(() =>
+            db.batch([
+              db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${period.projectId}, 0))`),
+              db.execute<{ id: string }>(sql`
+              with input_rows as (
+                select * from jsonb_to_recordset(${JSON.stringify(values)}::jsonb) as value(
+                  id text, "projectId" text, "periodId" text, "boqItemId" text,
+                  "cumulativeQuantity" numeric, "cumulativePercent" numeric,
+                  "pctComplete" numeric, "noProgress" boolean, note text, "recordedById" text
                 )
-              union all
-              select period.end_date
-              from project_actual_curve snapshot
-              join reporting_period period on period.id = snapshot.period_id
-              where snapshot.project_id = ${period.projectId}
-            ) reported
-          )
-          where id = ${period.projectId} and exists (select 1 from editable)
-        )
-        select id from upserted
-        `),
-      ]);
-      if (changed.rows.length !== values.length) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: ctx.t.progress.periodNotEditable,
-        });
-      }
-      await recordActivity(ctx, {
-        action: "progress_recorded",
-        entityType: "progress",
-        entityId: period.projectId,
-        entityLabel: projectRow ? `${projectRow.code} - ${projectRow.name}` : period.projectId,
-        detail: `${input.entries.length} line(s) - ${period.label ?? ""}`.trim(),
-      });
+              ), editable as (
+                update reporting_period
+                set status = case when status = 'open' then 'draft' else status end,
+                    updated_at = ${new Date()}
+                where id = ${input.periodId} and status in ('open', 'draft', 'returned')
+                  and not exists (
+                    select 1 from input_rows input
+                    where not exists (
+                      select 1
+                      from boq_item item
+                      join boq_version version on version.id = item.boq_version_id
+                      where item.id = input."boqItemId"
+                        and item.deleted_at is null
+                        and version.project_id = ${period.projectId}
+                        and version.status = 'active'
+                    )
+                  )
+                returning id
+              ), upserted as (
+                insert into progress_entry
+                  (id, project_id, period_id, boq_item_id, cumulative_quantity, cumulative_percent,
+                   pct_complete, no_progress, note, recorded_by_id)
+                select
+                  input_rows.id, input_rows."projectId", input_rows."periodId", input_rows."boqItemId",
+                  input_rows."cumulativeQuantity", input_rows."cumulativePercent", input_rows."pctComplete",
+                  input_rows."noProgress", input_rows.note, input_rows."recordedById"
+                from input_rows cross join editable
+                on conflict (period_id, boq_item_id) do update set
+                  cumulative_quantity = excluded.cumulative_quantity,
+                  cumulative_percent = excluded.cumulative_percent,
+                  pct_complete = excluded.pct_complete,
+                  no_progress = excluded.no_progress,
+                  note = excluded.note,
+                  recorded_by_id = excluded.recorded_by_id,
+                  updated_at = ${new Date()}
+                returning id
+              ), refreshed as (
+                update project set data_date = (
+                  select max(reported.end_date)
+                  from (
+                    select period.end_date
+                    from reporting_period period
+                    where period.project_id = ${period.projectId}
+                      and (
+                        exists (
+                          select 1 from progress_entry entry
+                          where entry.period_id = period.id
+                            and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
+                            and not exists (
+                              select 1 from input_rows input
+                              where input."periodId" = entry.period_id
+                                and input."boqItemId" = entry.boq_item_id
+                            )
+                        )
+                        or exists (
+                          select 1 from input_rows input
+                          where input."periodId" = period.id
+                            and (input."cumulativePercent" is not null or input."cumulativeQuantity" is not null)
+                        )
+                      )
+                    union all
+                    select period.end_date
+                    from project_actual_curve snapshot
+                    join reporting_period period on period.id = snapshot.period_id
+                    where snapshot.project_id = ${period.projectId}
+                  ) reported
+                )
+                where id = ${period.projectId} and exists (select 1 from editable)
+              )
+              select id from upserted
+              `),
+            ]),
+          );
+          if (changed.rows.length !== values.length) {
+            return yield* fail("CONFLICT", ctx.t.progress.periodNotEditable);
+          }
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: "progress_recorded",
+              entityType: "progress",
+              entityId: period.projectId,
+              entityLabel: projectRow ? `${projectRow.code} - ${projectRow.name}` : period.projectId,
+              detail: `${input.entries.length} line(s) - ${period.label ?? ""}`.trim(),
+            }),
+          );
 
-      return { success: true };
-    }),
+          return { success: true };
+        }),
+      ),
+    ),
 
   /**
    * Marks lines as checked-and-unchanged for a period.
@@ -648,78 +689,82 @@ export const progressRouter = router({
         noProgress: z.boolean().default(true),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const period = await requireEditablePeriod(ctx, input.periodId);
-      const leaves = input.boqItemIds
-        ? await activeLeaves(ctx.t, period.projectId, input.boqItemIds)
-        : await unaddressedLeaves(period.projectId, input.periodId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const period = yield* attempt(() => requireEditablePeriod(ctx, input.periodId));
+          const boqItemIds = input.boqItemIds;
+          const leaves = yield* (boqItemIds
+            ? attempt(() => activeLeaves(ctx.t, period.projectId, boqItemIds))
+            : attempt(() => unaddressedLeaves(period.projectId, input.periodId)));
 
-      if (leaves.length === 0) return { marked: 0 };
+          if (leaves.length === 0) return { marked: 0 };
 
-      const values = leaves.map((leaf) => ({
-        id: crypto.randomUUID(),
-        projectId: period.projectId,
-        periodId: input.periodId,
-        boqItemId: leaf.id,
-        noProgress: input.noProgress,
-        recordedById: ctx.session.user.id,
-      }));
-      const [, changed] = await db.batch([
-        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${period.projectId}, 0))`),
-        db.execute<{ marked: number }>(sql`
-        with input_rows as (
-          select * from jsonb_to_recordset(${JSON.stringify(values)}::jsonb) as value(
-            id text, "projectId" text, "periodId" text, "boqItemId" text,
-            "noProgress" boolean, "recordedById" text
-          )
-        ), editable as (
-          update reporting_period
-          set status = case when status = 'open' then 'draft' else status end,
-              updated_at = ${new Date()}
-          where id = ${input.periodId} and status in ('open', 'draft', 'returned')
-            and not exists (
-              select 1 from input_rows input
-              where not exists (
-                select 1
-                from boq_item item
-                join boq_version version on version.id = item.boq_version_id
-                where item.id = input."boqItemId"
-                  and item.deleted_at is null
-                  and version.project_id = ${period.projectId}
-                  and version.status = 'active'
+          const values = leaves.map((leaf) => ({
+            id: crypto.randomUUID(),
+            projectId: period.projectId,
+            periodId: input.periodId,
+            boqItemId: leaf.id,
+            noProgress: input.noProgress,
+            recordedById: ctx.session.user.id,
+          }));
+          const [, changed] = yield* attempt(() =>
+            db.batch([
+              db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${period.projectId}, 0))`),
+              db.execute<{ marked: number }>(sql`
+              with input_rows as (
+                select * from jsonb_to_recordset(${JSON.stringify(values)}::jsonb) as value(
+                  id text, "projectId" text, "periodId" text, "boqItemId" text,
+                  "noProgress" boolean, "recordedById" text
+                )
+              ), editable as (
+                update reporting_period
+                set status = case when status = 'open' then 'draft' else status end,
+                    updated_at = ${new Date()}
+                where id = ${input.periodId} and status in ('open', 'draft', 'returned')
+                  and not exists (
+                    select 1 from input_rows input
+                    where not exists (
+                      select 1
+                      from boq_item item
+                      join boq_version version on version.id = item.boq_version_id
+                      where item.id = input."boqItemId"
+                        and item.deleted_at is null
+                        and version.project_id = ${period.projectId}
+                        and version.status = 'active'
+                    )
+                  )
+                returning id
+              ), upserted as (
+                insert into progress_entry
+                  (id, project_id, period_id, boq_item_id, cumulative_quantity, cumulative_percent,
+                   pct_complete, no_progress, recorded_by_id)
+                select
+                  input_rows.id, input_rows."projectId", input_rows."periodId", input_rows."boqItemId",
+                  null, null, 0, input_rows."noProgress", input_rows."recordedById"
+                from input_rows cross join editable
+                on conflict (period_id, boq_item_id) do update set
+                  no_progress = excluded.no_progress,
+                  updated_at = ${new Date()}
+                where excluded.no_progress = false
+                   or (progress_entry.cumulative_percent is null
+                       and progress_entry.cumulative_quantity is null)
+                returning id
               )
-            )
-          returning id
-        ), upserted as (
-          insert into progress_entry
-            (id, project_id, period_id, boq_item_id, cumulative_quantity, cumulative_percent,
-             pct_complete, no_progress, recorded_by_id)
-          select
-            input_rows.id, input_rows."projectId", input_rows."periodId", input_rows."boqItemId",
-            null, null, 0, input_rows."noProgress", input_rows."recordedById"
-          from input_rows cross join editable
-          on conflict (period_id, boq_item_id) do update set
-            no_progress = excluded.no_progress,
-            updated_at = ${new Date()}
-          where excluded.no_progress = false
-             or (progress_entry.cumulative_percent is null
-                 and progress_entry.cumulative_quantity is null)
-          returning id
-        )
-        select count(upserted.id)::int as marked
-        from editable left join upserted on true
-        group by editable.id
-        `),
-      ]);
-      if (changed.rows.length === 0) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: ctx.t.progress.periodNotEditable,
-        });
-      }
+              select count(upserted.id)::int as marked
+              from editable left join upserted on true
+              group by editable.id
+              `),
+            ]),
+          );
+          if (changed.rows.length === 0) {
+            return yield* fail("CONFLICT", ctx.t.progress.periodNotEditable);
+          }
 
-      return { marked: changed.rows[0]?.marked ?? 0 };
-    }),
+          return { marked: changed.rows[0]?.marked ?? 0 };
+        }),
+      ),
+    ),
 
   /**
    * How complete each period's report is, and where it stands in the workflow.
@@ -730,112 +775,130 @@ export const progressRouter = router({
    */
   periodStatus: companyPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1) }))
-    .query(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectAccess(ctx, input.projectId));
 
-      const [active] = await db
-        .select({ id: boqVersion.id })
-        .from(boqVersion)
-        .where(
-          and(
-            eq(boqVersion.projectId, input.projectId),
-            eq(boqVersion.status, "active"),
-            eq(boqVersion.scheduleStatus, "active"),
-          ),
-        );
-
-      const [periods, leaves, entries] = await Promise.all([
-        db
-          .select({
-            id: reportingPeriod.id,
-            periodIndex: reportingPeriod.periodIndex,
-            startDate: reportingPeriod.startDate,
-            endDate: reportingPeriod.endDate,
-            status: reportingPeriod.status,
-            submittedAt: reportingPeriod.submittedAt,
-            reviewedAt: reportingPeriod.reviewedAt,
-            approvedAt: reportingPeriod.approvedAt,
-            lockedAt: reportingPeriod.lockedAt,
-            returnReason: reportingPeriod.returnReason,
-            reviewComment: reportingPeriod.reviewComment,
-            submittedByName: submitter.name,
-            reviewedByName: reviewer.name,
-            approvedByName: approver.name,
-          })
-          .from(reportingPeriod)
-          .leftJoin(submitter, eq(submitter.id, reportingPeriod.submittedById))
-          .leftJoin(reviewer, eq(reviewer.id, reportingPeriod.reviewedById))
-          .leftJoin(approver, eq(approver.id, reportingPeriod.approvedById))
-          .where(eq(reportingPeriod.projectId, input.projectId))
-          .orderBy(asc(reportingPeriod.periodIndex)),
-        active
-          ? db
-              .select({ id: boqItem.id })
-              .from(boqItem)
+          const [active] = yield* attempt(() =>
+            db
+              .select({ id: boqVersion.id })
+              .from(boqVersion)
               .where(
                 and(
-                  eq(boqItem.boqVersionId, active.id),
-                  isNull(boqItem.deletedAt),
-                  leafPredicate("boq_item"),
+                  eq(boqVersion.projectId, input.projectId),
+                  eq(boqVersion.status, "active"),
+                  eq(boqVersion.scheduleStatus, "active"),
                 ),
-              )
-          : Promise.resolve([]),
-        active
-          ? db
-              .select({
-                periodId: progressEntry.periodId,
-                boqItemId: progressEntry.boqItemId,
-                noProgress: progressEntry.noProgress,
-                cumulativeQuantity: progressEntry.cumulativeQuantity,
-                cumulativePercent: progressEntry.cumulativePercent,
-              })
-              .from(progressEntry)
-              .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
-              .where(eq(boqItem.boqVersionId, active.id))
-          : Promise.resolve([]),
-      ]);
+              ),
+          );
 
-      const byPeriod = new Map<
-        string,
-        { boqItemId: string; hasReading: boolean; noProgress: boolean }[]
-      >();
-      for (const entry of entries) {
-        const list = byPeriod.get(entry.periodId) ?? [];
-        list.push({
-          boqItemId: entry.boqItemId,
-          hasReading: entry.cumulativeQuantity !== null || entry.cumulativePercent !== null,
-          noProgress: entry.noProgress,
-        });
-        byPeriod.set(entry.periodId, list);
-      }
+          const [periods, leaves, entries] = yield* Effect.all([
+            attempt(() =>
+              db
+                .select({
+                  id: reportingPeriod.id,
+                  periodIndex: reportingPeriod.periodIndex,
+                  startDate: reportingPeriod.startDate,
+                  endDate: reportingPeriod.endDate,
+                  status: reportingPeriod.status,
+                  submittedAt: reportingPeriod.submittedAt,
+                  reviewedAt: reportingPeriod.reviewedAt,
+                  approvedAt: reportingPeriod.approvedAt,
+                  lockedAt: reportingPeriod.lockedAt,
+                  returnReason: reportingPeriod.returnReason,
+                  reviewComment: reportingPeriod.reviewComment,
+                  submittedByName: submitter.name,
+                  reviewedByName: reviewer.name,
+                  approvedByName: approver.name,
+                })
+                .from(reportingPeriod)
+                .leftJoin(submitter, eq(submitter.id, reportingPeriod.submittedById))
+                .leftJoin(reviewer, eq(reviewer.id, reportingPeriod.reviewedById))
+                .leftJoin(approver, eq(approver.id, reportingPeriod.approvedById))
+                .where(eq(reportingPeriod.projectId, input.projectId))
+                .orderBy(asc(reportingPeriod.periodIndex)),
+            ),
+            active
+              ? attempt(() =>
+                  db
+                    .select({ id: boqItem.id })
+                    .from(boqItem)
+                    .where(
+                      and(
+                        eq(boqItem.boqVersionId, active.id),
+                        isNull(boqItem.deletedAt),
+                        leafPredicate("boq_item"),
+                      ),
+                    ),
+                )
+              : Effect.succeed([]),
+            active
+              ? attempt(() =>
+                  db
+                    .select({
+                      periodId: progressEntry.periodId,
+                      boqItemId: progressEntry.boqItemId,
+                      noProgress: progressEntry.noProgress,
+                      cumulativeQuantity: progressEntry.cumulativeQuantity,
+                      cumulativePercent: progressEntry.cumulativePercent,
+                    })
+                    .from(progressEntry)
+                    .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
+                    .where(eq(boqItem.boqVersionId, active.id)),
+                )
+              : Effect.succeed([]),
+          ], { concurrency: "unbounded" });
 
-      return periods.map((period) => ({
-        ...period,
-        completeness: completeness(leaves.length, byPeriod.get(period.id) ?? []),
-        editable: isEditable(period.status),
-      }));
-    }),
+          const byPeriod = new Map<
+            string,
+            { boqItemId: string; hasReading: boolean; noProgress: boolean }[]
+          >();
+          for (const entry of entries) {
+            const list = byPeriod.get(entry.periodId) ?? [];
+            list.push({
+              boqItemId: entry.boqItemId,
+              hasReading: entry.cumulativeQuantity !== null || entry.cumulativePercent !== null,
+              noProgress: entry.noProgress,
+            });
+            byPeriod.set(entry.periodId, list);
+          }
+
+          return periods.map((period) => ({
+            ...period,
+            completeness: completeness(leaves.length, byPeriod.get(period.id) ?? []),
+            editable: isEditable(period.status),
+          }));
+        }),
+      ),
+    ),
 
   /** The full transition history for one period — who moved it, when, and why. */
   periodHistory: companyPermissionProcedure("project:read")
     .input(z.object({ periodId: z.string().min(1) }))
-    .query(async ({ ctx, input }) => {
-      const period = await findPeriod(ctx, input.periodId);
-      await assertProjectAccess(ctx, period.projectId);
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const period = yield* attempt(() => findPeriod(ctx, input.periodId));
+          yield* attempt(() => assertProjectAccess(ctx, period.projectId));
 
-      return db
-        .select({
-          id: reportingPeriodEvent.id,
-          fromStatus: reportingPeriodEvent.fromStatus,
-          toStatus: reportingPeriodEvent.toStatus,
-          actorName: reportingPeriodEvent.actorName,
-          comment: reportingPeriodEvent.comment,
-          createdAt: reportingPeriodEvent.createdAt,
-        })
-        .from(reportingPeriodEvent)
-        .where(eq(reportingPeriodEvent.periodId, input.periodId))
-        .orderBy(desc(reportingPeriodEvent.createdAt));
-    }),
+          return yield* attempt(() =>
+            db
+              .select({
+                id: reportingPeriodEvent.id,
+                fromStatus: reportingPeriodEvent.fromStatus,
+                toStatus: reportingPeriodEvent.toStatus,
+                actorName: reportingPeriodEvent.actorName,
+                comment: reportingPeriodEvent.comment,
+                createdAt: reportingPeriodEvent.createdAt,
+              })
+              .from(reportingPeriodEvent)
+              .where(eq(reportingPeriodEvent.periodId, input.periodId))
+              .orderBy(desc(reportingPeriodEvent.createdAt)),
+          );
+        }),
+      ),
+    ),
 
   /**
    * Every move a period can make, behind one procedure.
@@ -854,105 +917,105 @@ export const progressRouter = router({
         comment: z.string().trim().max(1000).optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const period = await findPeriod(ctx, input.periodId);
-      await assertProjectWritable(ctx, period.projectId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const period = yield* attempt(() => findPeriod(ctx, input.periodId));
+          yield* attempt(() => assertProjectWritable(ctx, period.projectId));
 
-      const from = period.status;
-      if (!canTransition(from, input.to)) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: interpolate(ctx.t.progress.invalidTransition, {
-            from: ctx.t.enums.periodStatus[from],
-            to: ctx.t.enums.periodStatus[input.to],
-          }),
-        });
-      }
+          const from = period.status;
+          if (!canTransition(from, input.to)) {
+            return yield* fail(
+              "CONFLICT",
+              interpolate(ctx.t.progress.invalidTransition, {
+                from: ctx.t.enums.periodStatus[from],
+                to: ctx.t.enums.periodStatus[input.to],
+              }),
+            );
+          }
 
-      // Permission is decided by the move, not by the procedure — which is why
-      // this one is declared at project:read and gates itself here.
-      const needed = permissionFor(input.to, from);
-      if (!hasPermission(roleOf(ctx.session.user), needed)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: ctx.t.auth.noPermission,
-        });
-      }
+          // Permission is decided by the move, not by the procedure — which is why
+          // this one is declared at project:read and gates itself here.
+          const needed = permissionFor(input.to, from);
+          if (!hasPermission(roleOf(ctx.session.user), needed)) {
+            return yield* fail("FORBIDDEN", ctx.t.auth.noPermission);
+          }
 
-      if (requiresComment(input.to, from) && !input.comment) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            input.to === "returned"
-              ? "Say what needs correcting before sending the report back."
-              : "Reopening an agreed period needs a reason.",
-        });
-      }
+          if (requiresComment(input.to, from) && !input.comment) {
+            return yield* fail(
+              "BAD_REQUEST",
+              input.to === "returned"
+                ? "Say what needs correcting before sending the report back."
+                : "Reopening an agreed period needs a reason.",
+            );
+          }
 
-      // Submission is the one move with a data precondition: every line must
-      // have been addressed. Checked here rather than in the UI because the UI
-      // is not what the record depends on.
-      if (input.to === "submitted") {
-        const summary = await periodCompleteness(period.projectId, input.periodId);
-        if (summary.missing > 0) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: plural(ctx.t.progress.missingLines, summary.missing),
-          });
-        }
-      }
+          // Submission is the one move with a data precondition: every line must
+          // have been addressed. Checked here rather than in the UI because the UI
+          // is not what the record depends on.
+          if (input.to === "submitted") {
+            const summary = yield* attempt(() => periodCompleteness(period.projectId, input.periodId));
+            if (summary.missing > 0) {
+              return yield* fail("BAD_REQUEST", plural(ctx.t.progress.missingLines, summary.missing));
+            }
+          }
 
-      const now = new Date();
-      const stamp = stampFor(input.to, ctx.session.user.id, now, input.comment);
-      const assignments = [sql`status = ${input.to}`, sql`updated_at = ${now}`];
-      if ("submittedById" in stamp) assignments.push(sql`submitted_by_id = ${stamp.submittedById}`);
-      if ("submittedAt" in stamp) assignments.push(sql`submitted_at = ${stamp.submittedAt}`);
-      if ("reviewedById" in stamp) assignments.push(sql`reviewed_by_id = ${stamp.reviewedById}`);
-      if ("reviewedAt" in stamp) assignments.push(sql`reviewed_at = ${stamp.reviewedAt}`);
-      if ("approvedById" in stamp) assignments.push(sql`approved_by_id = ${stamp.approvedById}`);
-      if ("approvedAt" in stamp) assignments.push(sql`approved_at = ${stamp.approvedAt}`);
-      if ("lockedById" in stamp) assignments.push(sql`locked_by_id = ${stamp.lockedById}`);
-      if ("lockedAt" in stamp) assignments.push(sql`locked_at = ${stamp.lockedAt}`);
-      if ("returnReason" in stamp) assignments.push(sql`return_reason = ${stamp.returnReason}`);
-      if ("reviewComment" in stamp) assignments.push(sql`review_comment = ${stamp.reviewComment}`);
+          const now = new Date();
+          const stamp = stampFor(input.to, ctx.session.user.id, now, input.comment);
+          const assignments = [sql`status = ${input.to}`, sql`updated_at = ${now}`];
+          if ("submittedById" in stamp) assignments.push(sql`submitted_by_id = ${stamp.submittedById}`);
+          if ("submittedAt" in stamp) assignments.push(sql`submitted_at = ${stamp.submittedAt}`);
+          if ("reviewedById" in stamp) assignments.push(sql`reviewed_by_id = ${stamp.reviewedById}`);
+          if ("reviewedAt" in stamp) assignments.push(sql`reviewed_at = ${stamp.reviewedAt}`);
+          if ("approvedById" in stamp) assignments.push(sql`approved_by_id = ${stamp.approvedById}`);
+          if ("approvedAt" in stamp) assignments.push(sql`approved_at = ${stamp.approvedAt}`);
+          if ("lockedById" in stamp) assignments.push(sql`locked_by_id = ${stamp.lockedById}`);
+          if ("lockedAt" in stamp) assignments.push(sql`locked_at = ${stamp.lockedAt}`);
+          if ("returnReason" in stamp) assignments.push(sql`return_reason = ${stamp.returnReason}`);
+          if ("reviewComment" in stamp) assignments.push(sql`review_comment = ${stamp.reviewComment}`);
 
-      const eventId = crypto.randomUUID();
-      const changed = await db.execute<{ id: string }>(sql`
-        with changed as (
-          update reporting_period
-          set ${sql.join(assignments, sql`, `)}
-          where id = ${input.periodId} and status = ${from}
-            and updated_at = ${period.updatedAtToken}::timestamp
-          returning id
-        )
-        insert into reporting_period_event
-          (id, period_id, from_status, to_status, actor_id, actor_name, comment)
-        select
-          ${eventId}, id, ${from}, ${input.to}, ${ctx.session.user.id},
-          ${ctx.session.user.name}, ${input.comment ?? null}
-        from changed
-        returning id
-      `);
-      if (changed.rows.length === 0) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: ctx.t.progress.periodChangedRefresh,
-        });
-      }
+          const eventId = crypto.randomUUID();
+          const changed = yield* attempt(() =>
+            db.execute<{ id: string }>(sql`
+              with changed as (
+                update reporting_period
+                set ${sql.join(assignments, sql`, `)}
+                where id = ${input.periodId} and status = ${from}
+                  and updated_at = ${period.updatedAtToken}::timestamp
+                returning id
+              )
+              insert into reporting_period_event
+                (id, period_id, from_status, to_status, actor_id, actor_name, comment)
+              select
+                ${eventId}, id, ${from}, ${input.to}, ${ctx.session.user.id},
+                ${ctx.session.user.name}, ${input.comment ?? null}
+              from changed
+              returning id
+            `),
+          );
+          if (changed.rows.length === 0) {
+            return yield* fail("CONFLICT", ctx.t.progress.periodChangedRefresh);
+          }
 
-      const [projectRow] = await db
-        .select({ code: project.code, name: project.name })
-        .from(project)
-        .where(eq(project.id, period.projectId));
+          const [projectRow] = yield* attempt(() =>
+            db
+              .select({ code: project.code, name: project.name })
+              .from(project)
+              .where(eq(project.id, period.projectId)),
+          );
 
-      await recordActivity(ctx, {
-        action: TRANSITION_ACTIONS[input.to],
-        entityType: "period",
-        entityId: input.periodId,
-        entityLabel: projectRow ? `${projectRow.code} - ${projectRow.name}` : period.projectId,
-        detail: `${period.label ?? `#${period.periodIndex}`}${input.comment ? ` - ${input.comment}` : ""}`,
-      });
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: TRANSITION_ACTIONS[input.to],
+              entityType: "period",
+              entityId: input.periodId,
+              entityLabel: projectRow ? `${projectRow.code} - ${projectRow.name}` : period.projectId,
+              detail: `${period.label ?? `#${period.periodIndex}`}${input.comment ? ` - ${input.comment}` : ""}`,
+            }),
+          );
 
-      return { status: input.to };
-    }),
+          return { status: input.to };
+        }),
+      ),
+    ),
 });

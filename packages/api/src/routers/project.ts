@@ -9,6 +9,7 @@ import {
   user,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
+import { Effect } from "effect";
 import { and, asc, count, desc, eq, ilike, inArray, isNotNull, notInArray, or, sql, sum } from "drizzle-orm";
 import z from "zod";
 
@@ -22,6 +23,7 @@ import {
 import { isBehindDeviation } from "../lib/deviation";
 import { runBatch } from "../lib/batch";
 import { type BoqMetrics, boqMetricsByProject, projectExceptions } from "../lib/boq-metrics";
+import { attempt, fail, runProcedure } from "../lib/effect";
 import { interpolate, type MessageDictionary, plural } from "../lib/messages/index";
 import { percentOf, toAmount } from "../lib/money";
 import { hasPermission, roleOf } from "../lib/permissions";
@@ -170,73 +172,83 @@ export const projectRouter = router({
         cursor: createdAtCursorSchema.optional(),
       }),
     )
-    .query(async ({ ctx, input }) => {
-      const filters = [
-        projectAccessFilter(ctx),
-        input.archived ? isNotNull(project.archivedAt) : liveProjectsOnly,
-        input.search
-          ? or(
-              ilike(project.name, `%${input.search}%`),
-              ilike(project.code, `%${input.search}%`),
-              ilike(project.client, `%${input.search}%`),
-            )
-          : undefined,
-        input.status ? eq(project.status, input.status) : undefined,
-      ];
-      const filteredWhere = and(...filters);
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const filters = [
+            projectAccessFilter(ctx),
+            input.archived ? isNotNull(project.archivedAt) : liveProjectsOnly,
+            input.search
+              ? or(
+                  ilike(project.name, `%${input.search}%`),
+                  ilike(project.code, `%${input.search}%`),
+                  ilike(project.client, `%${input.search}%`),
+                )
+              : undefined,
+            input.status ? eq(project.status, input.status) : undefined,
+          ];
+          const filteredWhere = and(...filters);
 
-      const where = and(
-        filteredWhere,
-        input.cursor
-          ? createdAtCursorCondition(project.createdAt, project.id, input.cursor)
-          : undefined,
-      );
+          const where = and(
+            filteredWhere,
+            input.cursor
+              ? createdAtCursorCondition(project.createdAt, project.id, input.cursor)
+              : undefined,
+          );
 
-      const [rows, [total]] = await Promise.all([
-        db
-          .select({
-            row: project,
-            cursorCreatedAt: exactCursorTimestamp(project.createdAt),
-          })
-          .from(project)
-          .where(where)
-          .orderBy(desc(project.createdAt), desc(project.id))
-          .limit(input.limit + 1),
-        input.cursor
-          ? Promise.resolve([])
-          : db.select({ value: count() }).from(project).where(filteredWhere),
-      ]);
+          const [rows, [total]] = yield* Effect.all([
+            attempt(() =>
+              db
+                .select({
+                  row: project,
+                  cursorCreatedAt: exactCursorTimestamp(project.createdAt),
+                })
+                .from(project)
+                .where(where)
+                .orderBy(desc(project.createdAt), desc(project.id))
+                .limit(input.limit + 1),
+            ),
+            input.cursor
+              ? Effect.succeed([])
+              : attempt(() => db.select({ value: count() }).from(project).where(filteredWhere)),
+          ], { concurrency: "unbounded" });
 
-      const hasMore = rows.length > input.limit;
-      const page = rows.slice(0, input.limit);
-      const ids = page.map(({ row }) => row.id);
-      const [openTickets, boq] = await Promise.all([
-        openTicketsByProject(ids),
-        boqMetricsByProject(ids),
-      ]);
+          const hasMore = rows.length > input.limit;
+          const page = rows.slice(0, input.limit);
+          const ids = page.map(({ row }) => row.id);
+          const [openTickets, boq] = yield* Effect.all([
+            attempt(() => openTicketsByProject(ids)),
+            attempt(() => boqMetricsByProject(ids)),
+          ], { concurrency: "unbounded" });
 
-      return {
-        projects: page.map(({ row }) =>
-          decorate(row, openTickets.get(row.id) ?? 0, boq.get(row.id)),
-        ),
-        total: total?.value ?? null,
-        nextCursor: hasMore && page.length > 0
-          ? {
-              createdAt: page[page.length - 1]!.cursorCreatedAt,
-              id: page[page.length - 1]!.row.id,
-            }
-          : null,
-      };
-    }),
+          return {
+            projects: page.map(({ row }) =>
+              decorate(row, openTickets.get(row.id) ?? 0, boq.get(row.id)),
+            ),
+            total: total?.value ?? null,
+            nextCursor: hasMore && page.length > 0
+              ? {
+                  createdAt: page[page.length - 1]!.cursorCreatedAt,
+                  id: page[page.length - 1]!.row.id,
+                }
+              : null,
+          };
+        }),
+      ),
+    ),
 
   /** Lightweight list for the project pickers on other screens. */
-  options: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
-    return db
-      .select({ id: project.id, code: project.code, name: project.name, status: project.status })
-      .from(project)
-      .where(and(projectAccessFilter(ctx), liveProjectsOnly))
-      .orderBy(asc(project.code));
-  }),
+  options: companyPermissionProcedure("project:read").query(({ ctx }) =>
+    runProcedure(
+      attempt(() =>
+        db
+          .select({ id: project.id, code: project.code, name: project.name, status: project.status })
+          .from(project)
+          .where(and(projectAccessFilter(ctx), liveProjectsOnly))
+          .orderBy(asc(project.code)),
+      ),
+    ),
+  ),
 
   /**
    * Who can be named as a project manager: this company's own staff.
@@ -247,86 +259,74 @@ export const projectRouter = router({
    * and email end up printed on a project page. `assertUserAssignable` enforces
    * the same rule on write, so a hand-made request cannot get around the list.
    */
-  managerOptions: companyProcedure.query(async ({ ctx }) => {
-    return db
-      .select({ id: user.id, name: user.name, email: user.email })
-      .from(user)
-      .where(
-        and(
-          eq(user.banned, false),
-          eq(user.companyId, ctx.companyId),
-          inArray(user.role, ["admin", "user"]),
-        ),
-      )
-      .orderBy(asc(user.name));
-  }),
+  managerOptions: companyProcedure.query(({ ctx }) =>
+    runProcedure(
+      attempt(() =>
+        db
+          .select({ id: user.id, name: user.name, email: user.email })
+          .from(user)
+          .where(
+            and(
+              eq(user.banned, false),
+              eq(user.companyId, ctx.companyId),
+              inArray(user.role, ["admin", "user"]),
+            ),
+          )
+          .orderBy(asc(user.name)),
+      ),
+    ),
+  ),
 
   get: companyPermissionProcedure("project:read")
     .input(z.object({ id: z.string().min(1) }))
-    .query(async ({ ctx, input }) => {
-      const [row] = await db
-        .select()
-        .from(project)
-        .where(and(eq(project.id, input.id), projectAccessFilter(ctx)));
-      if (!row) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
-      }
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const [row] = yield* attempt(() =>
+            db
+              .select()
+              .from(project)
+              .where(and(eq(project.id, input.id), projectAccessFilter(ctx))),
+          );
+          if (!row) {
+            return yield* fail("NOT_FOUND", ctx.t.project.notFound);
+          }
 
-      const [openTickets, boq, manager] = await Promise.all([
-        openTicketsByProject([row.id]),
-        boqMetricsByProject([row.id]),
-        // The same guard `managerOptions` and the export apply, for the same
-        // reason and on the surface where it matters most: a super admin can no
-        // longer be assigned, but a row predating that rule would otherwise
-        // print their name *and* email on a page every admin and assigned user
-        // of the company reads. No row back means the project shows as
-        // unmanaged, which is the truthful answer: nobody in this company
-        // manages it.
-        row.managerId
-          ? db
-              .select({ id: user.id, name: user.name, email: user.email })
-              .from(user)
-              .where(
-                and(
-                  eq(user.id, row.managerId),
-                  eq(user.banned, false),
-                  eq(user.companyId, row.companyId),
-                  inArray(user.role, ["admin", "user"]),
-                ),
-              )
-          : Promise.resolve([]),
-      ]);
+          const managerId = row.managerId;
+          const [openTickets, boq, manager] = yield* Effect.all([
+            attempt(() => openTicketsByProject([row.id])),
+            attempt(() => boqMetricsByProject([row.id])),
+            // The same guard `managerOptions` and the export apply, for the same
+            // reason and on the surface where it matters most: a super admin can no
+            // longer be assigned, but a row predating that rule would otherwise
+            // print their name *and* email on a page every admin and assigned user
+            // of the company reads. No row back means the project shows as
+            // unmanaged, which is the truthful answer: nobody in this company
+            // manages it.
+            managerId
+              ? attempt(() =>
+                  db
+                    .select({ id: user.id, name: user.name, email: user.email })
+                    .from(user)
+                    .where(
+                      and(
+                        eq(user.id, managerId),
+                        eq(user.banned, false),
+                        eq(user.companyId, row.companyId),
+                        inArray(user.role, ["admin", "user"]),
+                      ),
+                    ),
+                )
+              : Effect.succeed([]),
+          ], { concurrency: "unbounded" });
 
-      return {
-        ...decorate(row, openTickets.get(row.id) ?? 0, boq.get(row.id)),
-        manager: manager[0] ?? null,
-      };
-    }),
-
-  /**
-   * Projects running behind their baseline, worst first. Only projects with an
-   * active BoQ and at least one reading can be behind — everything else has no
-   * plan to be measured against and is left out rather than shown as on track.
-   */
-  behindSchedule: companyPermissionProcedure("project:read")
-    .input(z.object({ limit: z.number().int().min(1).max(20).default(5) }))
-    .query(async ({ ctx, input }) => {
-      const rows = await db
-        .select({ id: project.id, code: project.code, name: project.name, client: project.client })
-        .from(project)
-        .where(and(projectAccessFilter(ctx), liveProjectsOnly));
-
-      const metrics = await boqMetricsByProject(rows.map((row) => row.id));
-
-      return rows
-        .flatMap((row) => {
-          const boq = metrics.get(row.id);
-          if (!boq || !isBehindDeviation(boq.deviation)) return [];
-          return [{ ...row, ...boq, deviation: boq.deviation }];
-        })
-        .sort((a, b) => (a.deviation ?? 0) - (b.deviation ?? 0))
-        .slice(0, input.limit);
-    }),
+          return {
+            ...decorate(row, openTickets.get(row.id) ?? 0, boq.get(row.id)),
+            manager: manager[0] ?? null,
+          };
+        }),
+      ),
+    ),
 
   /**
    * The portfolio ranked by what needs attention, plus the counts behind the
@@ -351,337 +351,375 @@ export const projectRouter = router({
         })
         .optional(),
     )
-    .query(async ({ ctx, input }) => {
-      const { filter, limit, offset } = {
-        filter: input?.filter ?? ("all" as const),
-        limit: input?.limit ?? 25,
-        offset: input?.offset ?? 0,
-      };
-      // Cancelled and completed projects are not exceptions — nobody is going to
-      // act on a variance from a job that finished. Exclude them before computing metrics.
-      const live = await projectExceptions(and(
-        projectAccessFilter(ctx),
-        liveProjectsOnly,
-        notInArray(project.status, ["completed", "cancelled"]),
-      ));
-      const canReview = hasPermission(roleOf(ctx.session.user), "progress:review");
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const { filter, limit, offset } = {
+            filter: input?.filter ?? ("all" as const),
+            limit: input?.limit ?? 25,
+            offset: input?.offset ?? 0,
+          };
+          // Cancelled and completed projects are not exceptions — nobody is going to
+          // act on a variance from a job that finished. Exclude them before computing metrics.
+          const live = yield* attempt(() =>
+            projectExceptions(and(
+              projectAccessFilter(ctx),
+              liveProjectsOnly,
+              notInArray(project.status, ["completed", "cancelled"]),
+            )),
+          );
+          const canReview = hasPermission(roleOf(ctx.session.user), "progress:review");
 
-      const behind = live.filter((row) => isBehindDeviation(row.deviation));
-      const stale = live.filter(
-        (row) => row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS,
-      );
-      const unreported = live.filter((row) => row.hasBaseline && row.dataDate === null);
-      const reporting = live.filter(
-        (row) =>
-          (row.hasBaseline && row.dataDate === null) ||
-          (row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS) ||
-          row.reportsDue > 0,
-      );
-      const needsAttention = live.filter(
-        (row) =>
-          isBehindDeviation(row.deviation) ||
-          row.dataDate === null ||
-          (row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS) ||
-          row.reportsDue > 0 ||
-          (canReview && row.reportsAwaitingReview > 0) ||
-          row.openTickets > 0,
-      );
-      const ranked = [...needsAttention].sort((a, b) => {
-        const aBehind = isBehindDeviation(a.deviation);
-        const bBehind = isBehindDeviation(b.deviation);
-        if (aBehind !== bBehind) return aBehind ? -1 : 1;
-        if (aBehind && bBehind) return (a.deviation ?? 0) - (b.deviation ?? 0);
-        const reportingDifference = b.reportsDue - a.reportsDue;
-        if (reportingDifference !== 0) return reportingDifference;
-        const ageDifference = (b.reportAgeDays ?? -1) - (a.reportAgeDays ?? -1);
-        if (ageDifference !== 0) return ageDifference;
-        return a.code.localeCompare(b.code);
-      });
+          const behind = live.filter((row) => isBehindDeviation(row.deviation));
+          const stale = live.filter(
+            (row) => row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS,
+          );
+          const unreported = live.filter((row) => row.hasBaseline && row.dataDate === null);
+          const reporting = live.filter(
+            (row) =>
+              (row.hasBaseline && row.dataDate === null) ||
+              (row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS) ||
+              row.reportsDue > 0,
+          );
+          const needsAttention = live.filter(
+            (row) =>
+              isBehindDeviation(row.deviation) ||
+              row.dataDate === null ||
+              (row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS) ||
+              row.reportsDue > 0 ||
+              (canReview && row.reportsAwaitingReview > 0) ||
+              row.openTickets > 0,
+          );
+          const ranked = [...needsAttention].sort((a, b) => {
+            const aBehind = isBehindDeviation(a.deviation);
+            const bBehind = isBehindDeviation(b.deviation);
+            if (aBehind !== bBehind) return aBehind ? -1 : 1;
+            if (aBehind && bBehind) return (a.deviation ?? 0) - (b.deviation ?? 0);
+            const reportingDifference = b.reportsDue - a.reportsDue;
+            if (reportingDifference !== 0) return reportingDifference;
+            const ageDifference = (b.reportAgeDays ?? -1) - (a.reportAgeDays ?? -1);
+            if (ageDifference !== 0) return ageDifference;
+            return a.code.localeCompare(b.code);
+          });
 
-      const withReasons = ranked.map((row) => ({
-        ...row,
-        reasons: {
-          behind: isBehindDeviation(row.deviation),
-          baselineMissing: !row.hasBaseline,
-          unreported: row.hasBaseline && row.dataDate === null,
-          stale: row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS,
-          reportsDue: row.reportsDue > 0,
-          awaitingReview: canReview && row.reportsAwaitingReview > 0,
-          openActions: row.openTickets > 0,
-        },
-      }));
-      const filtered = withReasons.filter((row) => {
-        if (filter === "behind") return row.reasons.behind;
-        if (filter === "reporting") {
-          return row.reasons.unreported || row.reasons.stale || row.reasons.reportsDue;
-        }
-        if (filter === "review") return row.reasons.awaitingReview;
-        if (filter === "actions") return row.reasons.openActions;
-        return true;
-      });
-      const projects = filtered.slice(offset, offset + limit);
-      const nextOffset = offset + projects.length < filtered.length
-        ? offset + projects.length
-        : null;
+          const withReasons = ranked.map((row) => ({
+            ...row,
+            reasons: {
+              behind: isBehindDeviation(row.deviation),
+              baselineMissing: !row.hasBaseline,
+              unreported: row.hasBaseline && row.dataDate === null,
+              stale: row.reportAgeDays !== null && row.reportAgeDays > STALE_AFTER_DAYS,
+              reportsDue: row.reportsDue > 0,
+              awaitingReview: canReview && row.reportsAwaitingReview > 0,
+              openActions: row.openTickets > 0,
+            },
+          }));
+          const filtered = withReasons.filter((row) => {
+            if (filter === "behind") return row.reasons.behind;
+            if (filter === "reporting") {
+              return row.reasons.unreported || row.reasons.stale || row.reasons.reportsDue;
+            }
+            if (filter === "review") return row.reasons.awaitingReview;
+            if (filter === "actions") return row.reasons.openActions;
+            return true;
+          });
+          const projects = filtered.slice(offset, offset + limit);
+          const nextOffset = offset + projects.length < filtered.length
+            ? offset + projects.length
+            : null;
 
-      return {
-        counts: {
-          live: live.length,
-          behind: behind.length,
-          stale: stale.length,
-          unreported: unreported.length,
-          reporting: reporting.length,
-          reportsDue: live.reduce((total, row) => total + row.reportsDue, 0),
-          awaitingReview: live.filter((row) => canReview && row.reportsAwaitingReview > 0).length,
-          openTickets: live.filter((row) => row.openTickets > 0).length,
-        },
-        total: filtered.length,
-        projects,
-        nextOffset,
-      };
-    }),
+          return {
+            counts: {
+              live: live.length,
+              behind: behind.length,
+              stale: stale.length,
+              unreported: unreported.length,
+              reporting: reporting.length,
+              reportsDue: live.reduce((total, row) => total + row.reportsDue, 0),
+              awaitingReview: live.filter((row) => canReview && row.reportsAwaitingReview > 0).length,
+              openTickets: live.filter((row) => row.openTickets > 0).length,
+            },
+            total: filtered.length,
+            projects,
+            nextOffset,
+          };
+        }),
+      ),
+    ),
 
   /** Everything the dashboard needs, in one round trip. */
-  summary: companyPermissionProcedure("project:read").query(async ({ ctx }) => {
-    // Archived projects are out of the portfolio for counting purposes — the
-    // dashboard answers "what am I running", not "what have I ever run".
-    const inCompany = and(projectAccessFilter(ctx), liveProjectsOnly);
-    const [projectRows, [baselineTotal], [openTicketRow]] = await Promise.all([
-      db
-        .select({ id: project.id, status: project.status })
-        .from(project)
-        .where(inCompany),
-      db
-        .select({ total: sum(boqVersion.totalValue) })
-        .from(boqVersion)
-        .innerJoin(project, eq(project.id, boqVersion.projectId))
-        .where(
-          and(
-            inCompany,
-            eq(boqVersion.status, "active"),
-            eq(boqVersion.scheduleStatus, "active"),
+  summary: companyPermissionProcedure("project:read").query(({ ctx }) =>
+    runProcedure(
+      Effect.gen(function* () {
+        // Archived projects are out of the portfolio for counting purposes — the
+        // dashboard answers "what am I running", not "what have I ever run".
+        const inCompany = and(projectAccessFilter(ctx), liveProjectsOnly);
+        const [projectRows, [baselineTotal], [openTicketRow]] = yield* Effect.all([
+          attempt(() =>
+            db
+              .select({ id: project.id, status: project.status })
+              .from(project)
+              .where(inCompany),
           ),
-        ),
-      db
-        .select({ value: count() })
-        .from(ticket)
-        .innerJoin(project, eq(ticket.projectId, project.id))
-        .where(and(inCompany, sql`${ticket.status} <> 'closed'`)),
-    ]);
+          attempt(() =>
+            db
+              .select({ total: sum(boqVersion.totalValue) })
+              .from(boqVersion)
+              .innerJoin(project, eq(project.id, boqVersion.projectId))
+              .where(
+                and(
+                  inCompany,
+                  eq(boqVersion.status, "active"),
+                  eq(boqVersion.scheduleStatus, "active"),
+                ),
+              ),
+          ),
+          attempt(() =>
+            db
+              .select({ value: count() })
+              .from(ticket)
+              .innerJoin(project, eq(ticket.projectId, project.id))
+              .where(and(inCompany, sql`${ticket.status} <> 'closed'`)),
+          ),
+        ], { concurrency: "unbounded" });
 
-    const boq = await boqMetricsByProject(projectRows.map((row) => row.id));
+        const boq = yield* attempt(() => boqMetricsByProject(projectRows.map((row) => row.id)));
 
-    const byStatus = Object.fromEntries(
-      PROJECT_STATUSES.map((status) => [
-        status,
-        projectRows.filter((row) => row.status === status).length,
-      ]),
-    ) as Record<(typeof PROJECT_STATUSES)[number], number>;
+        const byStatus = Object.fromEntries(
+          PROJECT_STATUSES.map((status) => [
+            status,
+            projectRows.filter((row) => row.status === status).length,
+          ]),
+        ) as Record<(typeof PROJECT_STATUSES)[number], number>;
 
-    const measured = [...boq.values()].filter(
-      (metric): metric is BoqMetrics & { workCompletedValue: number } =>
-        metric.workCompletedValue !== null,
-    );
-    const workCompletedValue =
-      measured.length === 0
-        ? null
-        : measured.reduce((total, metric) => total + metric.workCompletedValue, 0);
-    const portfolioValue = toAmount(baselineTotal?.total);
+        const measured = [...boq.values()].filter(
+          (metric): metric is BoqMetrics & { workCompletedValue: number } =>
+            metric.workCompletedValue !== null,
+        );
+        const workCompletedValue =
+          measured.length === 0
+            ? null
+            : measured.reduce((total, metric) => total + metric.workCompletedValue, 0);
+        const portfolioValue = toAmount(baselineTotal?.total);
 
-    return {
-      projects: {
-        total: Object.values(byStatus).reduce((a, b) => a + b, 0),
-        byStatus,
-        baselined: boq.size,
-        measured: measured.length,
-      },
-      portfolioValue,
-      workCompletedValue,
-      valueCompletionPercent:
-        workCompletedValue === null ? null : percentOf(workCompletedValue, portfolioValue),
-      openTickets: openTicketRow?.value ?? 0,
-    };
-  }),
+        return {
+          projects: {
+            total: Object.values(byStatus).reduce((a, b) => a + b, 0),
+            byStatus,
+            baselined: boq.size,
+            measured: measured.length,
+          },
+          portfolioValue,
+          workCompletedValue,
+          valueCompletionPercent:
+            workCompletedValue === null ? null : percentOf(workCompletedValue, portfolioValue),
+          openTickets: openTicketRow?.value ?? 0,
+        };
+      }),
+    ),
+  ),
 
   codeAvailability: companyPermissionProcedure("project:create")
     .input(z.object({ code: upsertSchema.shape.code }))
-    .query(async ({ ctx, input }) => {
-      const code = input.code.toUpperCase();
-      const [existing] = await db
-        .select({ id: project.id })
-        .from(project)
-        .where(and(eq(project.code, code), eq(project.companyId, ctx.companyId)))
-        .limit(1);
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const code = input.code.toUpperCase();
+          const [existing] = yield* attempt(() =>
+            db
+              .select({ id: project.id })
+              .from(project)
+              .where(and(eq(project.code, code), eq(project.companyId, ctx.companyId)))
+              .limit(1),
+          );
 
-      return { available: !existing };
-    }),
+          return { available: !existing };
+        }),
+      ),
+    ),
 
   create: companyPermissionProcedure("project:create")
     .input(createSchema)
-    .mutation(async ({ ctx, input }) => {
-      const code = input.code.toUpperCase();
-      const actorRole = roleOf(ctx.session.user);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const code = input.code.toUpperCase();
+          const actorRole = roleOf(ctx.session.user);
 
-      // Codes are unique per company, so the clash check is scoped too.
-      const [existing] = await db
-        .select({ id: project.id })
-        .from(project)
-        .where(and(eq(project.code, code), eq(project.companyId, ctx.companyId)));
-      if (existing) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: interpolate(ctx.t.project.codeInUse, { code }),
-        });
-      }
-      if (input.startDate && input.endDate && input.endDate < input.startDate) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.project.endBeforeStart });
-      }
-      if (input.periodType === "custom") throw customCadenceElsewhere(ctx.t);
-      const manager = input.managerId
-        ? { id: input.managerId, ...(await assertUserAssignable(ctx.t, ctx.companyId, input.managerId)) }
-        : null;
-      if (
-        !canAssignProjectManager({
-          actorId: ctx.session.user.id,
-          canManageMembers: hasPermission(actorRole, "member:manage"),
-          currentManagerId: null,
-          nextManagerId: input.managerId ?? null,
-        })
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: ctx.t.project.cannotAssignManager,
-        });
-      }
+          // Codes are unique per company, so the clash check is scoped too.
+          const [existing] = yield* attempt(() =>
+            db
+              .select({ id: project.id })
+              .from(project)
+              .where(and(eq(project.code, code), eq(project.companyId, ctx.companyId))),
+          );
+          if (existing) {
+            return yield* fail("CONFLICT", interpolate(ctx.t.project.codeInUse, { code }));
+          }
+          if (input.startDate && input.endDate && input.endDate < input.startDate) {
+            return yield* fail("BAD_REQUEST", ctx.t.project.endBeforeStart);
+          }
+          if (input.periodType === "custom") throw customCadenceElsewhere(ctx.t);
+          const managerId = input.managerId;
+          const manager = managerId
+            ? { id: managerId, ...(yield* attempt(() => assertUserAssignable(ctx.t, ctx.companyId, managerId))) }
+            : null;
+          if (
+            !canAssignProjectManager({
+              actorId: ctx.session.user.id,
+              canManageMembers: hasPermission(actorRole, "member:manage"),
+              currentManagerId: null,
+              nextManagerId: input.managerId ?? null,
+            })
+          ) {
+            return yield* fail("FORBIDDEN", ctx.t.project.cannotAssignManager);
+          }
 
-      const projectId = crypto.randomUUID();
-      const membershipIds = projectMembershipIds({
-        creatorId: ctx.session.user.id,
-        creatorRole: actorRole,
-        manager,
-      });
-      await runBatch([
-        db.insert(project).values({
-          id: projectId,
-          ...input,
-          code,
-          companyId: ctx.companyId,
-          progress: 0,
-          status: "planning",
+          const projectId = crypto.randomUUID();
+          const membershipIds = projectMembershipIds({
+            creatorId: ctx.session.user.id,
+            creatorRole: actorRole,
+            manager,
+          });
+          yield* attempt(() =>
+            runBatch([
+              db.insert(project).values({
+                id: projectId,
+                ...input,
+                code,
+                companyId: ctx.companyId,
+                progress: 0,
+                status: "planning",
+              }),
+              ...(membershipIds.length > 0
+                ? [
+                    db
+                      .insert(projectMember)
+                      .values(membershipIds.map((userId) => ({ projectId, userId })))
+                      .onConflictDoNothing(),
+                  ]
+                : []),
+            ]),
+          );
+
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: "created",
+              entityType: "project",
+              entityId: projectId,
+              entityLabel: `${code} - ${input.name}`,
+            }),
+          );
+
+          return { id: projectId };
         }),
-        ...(membershipIds.length > 0
-          ? [
-              db
-                .insert(projectMember)
-                .values(membershipIds.map((userId) => ({ projectId, userId })))
-                .onConflictDoNothing(),
-            ]
-          : []),
-      ]);
-
-      await recordActivity(ctx, {
-        action: "created",
-        entityType: "project",
-        entityId: projectId,
-        entityLabel: `${code} - ${input.name}`,
-      });
-
-      return { id: projectId };
-    }),
+      ),
+    ),
 
   update: companyPermissionProcedure("project:update")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
-    .mutation(async ({ ctx, input }) => {
-      const { id: projectId, code, ...rest } = input;
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const { id: projectId, code, ...rest } = input;
 
-      await assertProjectWritable(ctx, projectId);
-      const [current] = await db.select().from(project).where(eq(project.id, projectId));
-      if (!current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
-      }
+          yield* attempt(() => assertProjectWritable(ctx, projectId));
+          const [current] = yield* attempt(() => db.select().from(project).where(eq(project.id, projectId)));
+          if (!current) {
+            return yield* fail("NOT_FOUND", ctx.t.project.notFound);
+          }
 
-      // `??` would be wrong here now that null means "clear it": an explicit
-      // null would fall through to the stored date and the check would compare
-      // against a value the caller is in the middle of removing.
-      const startDate = rest.startDate === undefined ? current.startDate : rest.startDate;
-      const endDate = rest.endDate === undefined ? current.endDate : rest.endDate;
-      if (startDate && endDate && endDate < startDate) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.project.endBeforeStart });
-      }
-      if (rest.periodType === "custom") throw customCadenceElsewhere(ctx.t);
-      // Only a *change* of manager is checked. The edit form resubmits whatever
-      // is stored, so a project left over from when super admins were assignable
-      // could not be saved at all: changing only its name re-sent the legacy
-      // managerId, which `assertUserAssignable` now rejects with "User not
-      // found" — naming nothing the user can see, since that manager is also
-      // absent from the picker. Re-sending the value already in the column
-      // changes nothing and is treated as such; assigning a new one is checked
-      // as before.
-      let nextManagerRole: "admin" | "user" | null = null;
-      if (rest.managerId !== undefined && rest.managerId !== current.managerId) {
-        if (
-          !canAssignProjectManager({
-            actorId: ctx.session.user.id,
-            canManageMembers: hasPermission(roleOf(ctx.session.user), "member:manage"),
-            currentManagerId: current.managerId,
-            nextManagerId: rest.managerId,
-          })
-        ) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: ctx.t.project.cannotAssignManager,
-          });
-        }
-        if (rest.managerId) {
-          nextManagerRole = (await assertUserAssignable(ctx.t, ctx.companyId, rest.managerId)).role;
-        }
-      }
+          // `??` would be wrong here now that null means "clear it": an explicit
+          // null would fall through to the stored date and the check would compare
+          // against a value the caller is in the middle of removing.
+          const startDate = rest.startDate === undefined ? current.startDate : rest.startDate;
+          const endDate = rest.endDate === undefined ? current.endDate : rest.endDate;
+          if (startDate && endDate && endDate < startDate) {
+            return yield* fail("BAD_REQUEST", ctx.t.project.endBeforeStart);
+          }
+          if (rest.periodType === "custom") throw customCadenceElsewhere(ctx.t);
+          // Only a *change* of manager is checked. The edit form resubmits whatever
+          // is stored, so a project left over from when super admins were assignable
+          // could not be saved at all: changing only its name re-sent the legacy
+          // managerId, which `assertUserAssignable` now rejects with "User not
+          // found" — naming nothing the user can see, since that manager is also
+          // absent from the picker. Re-sending the value already in the column
+          // changes nothing and is treated as such; assigning a new one is checked
+          // as before.
+          let nextManagerRole: "admin" | "user" | null = null;
+          if (rest.managerId !== undefined && rest.managerId !== current.managerId) {
+            if (
+              !canAssignProjectManager({
+                actorId: ctx.session.user.id,
+                canManageMembers: hasPermission(roleOf(ctx.session.user), "member:manage"),
+                currentManagerId: current.managerId,
+                nextManagerId: rest.managerId,
+              })
+            ) {
+              return yield* fail("FORBIDDEN", ctx.t.project.cannotAssignManager);
+            }
+            if (rest.managerId) {
+              const nextManagerId = rest.managerId;
+              nextManagerRole = (yield* attempt(() =>
+                assertUserAssignable(ctx.t, ctx.companyId, nextManagerId),
+              )).role;
+            }
+          }
 
-      if (code && code.toUpperCase() !== current.code) {
-        const [clash] = await db
-          .select({ id: project.id })
-          .from(project)
-          .where(
-            and(eq(project.code, code.toUpperCase()), eq(project.companyId, ctx.companyId)),
-          );
-        if (clash) {
-          throw new TRPCError({ code: "CONFLICT", message: interpolate(ctx.t.project.codeInUse, { code }) });
-        }
-      }
-
-      await runBatch([
-        // Workbook commits use the same transaction-scoped lock. Keeping all
-        // project edits behind it prevents a calendar edit from landing between
-        // a workbook's final state guard and its writes.
-        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${projectId}, 0))`),
-        db
-          .update(project)
-          .set({
-            ...rest,
-            ...(code ? { code: code.toUpperCase() } : {}),
-          })
-          .where(eq(project.id, projectId)),
-        ...(rest.managerId && nextManagerRole === "user"
-          ? [
+          if (code && code.toUpperCase() !== current.code) {
+            const [clash] = yield* attempt(() =>
               db
-                .insert(projectMember)
-                .values({ projectId, userId: rest.managerId })
-                .onConflictDoNothing(),
-            ]
-          : []),
-      ]);
+                .select({ id: project.id })
+                .from(project)
+                .where(
+                  and(eq(project.code, code.toUpperCase()), eq(project.companyId, ctx.companyId)),
+                ),
+            );
+            if (clash) {
+              return yield* fail("CONFLICT", interpolate(ctx.t.project.codeInUse, { code }));
+            }
+          }
 
-      // create, delete and setMembers all record themselves; this one did not,
-      // so editing a project was the one change to a project that left no trail.
-      await recordActivity(ctx, {
-        action: "updated",
-        entityType: "project",
-        entityId: projectId,
-        entityLabel: `${code?.toUpperCase() ?? current.code} - ${rest.name ?? current.name}`,
-      });
+          const managerId = rest.managerId;
+          yield* attempt(() =>
+            runBatch([
+              // Workbook commits use the same transaction-scoped lock. Keeping all
+              // project edits behind it prevents a calendar edit from landing between
+              // a workbook's final state guard and its writes.
+              db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${projectId}, 0))`),
+              db
+                .update(project)
+                .set({
+                  ...rest,
+                  ...(code ? { code: code.toUpperCase() } : {}),
+                })
+                .where(eq(project.id, projectId)),
+              ...(managerId && nextManagerRole === "user"
+                ? [
+                    db
+                      .insert(projectMember)
+                      .values({ projectId, userId: managerId })
+                      .onConflictDoNothing(),
+                  ]
+                : []),
+            ]),
+          );
 
-      return { success: true };
-    }),
+          // create, delete and setMembers all record themselves; this one did not,
+          // so editing a project was the one change to a project that left no trail.
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: "updated",
+              entityType: "project",
+              entityId: projectId,
+              entityLabel: `${code?.toUpperCase() ?? current.code} - ${rest.name ?? current.name}`,
+            }),
+          );
+
+          return { success: true };
+        }),
+      ),
+    ),
 
   setHiddenModules: companyPermissionProcedure("project:update")
     .input(
@@ -690,40 +728,50 @@ export const projectRouter = router({
         hiddenModules: z.array(z.enum(PROJECT_MODULE_KEYS)).max(PROJECT_MODULE_KEYS.length),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      await assertProjectWritable(ctx, input.projectId);
-      const [current] = await db
-        .select({
-          code: project.code,
-          name: project.name,
-          hiddenModules: project.hiddenModules,
-        })
-        .from(project)
-        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
-      if (!current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectWritable(ctx, input.projectId));
+          const [current] = yield* attempt(() =>
+            db
+              .select({
+                code: project.code,
+                name: project.name,
+                hiddenModules: project.hiddenModules,
+              })
+              .from(project)
+              .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId))),
+          );
+          if (!current) {
+            return yield* fail("NOT_FOUND", ctx.t.project.notFound);
+          }
 
-      const previous = normalizeHiddenProjectModules(current.hiddenModules);
-      const hiddenModules = normalizeHiddenProjectModules(input.hiddenModules);
-      if (previous.join("|") === hiddenModules.join("|")) {
-        return { changed: false, hiddenModules };
-      }
+          const previous = normalizeHiddenProjectModules(current.hiddenModules);
+          const hiddenModules = normalizeHiddenProjectModules(input.hiddenModules);
+          if (previous.join("|") === hiddenModules.join("|")) {
+            return { changed: false, hiddenModules };
+          }
 
-      await db
-        .update(project)
-        .set({ hiddenModules })
-        .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId)));
-      await recordActivity(ctx, {
-        action: "visibility_changed",
-        entityType: "project",
-        entityId: input.projectId,
-        entityLabel: `${current.code} - ${current.name}`,
-        detail: hiddenModules.join(",") || "none",
-      });
+          yield* attempt(() =>
+            db
+              .update(project)
+              .set({ hiddenModules })
+              .where(and(eq(project.id, input.projectId), eq(project.companyId, ctx.companyId))),
+          );
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: "visibility_changed",
+              entityType: "project",
+              entityId: input.projectId,
+              entityLabel: `${current.code} - ${current.name}`,
+              detail: hiddenModules.join(",") || "none",
+            }),
+          );
 
-      return { changed: true, hiddenModules };
-    }),
+          return { changed: true, hiddenModules };
+        }),
+      ),
+    ),
 
   /**
    * Tickets cascade, but that is a lot of history to lose by accident, so
@@ -731,47 +779,50 @@ export const projectRouter = router({
    */
   delete: companyPermissionProcedure("project:delete")
     .input(z.object({ id: z.string().min(1), force: z.boolean().default(false) }))
-    .mutation(async ({ ctx, input }) => {
-      // Read the label before deleting — after the row is gone there is nothing
-      // left to name it with, and that is the row the audit trail most needs.
-      const [target] = await db
-        .select({ code: project.code, name: project.name })
-        .from(project)
-        .where(and(eq(project.id, input.id), eq(project.companyId, ctx.companyId)));
-      if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.notFound });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          // Read the label before deleting — after the row is gone there is nothing
+          // left to name it with, and that is the row the audit trail most needs.
+          const [target] = yield* attempt(() =>
+            db
+              .select({ code: project.code, name: project.name })
+              .from(project)
+              .where(and(eq(project.id, input.id), eq(project.companyId, ctx.companyId))),
+          );
+          if (!target) {
+            return yield* fail("NOT_FOUND", ctx.t.project.notFound);
+          }
 
-      const [tickets] = await db
-        .select({ value: count() })
-        .from(ticket)
-        .where(eq(ticket.projectId, input.id));
+          const [tickets] = yield* attempt(() =>
+            db
+              .select({ value: count() })
+              .from(ticket)
+              .where(eq(ticket.projectId, input.id)),
+          );
 
-      const ticketCount = tickets?.value ?? 0;
+          const ticketCount = tickets?.value ?? 0;
 
-      if (!input.force && ticketCount > 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: plural(ctx.t.project.deleteHasTickets, ticketCount),
-        });
-      }
+          if (!input.force && ticketCount > 0) {
+            return yield* fail("BAD_REQUEST", plural(ctx.t.project.deleteHasTickets, ticketCount));
+          }
 
-      await db.delete(project).where(eq(project.id, input.id));
+          yield* attempt(() => db.delete(project).where(eq(project.id, input.id)));
 
-      await recordActivity(ctx, {
-        action: "deleted",
-        entityType: "project",
-        entityId: input.id,
-        entityLabel: `${target.code} - ${target.name}`,
-      });
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: "deleted",
+              entityType: "project",
+              entityId: input.id,
+              entityLabel: `${target.code} - ${target.name}`,
+            }),
+          );
 
-      return { success: true, deletedTickets: ticketCount };
-    }),
+          return { success: true, deletedTickets: ticketCount };
+        }),
+      ),
+    ),
 
-  /**
-   * Bulk counterpart of delete. Scoping shares the where clause with the id
-   * filter so a cross-tenant id is simply not matched.
-   */
   /**
    * File a project away, or bring it back.
    *
@@ -791,33 +842,47 @@ export const projectRouter = router({
         archived: z.boolean(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      // Scoped in the same statement as the id filter, like deleteMany: an id
-      // from another company is simply not matched, never reported as refused.
-      const targets = await db
-        .select({ id: project.id, code: project.code, name: project.name })
-        .from(project)
-        .where(and(inArray(project.id, input.ids), eq(project.companyId, ctx.companyId)));
-      if (targets.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.noneFound });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          // Scoped in the same statement as the id filter, like deleteMany: an id
+          // from another company is simply not matched, never reported as refused.
+          const targets = yield* attempt(() =>
+            db
+              .select({ id: project.id, code: project.code, name: project.name })
+              .from(project)
+              .where(and(inArray(project.id, input.ids), eq(project.companyId, ctx.companyId))),
+          );
+          if (targets.length === 0) {
+            return yield* fail("NOT_FOUND", ctx.t.project.noneFound);
+          }
 
-      const ids = targets.map((row) => row.id);
-      await db
-        .update(project)
-        .set({ archivedAt: input.archived ? new Date() : null })
-        .where(inArray(project.id, ids));
+          const ids = targets.map((row) => row.id);
+          yield* attempt(() =>
+            db
+              .update(project)
+              .set({ archivedAt: input.archived ? new Date() : null })
+              .where(inArray(project.id, ids)),
+          );
 
-      await recordActivities(ctx, targets.map((target) => ({
-        action: input.archived ? "archived" : "restored",
-        entityType: "project",
-        entityId: target.id,
-        entityLabel: `${target.code} - ${target.name}`,
-      })));
+          yield* attempt(() =>
+            recordActivities(ctx, targets.map((target) => ({
+              action: input.archived ? "archived" : "restored",
+              entityType: "project",
+              entityId: target.id,
+              entityLabel: `${target.code} - ${target.name}`,
+            }))),
+          );
 
-      return { success: true, count: targets.length };
-    }),
+          return { success: true, count: targets.length };
+        }),
+      ),
+    ),
 
+  /**
+   * Bulk counterpart of delete. Scoping shares the where clause with the id
+   * filter so a cross-tenant id is simply not matched.
+   */
   deleteMany: companyPermissionProcedure("project:delete")
     .input(
       z.object({
@@ -825,68 +890,88 @@ export const projectRouter = router({
         force: z.boolean().default(false),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const targets = await db
-        .select({ id: project.id, code: project.code, name: project.name })
-        .from(project)
-        .where(and(inArray(project.id, input.ids), eq(project.companyId, ctx.companyId)));
-      if (targets.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.project.noneFound });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const targets = yield* attempt(() =>
+            db
+              .select({ id: project.id, code: project.code, name: project.name })
+              .from(project)
+              .where(and(inArray(project.id, input.ids), eq(project.companyId, ctx.companyId))),
+          );
+          if (targets.length === 0) {
+            return yield* fail("NOT_FOUND", ctx.t.project.noneFound);
+          }
 
-      const ids = targets.map((row) => row.id);
+          const ids = targets.map((row) => row.id);
 
-      const [tickets] = await db
-        .select({ value: count() })
-        .from(ticket)
-        .where(inArray(ticket.projectId, ids));
+          const [tickets] = yield* attempt(() =>
+            db
+              .select({ value: count() })
+              .from(ticket)
+              .where(inArray(ticket.projectId, ids)),
+          );
 
-      const ticketCount = tickets?.value ?? 0;
+          const ticketCount = tickets?.value ?? 0;
 
-      if (!input.force && ticketCount > 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: plural(ctx.t.project.bulkDeleteHasTickets, ticketCount),
-        });
-      }
+          if (!input.force && ticketCount > 0) {
+            return yield* fail(
+              "BAD_REQUEST",
+              plural(ctx.t.project.bulkDeleteHasTickets, ticketCount),
+            );
+          }
 
-      await db.delete(project).where(inArray(project.id, ids));
+          yield* attempt(() => db.delete(project).where(inArray(project.id, ids)));
 
-      await recordActivities(ctx, targets.map((target) => ({
-        action: "deleted",
-        entityType: "project",
-        entityId: target.id,
-        entityLabel: `${target.code} - ${target.name}`,
-      })));
+          yield* attempt(() =>
+            recordActivities(ctx, targets.map((target) => ({
+              action: "deleted",
+              entityType: "project",
+              entityId: target.id,
+              entityLabel: `${target.code} - ${target.name}`,
+            }))),
+          );
 
-      return {
-        success: true,
-        count: targets.length,
-        deletedTickets: ticketCount,
-      };
-    }),
+          return {
+            success: true,
+            count: targets.length,
+            deletedTickets: ticketCount,
+          };
+        }),
+      ),
+    ),
 
   /** Who currently sees this project — for the project's Team tab. */
   listMembers: companyPermissionProcedure("member:manage")
     .input(z.object({ projectId: z.string().min(1) }))
-    .query(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
-      return db
-        .select({ id: user.id, name: user.name, email: user.email })
-        .from(projectMember)
-        .innerJoin(user, eq(user.id, projectMember.userId))
-        .where(eq(projectMember.projectId, input.projectId))
-        .orderBy(asc(user.name));
-    }),
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectAccess(ctx, input.projectId));
+          return yield* attempt(() =>
+            db
+              .select({ id: user.id, name: user.name, email: user.email })
+              .from(projectMember)
+              .innerJoin(user, eq(user.id, projectMember.userId))
+              .where(eq(projectMember.projectId, input.projectId))
+              .orderBy(asc(user.name)),
+          );
+        }),
+      ),
+    ),
 
   /** Company Users eligible to be assigned to a project — feeds the picker. */
-  memberOptions: companyPermissionProcedure("member:manage").query(async ({ ctx }) => {
-    return db
-      .select({ id: user.id, name: user.name, email: user.email })
-      .from(user)
-      .where(and(eq(user.companyId, ctx.companyId), eq(user.role, "user"), eq(user.banned, false)))
-      .orderBy(asc(user.name));
-  }),
+  memberOptions: companyPermissionProcedure("member:manage").query(({ ctx }) =>
+    runProcedure(
+      attempt(() =>
+        db
+          .select({ id: user.id, name: user.name, email: user.email })
+          .from(user)
+          .where(and(eq(user.companyId, ctx.companyId), eq(user.role, "user"), eq(user.banned, false)))
+          .orderBy(asc(user.name)),
+      ),
+    ),
+  ),
 
   /**
    * Replaces a project's member list wholesale. Two idempotent statements
@@ -895,82 +980,96 @@ export const projectRouter = router({
    */
   setMembers: companyPermissionProcedure("member:manage")
     .input(z.object({ projectId: z.string().min(1), userIds: z.array(z.string().min(1)).max(200) }))
-    .mutation(async ({ ctx, input }) => {
-      await assertProjectWritable(ctx, input.projectId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectWritable(ctx, input.projectId));
 
-      const [managedProject] = await db
-        .select({
-          managerBanned: user.banned,
-          managerCompanyId: user.companyId,
-          managerId: project.managerId,
-          managerRole: user.role,
-        })
-        .from(project)
-        .leftJoin(user, eq(project.managerId, user.id))
-        .where(eq(project.id, input.projectId));
-
-      const effectiveIds = new Set(input.userIds);
-      if (
-        managedProject?.managerId &&
-        managedProject.managerRole === "user" &&
-        managedProject.managerCompanyId === ctx.companyId &&
-        managedProject.managerBanned === false
-      ) {
-        effectiveIds.add(managedProject.managerId);
-      }
-      const uniqueIds = [...effectiveIds];
-      if (uniqueIds.length > 0) {
-        const eligible = await db
-          .select({ id: user.id })
-          .from(user)
-          .where(
-            and(
-              inArray(user.id, uniqueIds),
-              eq(user.companyId, ctx.companyId),
-              eq(user.role, "user"),
-              eq(user.banned, false),
-            ),
+          const [managedProject] = yield* attempt(() =>
+            db
+              .select({
+                managerBanned: user.banned,
+                managerCompanyId: user.companyId,
+                managerId: project.managerId,
+                managerRole: user.role,
+              })
+              .from(project)
+              .leftJoin(user, eq(project.managerId, user.id))
+              .where(eq(project.id, input.projectId)),
           );
-        if (eligible.length !== uniqueIds.length) {
-          throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.someNotFound });
-        }
-      }
 
-      await runBatch([
-        db
-          .delete(projectMember)
-          .where(
-            uniqueIds.length > 0
-              ? and(
-                  eq(projectMember.projectId, input.projectId),
-                  notInArray(projectMember.userId, uniqueIds),
-                )
-              : eq(projectMember.projectId, input.projectId),
-          ),
-        ...(uniqueIds.length > 0
-          ? [
+          const effectiveIds = new Set(input.userIds);
+          if (
+            managedProject?.managerId &&
+            managedProject.managerRole === "user" &&
+            managedProject.managerCompanyId === ctx.companyId &&
+            managedProject.managerBanned === false
+          ) {
+            effectiveIds.add(managedProject.managerId);
+          }
+          const uniqueIds = [...effectiveIds];
+          if (uniqueIds.length > 0) {
+            const eligible = yield* attempt(() =>
               db
-                .insert(projectMember)
-                .values(uniqueIds.map((userId) => ({ projectId: input.projectId, userId })))
-                .onConflictDoNothing(),
-            ]
-          : []),
-      ]);
+                .select({ id: user.id })
+                .from(user)
+                .where(
+                  and(
+                    inArray(user.id, uniqueIds),
+                    eq(user.companyId, ctx.companyId),
+                    eq(user.role, "user"),
+                    eq(user.banned, false),
+                  ),
+                ),
+            );
+            if (eligible.length !== uniqueIds.length) {
+              return yield* fail("NOT_FOUND", ctx.t.user.someNotFound);
+            }
+          }
 
-      const [target] = await db
-        .select({ code: project.code, name: project.name })
-        .from(project)
-        .where(eq(project.id, input.projectId));
-      if (target) {
-        await recordActivity(ctx, {
-          action: "assigned",
-          entityType: "project",
-          entityId: input.projectId,
-          entityLabel: `${target.code} - ${target.name}`,
-          detail: `${uniqueIds.length} member(s)`,
-        });
-      }
+          yield* attempt(() =>
+            runBatch([
+              db
+                .delete(projectMember)
+                .where(
+                  uniqueIds.length > 0
+                    ? and(
+                        eq(projectMember.projectId, input.projectId),
+                        notInArray(projectMember.userId, uniqueIds),
+                      )
+                    : eq(projectMember.projectId, input.projectId),
+                ),
+              ...(uniqueIds.length > 0
+                ? [
+                    db
+                      .insert(projectMember)
+                      .values(uniqueIds.map((userId) => ({ projectId: input.projectId, userId })))
+                      .onConflictDoNothing(),
+                  ]
+                : []),
+            ]),
+          );
 
-      return { success: true };
-    }),
+          const [target] = yield* attempt(() =>
+            db
+              .select({ code: project.code, name: project.name })
+              .from(project)
+              .where(eq(project.id, input.projectId)),
+          );
+          if (target) {
+            yield* attempt(() =>
+              recordActivity(ctx, {
+                action: "assigned",
+                entityType: "project",
+                entityId: input.projectId,
+                entityLabel: `${target.code} - ${target.name}`,
+                detail: `${uniqueIds.length} member(s)`,
+              }),
+            );
+          }
+
+          return { success: true };
+        }),
+      ),
+    ),
 });

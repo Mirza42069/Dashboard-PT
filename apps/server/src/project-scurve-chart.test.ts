@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { PDFDocument } from "pdf-lib";
 
 import { projectWorkbookFilename } from "./export-format";
 import { renderProjectSCurveChart } from "./project-scurve-chart";
@@ -13,7 +14,7 @@ describe("project spreadsheet presentation", () => {
     );
   });
 
-  test("renders the S-curve as a valid 1200 by 600 PNG", () => {
+  test("renders the S-curve as a valid 1200 by 600 PNG", async () => {
     const png = renderProjectSCurveChart([
       { planned: 5, actual: 4, isCurrent: false },
       { planned: 30, actual: 24, isCurrent: true },
@@ -26,5 +27,8 @@ describe("project spreadsheet presentation", () => {
     expect(view.getUint32(16)).toBe(1200);
     expect(view.getUint32(20)).toBe(600);
     expect(png.byteLength).toBeGreaterThan(1_000);
+    const pdf = await PDFDocument.create();
+    const image = await pdf.embedPng(png);
+    expect([image.width, image.height]).toEqual([1200, 600]);
   });
 });

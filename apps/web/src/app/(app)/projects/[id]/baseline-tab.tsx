@@ -36,7 +36,7 @@ import {
   scheduleRows,
   sectionAmount,
   totalLeafWeight,
-} from "@/lib/boq/curves";
+} from "@DashboardV2/api/lib/curves";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 

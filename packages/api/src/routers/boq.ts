@@ -12,6 +12,7 @@ import {
   reportingPeriod,
 } from "@DashboardV2/db/schema";
 import { TRPCError } from "@trpc/server";
+import { Effect } from "effect";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import z from "zod";
 
@@ -32,6 +33,7 @@ import {
   serializeItem,
   serializeVersion,
 } from "../lib/boq";
+import { attempt, catchConflict, fail, runProcedure } from "../lib/effect";
 import {
   formatNumber,
   interpolate,
@@ -146,47 +148,62 @@ export const boqRouter = router({
    */
   overview: companyPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1), versionId: z.string().min(1).optional() }))
-    .query(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectAccess(ctx, input.projectId));
 
-      const versions = await db
-        .select()
-        .from(boqVersion)
-        .where(eq(boqVersion.projectId, input.projectId))
-        .orderBy(desc(boqVersion.versionNo));
+          const versions = yield* attempt(() =>
+            db
+              .select()
+              .from(boqVersion)
+              .where(eq(boqVersion.projectId, input.projectId))
+              .orderBy(desc(boqVersion.versionNo)),
+          );
 
-      const current = input.versionId
-        ? versions.find((row) => row.id === input.versionId)
-        : (versions.find((row) => row.status === "draft") ??
-          versions.find((row) => row.status === "active") ??
-          versions[0]);
-      if (input.versionId && !current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.versionNotFound });
-      }
-      if (!current) {
-        return { version: null, items: [] };
-      }
+          const versionId = input.versionId;
+          const current = versionId
+            ? versions.find((row) => row.id === versionId)
+            : (versions.find((row) => row.status === "draft") ??
+              versions.find((row) => row.status === "active") ??
+              versions[0]);
+          if (versionId && !current) {
+            return yield* fail("NOT_FOUND", ctx.t.boq.versionNotFound);
+          }
+          if (!current) {
+            return { version: null, items: [] };
+          }
 
-      const items = await db
-        .select()
-        .from(boqItem)
-        .where(and(eq(boqItem.boqVersionId, current.id), isNull(boqItem.deletedAt)))
-        .orderBy(asc(boqItem.sortOrder), asc(boqItem.code));
+          const items = yield* attempt(() =>
+            db
+              .select()
+              .from(boqItem)
+              .where(and(eq(boqItem.boqVersionId, current.id), isNull(boqItem.deletedAt)))
+              .orderBy(asc(boqItem.sortOrder), asc(boqItem.code)),
+          );
 
-      return { version: serializeVersion(current), items: items.map(serializeItem) };
-    }),
+          return { version: serializeVersion(current), items: items.map(serializeItem) };
+        }),
+      ),
+    ),
 
   listVersions: companyPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1) }))
-    .query(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
-      const versions = await db
-        .select()
-        .from(boqVersion)
-        .where(eq(boqVersion.projectId, input.projectId))
-        .orderBy(desc(boqVersion.versionNo));
-      return versions.map(serializeVersion);
-    }),
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectAccess(ctx, input.projectId));
+          const versions = yield* attempt(() =>
+            db
+              .select()
+              .from(boqVersion)
+              .where(eq(boqVersion.projectId, input.projectId))
+              .orderBy(desc(boqVersion.versionNo)),
+          );
+          return versions.map(serializeVersion);
+        }),
+      ),
+    ),
 
   /**
    * Opens the BoQ for editing. An active baseline is deep-cloned so edits never
@@ -194,171 +211,199 @@ export const boqRouter = router({
    */
   getOrCreateDraft: companyPermissionProcedure("project:write")
     .input(z.object({ projectId: z.string().min(1), title: z.string().trim().max(200).optional() }))
-    .mutation(async ({ ctx, input }) => {
-      await assertProjectWritable(ctx, input.projectId);
-      const label = await projectLabel(ctx.t, ctx.companyId, input.projectId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectWritable(ctx, input.projectId));
+          const label = yield* attempt(() => projectLabel(ctx.t, ctx.companyId, input.projectId));
 
-      const [existing] = await db
-        .select()
-        .from(boqVersion)
-        .where(and(eq(boqVersion.projectId, input.projectId), eq(boqVersion.status, "draft")))
-        .orderBy(desc(boqVersion.versionNo))
-        .limit(1);
+          const [existing] = yield* attempt(() =>
+            db
+              .select()
+              .from(boqVersion)
+              .where(and(eq(boqVersion.projectId, input.projectId), eq(boqVersion.status, "draft")))
+              .orderBy(desc(boqVersion.versionNo))
+              .limit(1),
+          );
 
-      if (existing) return { version: serializeVersion(existing) };
+          if (existing) return { version: serializeVersion(existing) };
 
-      const versions = await db
-        .select()
-        .from(boqVersion)
-        .where(eq(boqVersion.projectId, input.projectId))
-        .orderBy(desc(boqVersion.versionNo));
+          const versions = yield* attempt(() =>
+            db
+              .select()
+              .from(boqVersion)
+              .where(eq(boqVersion.projectId, input.projectId))
+              .orderBy(desc(boqVersion.versionNo)),
+          );
 
-      const versionNo = (versions[0]?.versionNo ?? 0) + 1;
-      const active = versions.find((version) => version.status === "active");
-      const versionId = crypto.randomUUID();
+          const versionNo = (versions[0]?.versionNo ?? 0) + 1;
+          const active = versions.find((version) => version.status === "active");
+          const versionId = crypto.randomUUID();
 
-      if (!active) {
-        const [created] = await db
-          .insert(boqVersion)
-          .values({
-            id: versionId,
-            projectId: input.projectId,
-            versionNo,
-            title: input.title ?? `Rev ${versionNo}`,
-            status: "draft",
-          })
-          .returning();
-
-        if (!created) {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: ctx.t.boq.couldNotCreate });
-        }
-
-        await recordActivity(ctx, {
-          action: "created",
-          entityType: "boq",
-          entityId: created.id,
-          entityLabel: label,
-          detail: created.title,
-        });
-        return { version: serializeVersion(created) };
-      }
-
-      const sourceItems = await db
-        .select()
-        .from(boqItem)
-        .where(and(eq(boqItem.boqVersionId, active.id), isNull(boqItem.deletedAt)))
-        .orderBy(asc(boqItem.sortOrder));
-      const sourceIds = sourceItems.map((item) => item.id);
-      const [sourceDistribution, sourceProgress] =
-        sourceIds.length === 0
-          ? [[], []]
-          : await Promise.all([
+          if (!active) {
+            const [created] = yield* attempt(() =>
               db
-                .select()
-                .from(boqItemDistribution)
-                .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
-                .where(eq(boqItem.boqVersionId, active.id)),
-              db
-                .select()
-                .from(progressEntry)
-                .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
-                .where(eq(boqItem.boqVersionId, active.id)),
-            ]);
+                .insert(boqVersion)
+                .values({
+                  id: versionId,
+                  projectId: input.projectId,
+                  versionNo,
+                  title: input.title ?? `Rev ${versionNo}`,
+                  status: "draft",
+                })
+                .returning(),
+            );
 
-      const itemIds = new Map(sourceItems.map((item) => [item.id, crypto.randomUUID()]));
-      const statements: Parameters<typeof runBatch>[0] = [
-        db.insert(boqVersion).values({
-          id: versionId,
-          projectId: input.projectId,
-          versionNo,
-          sourceVersionId: active.id,
-          title: input.title ?? `Rev ${versionNo}`,
-          status: "draft",
-          scheduleStatus: "draft",
+            if (!created) {
+              return yield* fail("INTERNAL_SERVER_ERROR", ctx.t.boq.couldNotCreate);
+            }
+
+            yield* attempt(() =>
+              recordActivity(ctx, {
+                action: "created",
+                entityType: "boq",
+                entityId: created.id,
+                entityLabel: label,
+                detail: created.title,
+              }),
+            );
+            return { version: serializeVersion(created) };
+          }
+
+          const sourceItems = yield* attempt(() =>
+            db
+              .select()
+              .from(boqItem)
+              .where(and(eq(boqItem.boqVersionId, active.id), isNull(boqItem.deletedAt)))
+              .orderBy(asc(boqItem.sortOrder)),
+          );
+          const sourceIds = sourceItems.map((item) => item.id);
+          const [sourceDistribution, sourceProgress] = yield* (sourceIds.length === 0
+            ? Effect.succeed([[], []])
+            : Effect.all([
+                attempt(() =>
+                  db
+                    .select()
+                    .from(boqItemDistribution)
+                    .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
+                    .where(eq(boqItem.boqVersionId, active.id)),
+                ),
+                attempt(() =>
+                  db
+                    .select()
+                    .from(progressEntry)
+                    .innerJoin(boqItem, eq(boqItem.id, progressEntry.boqItemId))
+                    .where(eq(boqItem.boqVersionId, active.id)),
+                ),
+              ], { concurrency: "unbounded" }));
+
+          const itemIds = new Map(sourceItems.map((item) => [item.id, crypto.randomUUID()]));
+          const statements: Parameters<typeof runBatch>[0] = [
+            db.insert(boqVersion).values({
+              id: versionId,
+              projectId: input.projectId,
+              versionNo,
+              sourceVersionId: active.id,
+              title: input.title ?? `Rev ${versionNo}`,
+              status: "draft",
+              scheduleStatus: "draft",
+            }),
+          ];
+
+          if (sourceItems.length > 0) {
+            statements.push(
+              db.insert(boqItem).values(
+                sourceItems.map((item) => ({
+                  id: itemIds.get(item.id)!,
+                  boqVersionId: versionId,
+                  lineageId: item.lineageId,
+                  parentId: item.parentId ? (itemIds.get(item.parentId) ?? null) : null,
+                  code: item.code,
+                  description: item.description,
+                  unit: item.unit,
+                  quantity: item.quantity,
+                  unitRate: item.unitRate,
+                  weight: item.weight,
+                  weightSource: item.weightSource,
+                  distribution: item.distribution,
+                  progressMode: item.progressMode,
+                  plannedStartPeriodIndex: item.plannedStartPeriodIndex,
+                  plannedFinishPeriodIndex: item.plannedFinishPeriodIndex,
+                  sortOrder: item.sortOrder,
+                })),
+              ),
+            );
+          }
+
+          if (sourceDistribution.length > 0) {
+            statements.push(
+              db.insert(boqItemDistribution).values(
+                sourceDistribution.map(({ boq_item_distribution: cell }) => ({
+                  boqItemId: itemIds.get(cell.boqItemId)!,
+                  periodId: cell.periodId,
+                  plannedPct: cell.plannedPct,
+                })),
+              ),
+            );
+          }
+
+          if (sourceProgress.length > 0) {
+            statements.push(
+              db.insert(progressEntry).values(
+                sourceProgress.map(({ progress_entry: entry }) => ({
+                  projectId: entry.projectId,
+                  periodId: entry.periodId,
+                  boqItemId: itemIds.get(entry.boqItemId)!,
+                  cumulativeQuantity: entry.cumulativeQuantity,
+                  cumulativePercent: entry.cumulativePercent,
+                  pctComplete: entry.pctComplete,
+                  noProgress: entry.noProgress,
+                  note: entry.note,
+                  recordedById: entry.recordedById,
+                })),
+              ),
+            );
+          }
+
+          yield* attempt(() => runBatch(statements));
+          const created = yield* attempt(() => getWritableVersion(ctx, versionId));
+
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: "created",
+              entityType: "boq",
+              entityId: created.id,
+              entityLabel: label,
+              detail: created.title,
+            }),
+          );
+
+          return { version: serializeVersion(created) };
         }),
-      ];
-
-      if (sourceItems.length > 0) {
-        statements.push(
-          db.insert(boqItem).values(
-            sourceItems.map((item) => ({
-              id: itemIds.get(item.id)!,
-              boqVersionId: versionId,
-              lineageId: item.lineageId,
-              parentId: item.parentId ? (itemIds.get(item.parentId) ?? null) : null,
-              code: item.code,
-              description: item.description,
-              unit: item.unit,
-              quantity: item.quantity,
-              unitRate: item.unitRate,
-              weight: item.weight,
-              weightSource: item.weightSource,
-              distribution: item.distribution,
-              progressMode: item.progressMode,
-              plannedStartPeriodIndex: item.plannedStartPeriodIndex,
-              plannedFinishPeriodIndex: item.plannedFinishPeriodIndex,
-              sortOrder: item.sortOrder,
-            })),
-          ),
-        );
-      }
-
-      if (sourceDistribution.length > 0) {
-        statements.push(
-          db.insert(boqItemDistribution).values(
-            sourceDistribution.map(({ boq_item_distribution: cell }) => ({
-              boqItemId: itemIds.get(cell.boqItemId)!,
-              periodId: cell.periodId,
-              plannedPct: cell.plannedPct,
-            })),
-          ),
-        );
-      }
-
-      if (sourceProgress.length > 0) {
-        statements.push(
-          db.insert(progressEntry).values(
-            sourceProgress.map(({ progress_entry: entry }) => ({
-              projectId: entry.projectId,
-              periodId: entry.periodId,
-              boqItemId: itemIds.get(entry.boqItemId)!,
-              cumulativeQuantity: entry.cumulativeQuantity,
-              cumulativePercent: entry.cumulativePercent,
-              pctComplete: entry.pctComplete,
-              noProgress: entry.noProgress,
-              note: entry.note,
-              recordedById: entry.recordedById,
-            })),
-          ),
-        );
-      }
-
-      await runBatch(statements);
-      const created = await getWritableVersion(ctx, versionId);
-
-      await recordActivity(ctx, {
-        action: "created",
-        entityType: "boq",
-        entityId: created.id,
-        entityLabel: label,
-        detail: created.title,
-      });
-
-      return { version: serializeVersion(created) };
-    }),
+      ),
+    ),
 
   /** Redistributes derived weights by value. Draft only. */
   recalcWeights: companyPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1) }))
-    .mutation(async ({ ctx, input }) => {
-      const draft = await requireDraft(ctx, input.versionId);
-      await runDraftMutation(ctx.t, draft.projectId, input.versionId, [
-        db.execute(recalcWeightsStatement(input.versionId)),
-        db.execute(refreshTotalValueStatement(input.versionId)),
-      ]);
-      const version = await getWritableVersion(ctx, input.versionId);
-      return { version: serializeVersion(version), weightTotal: await leafWeightTotal(input.versionId) };
-    }),
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const draft = yield* attempt(() => requireDraft(ctx, input.versionId));
+          yield* attempt(() =>
+            runDraftMutation(ctx.t, draft.projectId, input.versionId, [
+              db.execute(recalcWeightsStatement(input.versionId)),
+              db.execute(refreshTotalValueStatement(input.versionId)),
+            ]),
+          );
+          const version = yield* attempt(() => getWritableVersion(ctx, input.versionId));
+          return {
+            version: serializeVersion(version),
+            weightTotal: yield* attempt(() => leafWeightTotal(input.versionId)),
+          };
+        }),
+      ),
+    ),
 
   /**
    * Baselines the BoQ.
@@ -368,193 +413,198 @@ export const boqRouter = router({
    */
   activate: companyPermissionProcedure("project:write")
     .input(z.object({ versionId: z.string().min(1) }))
-    .mutation(async ({ ctx, input }) => {
-      const draft = await getWritableVersion(ctx, input.versionId);
-      const activatable =
-        draft.scheduleStatus === "draft" &&
-        (draft.status === "draft" || draft.status === "active");
-      if (!activatable) {
-        throw new TRPCError({ code: "CONFLICT", message: ctx.t.boq.notEditableDraft });
-      }
-      await recalcWeights(input.versionId);
-      const total = await leafWeightTotal(input.versionId);
-      if (Math.abs(total - 100) > WEIGHT_TOLERANCE) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: interpolate(ctx.t.boq.weightsMustTotal, {
-            total: formatNumber(ctx.locale, total),
-          }),
-        });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const draft = yield* attempt(() => getWritableVersion(ctx, input.versionId));
+          const activatable =
+            draft.scheduleStatus === "draft" &&
+            (draft.status === "draft" || draft.status === "active");
+          if (!activatable) {
+            return yield* fail("CONFLICT", ctx.t.boq.notEditableDraft);
+          }
+          yield* attempt(() => recalcWeights(input.versionId));
+          const total = yield* attempt(() => leafWeightTotal(input.versionId));
+          if (Math.abs(total - 100) > WEIGHT_TOLERANCE) {
+            return yield* fail(
+              "CONFLICT",
+              interpolate(ctx.t.boq.weightsMustTotal, {
+                total: formatNumber(ctx.locale, total),
+              }),
+            );
+          }
 
-      const [periods, leaves, distribution] = await Promise.all([
-        db
-          .select({ id: reportingPeriod.id })
-          .from(reportingPeriod)
-          .where(eq(reportingPeriod.projectId, draft.projectId)),
-        db
-          .select({ id: boqItem.id })
-          .from(boqItem)
-          .where(
-            and(
-              eq(boqItem.boqVersionId, input.versionId),
-              isNull(boqItem.deletedAt),
-              leafPredicate("boq_item"),
+          const [periods, leaves, distribution] = yield* Effect.all([
+            attempt(() =>
+              db
+                .select({ id: reportingPeriod.id })
+                .from(reportingPeriod)
+                .where(eq(reportingPeriod.projectId, draft.projectId)),
             ),
-          ),
-        db
-          .select({ boqItemId: boqItemDistribution.boqItemId, plannedPct: boqItemDistribution.plannedPct })
-          .from(boqItemDistribution)
-          .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
-          .where(eq(boqItem.boqVersionId, input.versionId)),
-      ]);
-      if (periods.length === 0) {
-        throw new TRPCError({ code: "CONFLICT", message: ctx.t.schedule.generatePeriodsFirst });
-      }
-      if (leaves.length === 0) {
-        throw new TRPCError({ code: "CONFLICT", message: ctx.t.boq.noSchedulableLines });
-      }
-      const scheduleTotals = new Map<string, number>();
-      for (const cell of distribution) {
-        scheduleTotals.set(
-          cell.boqItemId,
-          (scheduleTotals.get(cell.boqItemId) ?? 0) + Number(cell.plannedPct),
-        );
-      }
-      const incomplete = leaves.filter(
-        (leaf) => Math.abs((scheduleTotals.get(leaf.id) ?? 0) - 100) > WEIGHT_TOLERANCE,
-      );
-      if (incomplete.length > 0) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: plural(ctx.t.boq.scheduleRowsIncomplete, incomplete.length),
-        });
-      }
+            attempt(() =>
+              db
+                .select({ id: boqItem.id })
+                .from(boqItem)
+                .where(
+                  and(
+                    eq(boqItem.boqVersionId, input.versionId),
+                    isNull(boqItem.deletedAt),
+                    leafPredicate("boq_item"),
+                  ),
+                ),
+            ),
+            attempt(() =>
+              db
+                .select({ boqItemId: boqItemDistribution.boqItemId, plannedPct: boqItemDistribution.plannedPct })
+                .from(boqItemDistribution)
+                .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
+                .where(eq(boqItem.boqVersionId, input.versionId)),
+            ),
+          ], { concurrency: "unbounded" });
+          if (periods.length === 0) {
+            return yield* fail("CONFLICT", ctx.t.schedule.generatePeriodsFirst);
+          }
+          if (leaves.length === 0) {
+            return yield* fail("CONFLICT", ctx.t.boq.noSchedulableLines);
+          }
+          const scheduleTotals = new Map<string, number>();
+          for (const cell of distribution) {
+            scheduleTotals.set(
+              cell.boqItemId,
+              (scheduleTotals.get(cell.boqItemId) ?? 0) + Number(cell.plannedPct),
+            );
+          }
+          const incomplete = leaves.filter(
+            (leaf) => Math.abs((scheduleTotals.get(leaf.id) ?? 0) - 100) > WEIGHT_TOLERANCE,
+          );
+          if (incomplete.length > 0) {
+            return yield* fail(
+              "CONFLICT",
+              plural(ctx.t.boq.scheduleRowsIncomplete, incomplete.length),
+            );
+          }
 
-      const now = new Date();
-      const statements: Parameters<typeof runBatch>[0] = [
-        db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${draft.projectId}, 0))`),
-        db.execute(recalcWeightsStatement(input.versionId)),
-        db.execute(refreshTotalValueStatement(input.versionId)),
-        db.execute(sql`
-          select 1 / case when
-            exists (
-              select 1 from reporting_period
-              where project_id = ${draft.projectId}
-            )
-            and exists (
-              select 1 from boq_item
-              where boq_version_id = ${input.versionId} and deleted_at is null
-                and not exists (
-                  select 1 from boq_item child
-                  where child.parent_id = boq_item.id and child.deleted_at is null
+          const now = new Date();
+          const statements: Parameters<typeof runBatch>[0] = [
+            db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${draft.projectId}, 0))`),
+            db.execute(recalcWeightsStatement(input.versionId)),
+            db.execute(refreshTotalValueStatement(input.versionId)),
+            db.execute(sql`
+              select 1 / case when
+                exists (
+                  select 1 from reporting_period
+                  where project_id = ${draft.projectId}
                 )
-            )
-            and not exists (
-              select 1 from boq_item item
-              where item.boq_version_id = ${input.versionId} and item.deleted_at is null
+                and exists (
+                  select 1 from boq_item
+                  where boq_version_id = ${input.versionId} and deleted_at is null
+                    and not exists (
+                      select 1 from boq_item child
+                      where child.parent_id = boq_item.id and child.deleted_at is null
+                    )
+                )
                 and not exists (
-                  select 1 from boq_item child
-                  where child.parent_id = item.id and child.deleted_at is null
+                  select 1 from boq_item item
+                  where item.boq_version_id = ${input.versionId} and item.deleted_at is null
+                    and not exists (
+                      select 1 from boq_item child
+                      where child.parent_id = item.id and child.deleted_at is null
+                    )
+                    and abs(coalesce((
+                      select sum(distribution.planned_pct)
+                      from boq_item_distribution distribution
+                      where distribution.boq_item_id = item.id
+                    ), 0) - 100) > ${WEIGHT_TOLERANCE}
                 )
                 and abs(coalesce((
-                  select sum(distribution.planned_pct)
-                  from boq_item_distribution distribution
-                  where distribution.boq_item_id = item.id
-                ), 0) - 100) > ${WEIGHT_TOLERANCE}
-            )
-            and abs(coalesce((
-              select sum(item.weight)
-              from boq_item item
-              where item.boq_version_id = ${input.versionId}
-                and item.deleted_at is null
-                and not exists (
-                  select 1 from boq_item child
-                  where child.parent_id = item.id and child.deleted_at is null
+                  select sum(item.weight)
+                  from boq_item item
+                  where item.boq_version_id = ${input.versionId}
+                    and item.deleted_at is null
+                    and not exists (
+                      select 1 from boq_item child
+                      where child.parent_id = item.id and child.deleted_at is null
+                    )
+                ), 0) - 100) <= ${WEIGHT_TOLERANCE}
+                and exists (
+                  select 1 from boq_version
+                  where id = ${input.versionId} and schedule_status = 'draft'
+                    and status in ('draft', 'active')
                 )
-            ), 0) - 100) <= ${WEIGHT_TOLERANCE}
-            and exists (
-              select 1 from boq_version
-              where id = ${input.versionId} and schedule_status = 'draft'
-                and status in ('draft', 'active')
-            )
-          then 1 else 0 end
-        `),
-      ];
+              then 1 else 0 end
+            `),
+          ];
 
-      statements.push(
-        db.execute(sql`
-          insert into progress_entry
-            (id, project_id, period_id, boq_item_id, cumulative_quantity,
-             cumulative_percent, pct_complete, no_progress, note, recorded_by_id)
-          select
-            md5(entry.id || ':' || target.id), entry.project_id, entry.period_id, target.id,
-            entry.cumulative_quantity, entry.cumulative_percent, entry.pct_complete,
-            entry.no_progress, entry.note, entry.recorded_by_id
-          from boq_version source_version
-          join boq_item source on source.boq_version_id = source_version.id
-          join boq_item target on target.boq_version_id = ${input.versionId}
-            and target.lineage_id = source.lineage_id
-          join progress_entry entry on entry.boq_item_id = source.id
-          where source_version.project_id = ${draft.projectId}
-            and source_version.status = 'active'
-            and source_version.id <> ${input.versionId}
-          on conflict (period_id, boq_item_id) do update set
-            cumulative_quantity = excluded.cumulative_quantity,
-            cumulative_percent = excluded.cumulative_percent,
-            pct_complete = excluded.pct_complete,
-            no_progress = excluded.no_progress,
-            note = excluded.note,
-            recorded_by_id = excluded.recorded_by_id,
-            updated_at = ${now}
-        `),
-        db
-          .update(boqVersion)
-          .set({ status: "superseded" })
-          .where(
-            and(
-              eq(boqVersion.projectId, draft.projectId),
-              eq(boqVersion.status, "active"),
-              sql`${boqVersion.id} <> ${input.versionId}`,
-            ),
-          ),
-      );
-      statements.push(
-        db
-          .update(boqVersion)
-          .set({
-            status: "active",
-            scheduleStatus: "active",
-            baselinedAt: now,
-            baselinedById: ctx.session.user.id,
-            scheduleBaselinedAt: now,
-            scheduleBaselinedById: ctx.session.user.id,
-          })
-          .where(eq(boqVersion.id, input.versionId)),
-      );
-      try {
-        await runBatch(statements);
-      } catch (error) {
-        if (databaseErrorIncludes(error, "division by zero")) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: ctx.t.boq.changedWhileActivating,
-          });
-        }
-        throw error;
-      }
-      const activated = await getWritableVersion(ctx, input.versionId);
+          statements.push(
+            db.execute(sql`
+              insert into progress_entry
+                (id, project_id, period_id, boq_item_id, cumulative_quantity,
+                 cumulative_percent, pct_complete, no_progress, note, recorded_by_id)
+              select
+                md5(entry.id || ':' || target.id), entry.project_id, entry.period_id, target.id,
+                entry.cumulative_quantity, entry.cumulative_percent, entry.pct_complete,
+                entry.no_progress, entry.note, entry.recorded_by_id
+              from boq_version source_version
+              join boq_item source on source.boq_version_id = source_version.id
+              join boq_item target on target.boq_version_id = ${input.versionId}
+                and target.lineage_id = source.lineage_id
+              join progress_entry entry on entry.boq_item_id = source.id
+              where source_version.project_id = ${draft.projectId}
+                and source_version.status = 'active'
+                and source_version.id <> ${input.versionId}
+              on conflict (period_id, boq_item_id) do update set
+                cumulative_quantity = excluded.cumulative_quantity,
+                cumulative_percent = excluded.cumulative_percent,
+                pct_complete = excluded.pct_complete,
+                no_progress = excluded.no_progress,
+                note = excluded.note,
+                recorded_by_id = excluded.recorded_by_id,
+                updated_at = ${now}
+            `),
+            db
+              .update(boqVersion)
+              .set({ status: "superseded" })
+              .where(
+                and(
+                  eq(boqVersion.projectId, draft.projectId),
+                  eq(boqVersion.status, "active"),
+                  sql`${boqVersion.id} <> ${input.versionId}`,
+                ),
+              ),
+          );
+          statements.push(
+            db
+              .update(boqVersion)
+              .set({
+                status: "active",
+                scheduleStatus: "active",
+                baselinedAt: now,
+                baselinedById: ctx.session.user.id,
+                scheduleBaselinedAt: now,
+                scheduleBaselinedById: ctx.session.user.id,
+              })
+              .where(eq(boqVersion.id, input.versionId)),
+          );
+          yield* catchConflict(attempt(() => runBatch(statements)), ctx.t.boq.changedWhileActivating);
+          const activated = yield* attempt(() => getWritableVersion(ctx, input.versionId));
 
-      await recordActivity(ctx, {
-        action: "baselined",
-        entityType: "boq",
-        entityId: activated.id,
-        entityLabel: await projectLabel(ctx.t, ctx.companyId, activated.projectId),
-        detail: `${activated.title} - BoQ and schedule`,
-      });
+          const activatedLabel = yield* attempt(() =>
+            projectLabel(ctx.t, ctx.companyId, activated.projectId),
+          );
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: "baselined",
+              entityType: "boq",
+              entityId: activated.id,
+              entityLabel: activatedLabel,
+              detail: `${activated.title} - BoQ and schedule`,
+            }),
+          );
 
-      return { version: serializeVersion(activated) };
-    }),
+          return { version: serializeVersion(activated) };
+        }),
+      ),
+    ),
 
   /**
    * The spreadsheet imports this project has seen — filename, who ran it, when,
@@ -563,29 +613,33 @@ export const boqRouter = router({
    */
   listImports: companyPermissionProcedure("project:read")
     .input(z.object({ projectId: z.string().min(1), limit: z.number().int().min(1).max(50).default(10) }))
-    .query(async ({ ctx, input }) => {
-      await assertProjectAccess(ctx, input.projectId);
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectAccess(ctx, input.projectId));
 
-      const rows = await db
-        .select({
-          id: boqImport.id,
-          filename: boqImport.filename,
-          sheetName: boqImport.sheetName,
-          importedByName: boqImport.importedByName,
-          status: boqImport.status,
-          rowsImported: boqImport.rowsImported,
-          errorCount: boqImport.errorCount,
-          createdAt: boqImport.createdAt,
-          versionNo: boqVersion.versionNo,
-        })
-        .from(boqImport)
-        .leftJoin(boqVersion, eq(boqVersion.id, boqImport.boqVersionId))
-        .where(eq(boqImport.projectId, input.projectId))
-        .orderBy(desc(boqImport.createdAt))
-        .limit(input.limit);
-
-      return rows;
-    }),
+          return yield* attempt(() =>
+            db
+              .select({
+                id: boqImport.id,
+                filename: boqImport.filename,
+                sheetName: boqImport.sheetName,
+                importedByName: boqImport.importedByName,
+                status: boqImport.status,
+                rowsImported: boqImport.rowsImported,
+                errorCount: boqImport.errorCount,
+                createdAt: boqImport.createdAt,
+                versionNo: boqVersion.versionNo,
+              })
+              .from(boqImport)
+              .leftJoin(boqVersion, eq(boqVersion.id, boqImport.boqVersionId))
+              .where(eq(boqImport.projectId, input.projectId))
+              .orderBy(desc(boqImport.createdAt))
+              .limit(input.limit),
+          );
+        }),
+      ),
+    ),
 
   /** Adds a section (no parentId) or a line under one. */
   createItem: companyPermissionProcedure("project:write")
@@ -595,98 +649,118 @@ export const boqRouter = router({
         parentId: z.string().min(1).nullish(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const version = await requireDraft(ctx, input.versionId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const version = yield* attempt(() => requireDraft(ctx, input.versionId));
 
-      const parentId = input.parentId ?? null;
-      if (parentId) {
-        const [parent] = await db
-          .select({ id: boqItem.id })
-          .from(boqItem)
-          .where(
-            and(
-              eq(boqItem.id, parentId),
-              eq(boqItem.boqVersionId, input.versionId),
-              isNull(boqItem.deletedAt),
-            ),
+          const parentId = input.parentId ?? null;
+          if (parentId) {
+            const [parent] = yield* attempt(() =>
+              db
+                .select({ id: boqItem.id })
+                .from(boqItem)
+                .where(
+                  and(
+                    eq(boqItem.id, parentId),
+                    eq(boqItem.boqVersionId, input.versionId),
+                    isNull(boqItem.deletedAt),
+                  ),
+                ),
+            );
+            if (!parent) {
+              return yield* fail("NOT_FOUND", ctx.t.boq.parentSectionNotFound);
+            }
+          }
+
+          yield* attempt(() =>
+            assertCodeFree(ctx.t, { versionId: input.versionId, parentId, code: input.code }),
           );
-        if (!parent) {
-          throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.boq.parentSectionNotFound });
-        }
-      }
 
-      await assertCodeFree(ctx.t, { versionId: input.versionId, parentId, code: input.code });
+          // New lines land at the bottom of their group.
+          const [last] = yield* attempt(() =>
+            db
+              .select({ value: sql<number | null>`max(${boqItem.sortOrder})` })
+              .from(boqItem)
+              .where(
+                and(
+                  eq(boqItem.boqVersionId, input.versionId),
+                  parentId === null ? isNull(boqItem.parentId) : eq(boqItem.parentId, parentId),
+                  isNull(boqItem.deletedAt),
+                ),
+              ),
+          );
 
-      // New lines land at the bottom of their group.
-      const [last] = await db
-        .select({ value: sql<number | null>`max(${boqItem.sortOrder})` })
-        .from(boqItem)
-        .where(
-          and(
-            eq(boqItem.boqVersionId, input.versionId),
-            parentId === null ? isNull(boqItem.parentId) : eq(boqItem.parentId, parentId),
-            isNull(boqItem.deletedAt),
-          ),
-        );
+          const itemId = crypto.randomUUID();
+          yield* attempt(() =>
+            runDraftMutation(ctx.t, version.projectId, input.versionId, [
+              ...(parentId ? [liveItemsGuard(input.versionId, [parentId])] : []),
+              db.insert(boqItem).values({
+                id: itemId,
+                boqVersionId: input.versionId,
+                parentId,
+                code: input.code,
+                description: input.description,
+                unit: input.unit ?? null,
+                quantity: input.quantity == null ? null : toQuantityString(input.quantity),
+                unitRate: input.unitRate == null ? null : toQuantityString(input.unitRate),
+                weight: input.weight == null ? "0" : input.weight.toFixed(6),
+                weightSource: input.weightSource,
+                distribution: input.distribution,
+                progressMode: input.progressMode,
+                sortOrder: Number(last?.value ?? 0) + 1,
+              }),
+            ]),
+          );
+          const [created] = yield* attempt(() => db.select().from(boqItem).where(eq(boqItem.id, itemId)));
 
-      const itemId = crypto.randomUUID();
-      await runDraftMutation(ctx.t, version.projectId, input.versionId, [
-        ...(parentId ? [liveItemsGuard(input.versionId, [parentId])] : []),
-        db.insert(boqItem).values({
-          id: itemId,
-          boqVersionId: input.versionId,
-          parentId,
-          code: input.code,
-          description: input.description,
-          unit: input.unit ?? null,
-          quantity: input.quantity == null ? null : toQuantityString(input.quantity),
-          unitRate: input.unitRate == null ? null : toQuantityString(input.unitRate),
-          weight: input.weight == null ? "0" : input.weight.toFixed(6),
-          weightSource: input.weightSource,
-          distribution: input.distribution,
-          progressMode: input.progressMode,
-          sortOrder: Number(last?.value ?? 0) + 1,
+          return { item: created ? serializeItem(created) : null };
         }),
-      ]);
-      const [created] = await db.select().from(boqItem).where(eq(boqItem.id, itemId));
-
-      return { item: created ? serializeItem(created) : null };
-    }),
+      ),
+    ),
 
   updateItem: companyPermissionProcedure("project:write")
     .input(itemSchema.partial().extend({ id: z.string().min(1) }))
-    .mutation(async ({ ctx, input }) => {
-      const current = await requireDraftForItem(ctx, input.id);
-      const version = await getWritableVersion(ctx, current.boqVersionId);
-      const { id, code, quantity, unitRate, weight, ...rest } = input;
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const current = yield* attempt(() => requireDraftForItem(ctx, input.id));
+          const version = yield* attempt(() => getWritableVersion(ctx, current.boqVersionId));
+          const { id, code, quantity, unitRate, weight, ...rest } = input;
 
-      if (code && code !== current.code) {
-        await assertCodeFree(ctx.t, {
-          versionId: current.boqVersionId,
-          parentId: current.parentId,
-          code,
-          exceptId: id,
-        });
-      }
+          if (code && code !== current.code) {
+            yield* attempt(() =>
+              assertCodeFree(ctx.t, {
+                versionId: current.boqVersionId,
+                parentId: current.parentId,
+                code,
+                exceptId: id,
+              }),
+            );
+          }
 
-      await runDraftMutation(ctx.t, version.projectId, current.boqVersionId, [
-        liveItemsGuard(current.boqVersionId, [id]),
-        db.update(boqItem).set({
-          ...rest,
-          ...(code ? { code } : {}),
-          ...(quantity !== undefined
-            ? { quantity: quantity === null ? null : toQuantityString(quantity) }
-            : {}),
-          ...(unitRate !== undefined
-            ? { unitRate: unitRate === null ? null : toQuantityString(unitRate) }
-            : {}),
-          ...(weight !== undefined && weight !== null ? { weight: weight.toFixed(6) } : {}),
-        }).where(eq(boqItem.id, id)),
-      ]);
+          yield* attempt(() =>
+            runDraftMutation(ctx.t, version.projectId, current.boqVersionId, [
+              liveItemsGuard(current.boqVersionId, [id]),
+              db.update(boqItem).set({
+                ...rest,
+                ...(code ? { code } : {}),
+                ...(quantity !== undefined
+                  ? { quantity: quantity === null ? null : toQuantityString(quantity) }
+                  : {}),
+                ...(unitRate !== undefined
+                  ? { unitRate: unitRate === null ? null : toQuantityString(unitRate) }
+                  : {}),
+                ...(weight !== undefined && weight !== null ? { weight: weight.toFixed(6) } : {}),
+              }).where(eq(boqItem.id, id)),
+            ]),
+          );
 
-      const [updated] = await db.select().from(boqItem).where(eq(boqItem.id, id));
-      return { item: updated ? serializeItem(updated) : null };
-    }),
+          const [updated] = yield* attempt(() => db.select().from(boqItem).where(eq(boqItem.id, id)));
+          return { item: updated ? serializeItem(updated) : null };
+        }),
+      ),
+    ),
 
   /**
    * Soft delete, cascading down the tree in one statement — removing a section
@@ -695,49 +769,48 @@ export const boqRouter = router({
    */
   deleteItem: companyPermissionProcedure("project:write")
     .input(z.object({ id: z.string().min(1) }))
-    .mutation(async ({ ctx, input }) => {
-      const item = await requireDraftForItem(ctx, input.id);
-      const version = await getWritableVersion(ctx, item.boqVersionId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const item = yield* attempt(() => requireDraftForItem(ctx, input.id));
+          const version = yield* attempt(() => getWritableVersion(ctx, item.boqVersionId));
 
-      try {
-        await db.batch([
-          db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${version.projectId}, 0))`),
-          db.execute(sql`
-            select 1 / case when exists (
-              select 1 from boq_version
-              where id = ${item.boqVersionId}
-                and project_id = ${version.projectId}
-                and status = 'draft'
-            ) then 1 else 0 end
-          `),
-          db.execute(sql`
-            update boq_item
-            set deleted_at = now(), updated_at = now()
-            where deleted_at is null
-              and boq_version_id = ${item.boqVersionId}
-              and id in (
-                with recursive tree as (
-                  select id from boq_item
-                  where id = ${input.id} and boq_version_id = ${item.boqVersionId}
-                  union all
-                  select child.id from boq_item child join tree on child.parent_id = tree.id
-                )
-                select id from tree
-              )
-          `),
-        ]);
-      } catch (error) {
-        if (databaseErrorIncludes(error, "division by zero")) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: ctx.t.boq.baselinedWhileEditing,
-          });
-        }
-        throw error;
-      }
+          yield* catchConflict(
+            attempt(() =>
+              db.batch([
+                db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${version.projectId}, 0))`),
+                db.execute(sql`
+                  select 1 / case when exists (
+                    select 1 from boq_version
+                    where id = ${item.boqVersionId}
+                      and project_id = ${version.projectId}
+                      and status = 'draft'
+                  ) then 1 else 0 end
+                `),
+                db.execute(sql`
+                  update boq_item
+                  set deleted_at = now(), updated_at = now()
+                  where deleted_at is null
+                    and boq_version_id = ${item.boqVersionId}
+                    and id in (
+                      with recursive tree as (
+                        select id from boq_item
+                        where id = ${input.id} and boq_version_id = ${item.boqVersionId}
+                        union all
+                        select child.id from boq_item child join tree on child.parent_id = tree.id
+                      )
+                      select id from tree
+                    )
+                `),
+              ]),
+            ),
+            ctx.t.boq.baselinedWhileEditing,
+          );
 
-      return { success: true };
-    }),
+          return { success: true };
+        }),
+      ),
+    ),
 
   /**
    * Bulk counterpart of deleteItem: the same recursive cascade, seeded from an
@@ -760,58 +833,56 @@ export const boqRouter = router({
         ids: z.array(z.string().min(1)).min(1).max(2000),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const version = await requireDraft(ctx, input.versionId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const version = yield* attempt(() => requireDraft(ctx, input.versionId));
 
-      const ids = sql.join(
-        input.ids.map((id) => sql`${id}`),
-        sql`, `,
-      );
+          const ids = sql.join(
+            input.ids.map((id) => sql`${id}`),
+            sql`, `,
+          );
 
-      let count = 0;
-      try {
-        const [, , result] = await db.batch([
-          db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${version.projectId}, 0))`),
-          db.execute(sql`
-            select 1 / case when exists (
-              select 1 from boq_version
-              where id = ${input.versionId}
-                and project_id = ${version.projectId}
-                and status = 'draft'
-            ) then 1 else 0 end
-          `),
-          db.execute(sql`
-            update boq_item
-            set deleted_at = now(), updated_at = now()
-            where deleted_at is null
-              and boq_version_id = ${input.versionId}
-              and id in (
-                with recursive tree as (
-                  select id from boq_item
-                  where id in (${ids}) and boq_version_id = ${input.versionId}
-                  union all
-                  select child.id from boq_item child join tree on child.parent_id = tree.id
-                )
-                select id from tree
-              )
-          `),
-        ]);
-        count = result.rowCount ?? 0;
-      } catch (error) {
-        if (databaseErrorIncludes(error, "division by zero")) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: ctx.t.boq.baselinedWhileEditing,
-          });
-        }
-        throw error;
-      }
+          const [, , result] = yield* catchConflict(
+            attempt(() =>
+              db.batch([
+                db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${version.projectId}, 0))`),
+                db.execute(sql`
+                  select 1 / case when exists (
+                    select 1 from boq_version
+                    where id = ${input.versionId}
+                      and project_id = ${version.projectId}
+                      and status = 'draft'
+                  ) then 1 else 0 end
+                `),
+                db.execute(sql`
+                  update boq_item
+                  set deleted_at = now(), updated_at = now()
+                  where deleted_at is null
+                    and boq_version_id = ${input.versionId}
+                    and id in (
+                      with recursive tree as (
+                        select id from boq_item
+                        where id in (${ids}) and boq_version_id = ${input.versionId}
+                        union all
+                        select child.id from boq_item child join tree on child.parent_id = tree.id
+                      )
+                      select id from tree
+                    )
+                `),
+              ]),
+            ),
+            ctx.t.boq.baselinedWhileEditing,
+          );
+          const count = result.rowCount ?? 0;
 
-      // The cascade means this is the number of *lines* removed, not the number
-      // ticked — deleting one section can be twenty rows. That is the figure
-      // worth reporting back.
-      return { success: true, count };
-    }),
+          // The cascade means this is the number of *lines* removed, not the number
+          // ticked — deleting one section can be twenty rows. That is the figure
+          // worth reporting back.
+          return { success: true, count };
+        }),
+      ),
+    ),
 
   /** Applies a new ordering to a group of siblings in one statement. */
   reorderItems: companyPermissionProcedure("project:write")
@@ -821,25 +892,31 @@ export const boqRouter = router({
         orderedIds: z.array(z.string().min(1)).min(1).max(500),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const version = await requireDraft(ctx, input.versionId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const version = yield* attempt(() => requireDraft(ctx, input.versionId));
 
-      const rows = sql.join(
-        input.orderedIds.map((id, index) => sql`(${id}::text, ${index}::int)`),
-        sql`, `,
-      );
+          const rows = sql.join(
+            input.orderedIds.map((id, index) => sql`(${id}::text, ${index}::int)`),
+            sql`, `,
+          );
 
-      await runDraftMutation(ctx.t, version.projectId, input.versionId, [
-        liveItemsGuard(input.versionId, input.orderedIds),
-        db.execute(sql`
-          update boq_item
-          set sort_order = ordering.position, updated_at = now()
-          from (values ${rows}) as ordering(id, position)
-          where boq_item.id = ordering.id
-            and boq_item.boq_version_id = ${input.versionId}
-        `),
-      ]);
+          yield* attempt(() =>
+            runDraftMutation(ctx.t, version.projectId, input.versionId, [
+              liveItemsGuard(input.versionId, input.orderedIds),
+              db.execute(sql`
+                update boq_item
+                set sort_order = ordering.position, updated_at = now()
+                from (values ${rows}) as ordering(id, position)
+                where boq_item.id = ordering.id
+                  and boq_item.boq_version_id = ${input.versionId}
+              `),
+            ]),
+          );
 
-      return { success: true };
-    }),
+          return { success: true };
+        }),
+      ),
+    ),
 });

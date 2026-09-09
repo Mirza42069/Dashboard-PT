@@ -14,6 +14,7 @@ import { account, session, user, verification } from "@DashboardV2/db/schema/aut
 import { company } from "@DashboardV2/db/schema/company";
 import { project, projectMember } from "@DashboardV2/db/schema/construction";
 import { TRPCError } from "@trpc/server";
+import { Effect } from "effect";
 import { and, count, desc, eq, ilike, inArray, like, ne, or } from "drizzle-orm";
 import z from "zod";
 
@@ -25,6 +26,7 @@ import {
   interpolate,
   type MessageDictionary,
 } from "../lib/messages/index";
+import { attempt, attemptSync, fail, runProcedure } from "../lib/effect";
 import { roleOf } from "../lib/permissions";
 import { assertCompanyExists } from "../lib/scope";
 import {
@@ -306,52 +308,58 @@ export const adminRouter = router({
         offset: z.number().int().min(0).default(0),
       }),
     )
-    .query(async ({ ctx, input }) => {
-      // Super admin: the cross-tenant directory. Admin: own company only —
-      // this naturally includes fellow admins of the same company (visible,
-      // not manageable) and excludes every super_admin (companyId is null).
-      const isSuperAdmin = roleOf(ctx.session.user) === "super_admin";
-      const filters = [
-        input.search
-          ? or(
-              ilike(user.name, `%${input.search}%`),
-              ilike(user.email, `%${input.search}%`),
-            )
-          : undefined,
-        isSuperAdmin ? undefined : eq(user.companyId, ctx.companyId),
-      ].filter(Boolean);
-      const where = filters.length > 0 ? and(...filters) : undefined;
+    .query(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          // Super admin: the cross-tenant directory. Admin: own company only —
+          // this naturally includes fellow admins of the same company (visible,
+          // not manageable) and excludes every super_admin (companyId is null).
+          const isSuperAdmin = roleOf(ctx.session.user) === "super_admin";
+          const filters = [
+            input.search
+              ? or(
+                  ilike(user.name, `%${input.search}%`),
+                  ilike(user.email, `%${input.search}%`),
+                )
+              : undefined,
+            isSuperAdmin ? undefined : eq(user.companyId, ctx.companyId),
+          ].filter(Boolean);
+          const where = filters.length > 0 ? and(...filters) : undefined;
 
-      const [rows, [total]] = await Promise.all([
-        db
-          .select({
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            banned: user.banned,
-            mustChangePassword: user.mustChangePassword,
-            trialEndsAt: user.trialEndsAt,
-            trialAiCredits: user.trialAiCredits,
-            createdAt: user.createdAt,
-            companyId: user.companyId,
-            // Null for super admins, who are not pinned to a company.
-            companyName: company.name,
-          })
-          .from(user)
-          .leftJoin(company, eq(company.id, user.companyId))
-          .where(where)
-          .orderBy(desc(user.createdAt))
-          .limit(input.limit)
-          .offset(input.offset),
-        db.select({ value: count() }).from(user).where(where),
-      ]);
+          const [rows, [total]] = yield* Effect.all([
+            attempt(() =>
+              db
+                .select({
+                  id: user.id,
+                  name: user.name,
+                  email: user.email,
+                  role: user.role,
+                  banned: user.banned,
+                  mustChangePassword: user.mustChangePassword,
+                  trialEndsAt: user.trialEndsAt,
+                  trialAiCredits: user.trialAiCredits,
+                  createdAt: user.createdAt,
+                  companyId: user.companyId,
+                  // Null for super admins, who are not pinned to a company.
+                  companyName: company.name,
+                })
+                .from(user)
+                .leftJoin(company, eq(company.id, user.companyId))
+                .where(where)
+                .orderBy(desc(user.createdAt))
+                .limit(input.limit)
+                .offset(input.offset),
+            ),
+            attempt(() => db.select({ value: count() }).from(user).where(where)),
+          ], { concurrency: "unbounded" });
 
-      return {
-        users: rows,
-        total: total?.value ?? 0,
-      };
-    }),
+          return {
+            users: rows,
+            total: total?.value ?? 0,
+          };
+        }),
+      ),
+    ),
 
   /**
    * Returns a temporary password once to the authorized caller, never the audit log.
@@ -368,116 +376,122 @@ export const adminRouter = router({
         trial: trialInputSchema.optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      const email = input.email.toLowerCase();
-      if (!isValidAccountName(input.name)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.nameInvalid });
-      }
-      const name = normalizeAccountName(input.name);
-      const username = normalizeUsername(name);
-
-      const existing = await db
-        .select({ email: user.email, username: user.username })
-        .from(user)
-        .where(or(eq(user.email, email), eq(user.username, username)));
-      if (existing.some((account) => account.email === email)) {
-        throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.emailExists });
-      }
-      if (existing.some((account) => account.username === username)) {
-        throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists });
-      }
-
-      const actorIsSuperAdmin = roleOf(ctx.session.user) === "super_admin";
-      let role = input.role;
-      let companyId: string | null;
-
-      if (!actorIsSuperAdmin) {
-        // Company admin: may only create Users, only in their own company.
-        if (input.role !== "user") {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: ctx.t.user.onlySuperAdminCreatesAdmins,
-          });
-        }
-        if (input.companyId && input.companyId !== ctx.companyId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: ctx.t.user.ownCompanyOnly,
-          });
-        }
-        role = "user";
-        companyId = ctx.companyId;
-      } else if (input.role === "super_admin") {
-        companyId = null;
-      } else {
-        if (!input.companyId) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.company.pickOne });
-        }
-        await assertCompanyExists(ctx.t, input.companyId);
-        companyId = input.companyId;
-      }
-
-      const trial = resolveTrialInput(ctx.t, input.trial, role);
-      const temporaryPassword = generateTemporaryPassword();
-
-      const created = await auth.api
-        .createUser({
-          headers: ctx.headers,
-          body: {
-            email,
-            password: temporaryPassword,
-            name,
-            role,
-            data: {
-              username,
-              displayUsername: name,
-            },
-          },
-        })
-        .catch((error: unknown) => {
-          const conflict = accountConflictField(error);
-          if (conflict === "name") {
-            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists });
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const email = input.email.toLowerCase();
+          if (!isValidAccountName(input.name)) {
+            return yield* fail("BAD_REQUEST", ctx.t.user.nameInvalid);
           }
-          if (conflict === "email") {
-            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.emailExists });
+          const name = normalizeAccountName(input.name);
+          const username = normalizeUsername(name);
+
+          const existing = yield* attempt(() =>
+            db
+              .select({ email: user.email, username: user.username })
+              .from(user)
+              .where(or(eq(user.email, email), eq(user.username, username))),
+          );
+          if (existing.some((account) => account.email === email)) {
+            return yield* fail("CONFLICT", ctx.t.user.emailExists);
           }
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: ctx.t.user.couldNotAssignCompany });
-        });
+          if (existing.some((account) => account.username === username)) {
+            return yield* fail("CONFLICT", ctx.t.user.nameExists);
+          }
 
-      // companyId is `input: false` on the auth side — it must never come in on
-      // a request body — so it is written here rather than passed to createUser.
-      //
-      // The two writes cannot share a transaction (the Neon HTTP driver has no
-      // interactive ones), and an account that exists with no company is locked
-      // out of every page. So if the second write fails, undo the first rather
-      // than leaving an account only raw SQL can repair.
-      if (companyId || trial) {
-        try {
-          await db
-            .update(user)
-            .set({ ...(companyId ? { companyId } : {}), ...(trial ?? {}) })
-            .where(eq(user.id, created.user.id));
-        } catch (error) {
-          await db.delete(user).where(eq(user.id, created.user.id));
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: ctx.t.user.couldNotAssignCompany,
-            cause: error,
-          });
-        }
-      }
+          const actorIsSuperAdmin = roleOf(ctx.session.user) === "super_admin";
+          let role = input.role;
+          let companyId: string | null;
 
-      await recordActivity({ session: ctx.session, companyId: companyId ?? ctx.companyId }, {
-        action: "created",
-        entityType: "user",
-        entityId: created.user.id,
-        entityLabel: `${name} - ${email}`,
-        detail: trial ? `${role} (trial)` : role,
-      });
+          if (!actorIsSuperAdmin) {
+            // Company admin: may only create Users, only in their own company.
+            if (input.role !== "user") {
+              return yield* fail("FORBIDDEN", ctx.t.user.onlySuperAdminCreatesAdmins);
+            }
+            if (input.companyId && input.companyId !== ctx.companyId) {
+              return yield* fail("BAD_REQUEST", ctx.t.user.ownCompanyOnly);
+            }
+            role = "user";
+            companyId = ctx.companyId;
+          } else if (input.role === "super_admin") {
+            companyId = null;
+          } else {
+            if (!input.companyId) {
+              return yield* fail("BAD_REQUEST", ctx.t.company.pickOne);
+            }
+            const newCompanyId = input.companyId;
+            yield* attempt(() => assertCompanyExists(ctx.t, newCompanyId));
+            companyId = newCompanyId;
+          }
 
-      return { user: created.user, temporaryPassword };
-    }),
+          const trial = yield* attemptSync(() => resolveTrialInput(ctx.t, input.trial, role));
+          const temporaryPassword = generateTemporaryPassword();
+
+          const created = yield* attempt(() =>
+            auth.api
+              .createUser({
+                headers: ctx.headers,
+                body: {
+                  email,
+                  password: temporaryPassword,
+                  name,
+                  role,
+                  data: {
+                    username,
+                    displayUsername: name,
+                  },
+                },
+              })
+              .catch((error: unknown) => {
+                const conflict = accountConflictField(error);
+                if (conflict === "name") {
+                  throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists });
+                }
+                if (conflict === "email") {
+                  throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.emailExists });
+                }
+                throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: ctx.t.user.couldNotAssignCompany });
+              }),
+          );
+
+          // companyId is `input: false` on the auth side — it must never come in on
+          // a request body — so it is written here rather than passed to createUser.
+          //
+          // The two writes cannot share a transaction (the Neon HTTP driver has no
+          // interactive ones), and an account that exists with no company is locked
+          // out of every page. So if the second write fails, undo the first rather
+          // than leaving an account only raw SQL can repair.
+          if (companyId || trial) {
+            yield* attempt(() =>
+              db
+                .update(user)
+                .set({ ...(companyId ? { companyId } : {}), ...(trial ?? {}) })
+                .where(eq(user.id, created.user.id))
+                .catch(async (error) => {
+                  await db.delete(user).where(eq(user.id, created.user.id));
+                  throw new TRPCError({
+                    code: "INTERNAL_SERVER_ERROR",
+                    message: ctx.t.user.couldNotAssignCompany,
+                    cause: error,
+                  });
+                }),
+            );
+          }
+
+          yield* attempt(() =>
+            recordActivity({ session: ctx.session, companyId: companyId ?? ctx.companyId }, {
+              action: "created",
+              entityType: "user",
+              entityId: created.user.id,
+              entityLabel: `${name} - ${email}`,
+              detail: trial ? `${role} (trial)` : role,
+            }),
+          );
+
+          return { user: created.user, temporaryPassword };
+        }),
+      ),
+    ),
 
   renameUser: companyPermissionProcedure("user:rename")
     .input(
@@ -485,196 +499,236 @@ export const adminRouter = router({
         name: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      if (!isValidAccountName(input.name)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.nameInvalid });
-      }
-      const name = normalizeAccountName(input.name);
-      const username = normalizeUsername(name);
-      const [target] = await db
-        .select({
-          name: user.name,
-          email: user.email,
-          username: user.username,
-          displayUsername: user.displayUsername,
-          companyId: user.companyId,
-        })
-        .from(user)
-        .where(eq(user.id, input.userId));
-      if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
-      }
-      if (
-        target.name === name &&
-        target.username === username &&
-        target.displayUsername === name
-      ) {
-        return { success: true };
-      }
-      const [duplicate] = await db
-        .select({ id: user.id })
-        .from(user)
-        .where(and(eq(user.username, username), ne(user.id, input.userId)));
-      if (duplicate) {
-        throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists });
-      }
-      const previousLabel = `${target.name} - ${target.email}`;
-
-      await auth.api
-        .adminUpdateUser({
-          headers: ctx.headers,
-          body: {
-            userId: input.userId,
-            data: {
-              name,
-              displayUsername: name,
-              ...(target.username === username ? {} : { username }),
-            },
-          },
-        })
-        .catch((error: unknown) => {
-          if (accountConflictField(error) === "name") {
-            throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists, cause: error });
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          if (!isValidAccountName(input.name)) {
+            return yield* fail("BAD_REQUEST", ctx.t.user.nameInvalid);
           }
-          throw error;
-        });
+          const name = normalizeAccountName(input.name);
+          const username = normalizeUsername(name);
+          const [target] = yield* attempt(() =>
+            db
+              .select({
+                name: user.name,
+                email: user.email,
+                username: user.username,
+                displayUsername: user.displayUsername,
+                companyId: user.companyId,
+              })
+              .from(user)
+              .where(eq(user.id, input.userId)),
+          );
+          if (!target) {
+            return yield* fail("NOT_FOUND", ctx.t.user.notFound);
+          }
+          if (
+            target.name === name &&
+            target.username === username &&
+            target.displayUsername === name
+          ) {
+            return { success: true };
+          }
+          const [duplicate] = yield* attempt(() =>
+            db
+              .select({ id: user.id })
+              .from(user)
+              .where(and(eq(user.username, username), ne(user.id, input.userId))),
+          );
+          if (duplicate) {
+            return yield* fail("CONFLICT", ctx.t.user.nameExists);
+          }
+          const previousLabel = `${target.name} - ${target.email}`;
 
-      // Unpinned System accounts are global. Filing their name/email under the
-      // actor's currently selected tenant would leak global-account PII into a
-      // company activity feed, so only tenant-owned accounts produce this row.
-      if (target.companyId) {
-        await recordActivity({ session: ctx.session, companyId: target.companyId }, {
-          action: "updated",
-          entityType: "user",
-          entityId: input.userId,
-          entityLabel: previousLabel,
-          detail: name,
-        });
-      }
+          yield* attempt(() =>
+            auth.api
+              .adminUpdateUser({
+                headers: ctx.headers,
+                body: {
+                  userId: input.userId,
+                  data: {
+                    name,
+                    displayUsername: name,
+                    ...(target.username === username ? {} : { username }),
+                  },
+                },
+              })
+              .catch((error: unknown) => {
+                if (accountConflictField(error) === "name") {
+                  throw new TRPCError({ code: "CONFLICT", message: ctx.t.user.nameExists, cause: error });
+                }
+                throw error;
+              }),
+          );
 
-      return { success: true };
-    }),
+          // Unpinned System accounts are global. Filing their name/email under the
+          // actor's currently selected tenant would leak global-account PII into a
+          // company activity feed, so only tenant-owned accounts produce this row.
+          if (target.companyId) {
+            const auditCompanyId = target.companyId;
+            yield* attempt(() =>
+              recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
+                action: "updated",
+                entityType: "user",
+                entityId: input.userId,
+                entityLabel: previousLabel,
+                detail: name,
+              }),
+            );
+          }
+
+          return { success: true };
+        }),
+      ),
+    ),
 
   resetPassword: companyPermissionProcedure("user:manage")
     .input(userIdSchema.extend({ pendingOnly: z.boolean().default(false) }))
-    .mutation(async ({ ctx, input }) => {
-      assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "resetPassword");
-      await assertTargetManageable(ctx, input.userId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attemptSync(() =>
+            assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "resetPassword"),
+          );
+          yield* attempt(() => assertTargetManageable(ctx, input.userId));
 
-      const [target] = await db
-        .select({
-          email: user.email,
-          name: user.name,
-          companyId: user.companyId,
-          role: user.role,
-          mustChangePassword: user.mustChangePassword,
-        })
-        .from(user)
-        .where(eq(user.id, input.userId));
-      if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
-      }
-      const actorIsSuperAdmin = roleOf(ctx.session.user) === "super_admin";
-      if (!actorIsSuperAdmin && (target.role !== "user" || target.companyId !== ctx.companyId)) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
-      }
-      if (target.role === "super_admin" && !target.mustChangePassword) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: ctx.t.user.systemPasswordResetNotAllowed,
-        });
-      }
+          const [target] = yield* attempt(() =>
+            db
+              .select({
+                email: user.email,
+                name: user.name,
+                companyId: user.companyId,
+                role: user.role,
+                mustChangePassword: user.mustChangePassword,
+              })
+              .from(user)
+              .where(eq(user.id, input.userId)),
+          );
+          if (!target) {
+            return yield* fail("NOT_FOUND", ctx.t.user.notFound);
+          }
+          const actorIsSuperAdmin = roleOf(ctx.session.user) === "super_admin";
+          if (!actorIsSuperAdmin && (target.role !== "user" || target.companyId !== ctx.companyId)) {
+            return yield* fail("NOT_FOUND", ctx.t.user.notFound);
+          }
+          if (target.role === "super_admin" && !target.mustChangePassword) {
+            return yield* fail("BAD_REQUEST", ctx.t.user.systemPasswordResetNotAllowed);
+          }
 
-      const temporaryPassword = await resetTemporaryPassword(input.userId, {
-        role: target.role,
-        companyId: target.companyId,
-        pendingOnly: input.pendingOnly || target.role === "super_admin",
-      }).catch(() => {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: ctx.t.user.passwordResetFailed });
-      });
+          const temporaryPassword = yield* attempt(() =>
+            resetTemporaryPassword(input.userId, {
+              role: target.role,
+              companyId: target.companyId,
+              pendingOnly: input.pendingOnly || target.role === "super_admin",
+            }).catch(() => {
+              throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: ctx.t.user.passwordResetFailed });
+            }),
+          );
 
-      if (target.companyId) {
-        await recordActivity(
-          { session: ctx.session, companyId: target.companyId },
-          {
-            action: "updated",
-            entityType: "user",
-            entityId: input.userId,
-            entityLabel: `${target.name} - ${target.email}`,
-            detail: "Temporary password issued",
-          },
-        );
-      }
+          if (target.companyId) {
+            const auditCompanyId = target.companyId;
+            yield* attempt(() =>
+              recordActivity(
+                { session: ctx.session, companyId: auditCompanyId },
+                {
+                  action: "updated",
+                  entityType: "user",
+                  entityId: input.userId,
+                  entityLabel: `${target.name} - ${target.email}`,
+                  detail: "Temporary password issued",
+                },
+              ),
+            );
+          }
 
-      return { temporaryPassword };
-    }),
+          return { temporaryPassword };
+        }),
+      ),
+    ),
 
   /** Moves an account to another company. Super admins stay unpinned. */
   setCompany: permissionProcedure("user:setCompany")
     .input(userIdSchema.extend({ companyId: z.string().min(1) }))
-    .mutation(async ({ ctx, input }) => {
-      await assertCompanyExists(ctx.t, input.companyId);
-      const [target] = await db
-        .select({ id: user.id, role: user.role })
-        .from(user)
-        .where(eq(user.id, input.userId));
-      if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
-      }
-      if (target.role === "super_admin") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: ctx.t.auth.superAdminNotPinned,
-        });
-      }
-      if (target.role !== "admin" && target.role !== "user") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.auth.unsupportedRole });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertCompanyExists(ctx.t, input.companyId));
+          const [target] = yield* attempt(() =>
+            db
+              .select({ id: user.id, role: user.role })
+              .from(user)
+              .where(eq(user.id, input.userId)),
+          );
+          if (!target) {
+            return yield* fail("NOT_FOUND", ctx.t.user.notFound);
+          }
+          if (target.role === "super_admin") {
+            return yield* fail("BAD_REQUEST", ctx.t.auth.superAdminNotPinned);
+          }
+          if (target.role !== "admin" && target.role !== "user") {
+            return yield* fail("BAD_REQUEST", ctx.t.auth.unsupportedRole);
+          }
+          const targetRole = target.role;
+          const newCompanyId = input.companyId;
 
-      await reconcileProjectAccess(input.userId, target.role, input.companyId, {
-        companyId: input.companyId,
-      });
-      return { success: true };
-    }),
+          yield* attempt(() =>
+            reconcileProjectAccess(input.userId, targetRole, newCompanyId, {
+              companyId: newCompanyId,
+            }),
+          );
+          return { success: true };
+        }),
+      ),
+    ),
 
   setRole: companyPermissionProcedure("user:setRole")
     .input(userIdSchema.extend({ role: roleSchema, companyId: z.string().min(1).optional() }))
-    .mutation(async ({ ctx, input }) => {
-      await assertUserExists(ctx.t, input.userId);
-      if (input.role !== "super_admin") {
-        await assertNotLastSuperAdmin(ctx.t, input.userId, "demote");
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertUserExists(ctx.t, input.userId));
+          if (input.role !== "super_admin") {
+            yield* attempt(() => assertNotLastSuperAdmin(ctx.t, input.userId, "demote"));
+          }
 
-      // A pinned account with no company resolves to "No company assigned" on
-      // every request — i.e. a locked-out account. Any role but super_admin
-      // must therefore land on some company: the one the account already had,
-      // an explicit choice, or — for a super_admin, who is unpinned by
-      // definition and so has neither — the company the acting super admin is
-      // currently viewing. Without that last fallback, demoting any super
-      // admin is impossible.
-      const label = await userLabel(input.userId);
-      let companyId: string | null = null;
-      if (input.role !== "super_admin") {
-        companyId = input.companyId ?? (await auditCompanyFor(input.userId, ctx.companyId));
-        await assertCompanyExists(ctx.t, companyId);
-      }
+          // A pinned account with no company resolves to "No company assigned" on
+          // every request — i.e. a locked-out account. Any role but super_admin
+          // must therefore land on some company: the one the account already had,
+          // an explicit choice, or — for a super_admin, who is unpinned by
+          // definition and so has neither — the company the acting super admin is
+          // currently viewing. Without that last fallback, demoting any super
+          // admin is impossible.
+          const label = yield* attempt(() => userLabel(input.userId));
+          let companyId: string | null = null;
+          if (input.role !== "super_admin") {
+            const scopedCompanyId =
+              input.companyId ?? (yield* attempt(() => auditCompanyFor(input.userId, ctx.companyId)));
+            companyId = scopedCompanyId;
+            yield* attempt(() => assertCompanyExists(ctx.t, scopedCompanyId));
+          }
 
-      // Promoting to super_admin unpins the account; any other role keeps or assigns one.
-      await reconcileProjectAccess(input.userId, input.role, companyId, {
-        companyId,
-        role: input.role,
-      });
+          // Promoting to super_admin unpins the account; any other role keeps or assigns one.
+          yield* attempt(() =>
+            reconcileProjectAccess(input.userId, input.role, companyId, {
+              companyId,
+              role: input.role,
+            }),
+          );
 
-      await recordActivity({ session: ctx.session, companyId: companyId ?? ctx.companyId }, {
-        action: "role_changed",
-        entityType: "user",
-        entityId: input.userId,
-        entityLabel: label,
-        detail: input.role,
-      });
+          yield* attempt(() =>
+            recordActivity({ session: ctx.session, companyId: companyId ?? ctx.companyId }, {
+              action: "role_changed",
+              entityType: "user",
+              entityId: input.userId,
+              entityLabel: label,
+              detail: input.role,
+            }),
+          );
 
-      return { success: true };
-    }),
+          return { success: true };
+        }),
+      ),
+    ),
 
   /**
    * Starts, re-times, or ends a trial.
@@ -691,119 +745,156 @@ export const adminRouter = router({
         userIdSchema.extend({ action: z.literal("set") }).merge(trialInputSchema),
       ]),
     )
-    .mutation(async ({ ctx, input }) => {
-      await assertTargetManageable(ctx, input.userId);
-      assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "trial");
-      const auditCompanyId = await auditCompanyFor(input.userId, ctx.companyId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertTargetManageable(ctx, input.userId));
+          yield* attemptSync(() => assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "trial"));
+          const auditCompanyId = yield* attempt(() => auditCompanyFor(input.userId, ctx.companyId));
 
-      const [target] = await db
-        .select({ role: user.role, trialEndsAt: user.trialEndsAt })
-        .from(user)
-        .where(eq(user.id, input.userId));
-      if (!target) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.user.notFound });
-      }
+          const [target] = yield* attempt(() =>
+            db
+              .select({ role: user.role, trialEndsAt: user.trialEndsAt })
+              .from(user)
+              .where(eq(user.id, input.userId)),
+          );
+          if (!target) {
+            return yield* fail("NOT_FOUND", ctx.t.user.notFound);
+          }
 
-      const wasOnTrial = target.trialEndsAt !== null;
+          const wasOnTrial = target.trialEndsAt !== null;
 
-      if (input.action === "clear") {
-        await db
-          .update(user)
-          .set({ trialEndsAt: null, trialAiCredits: null })
-          .where(eq(user.id, input.userId));
-      } else {
-        // roleOf, not roleSchema.parse: a row carrying a legacy or unknown role
-        // must degrade to the least-privileged one, not 500 the request.
-        const fields = resolveTrialInput(ctx.t,
-          { days: input.days, aiCredits: input.aiCredits },
-          roleOf(target),
-        );
-        if (fields) {
-          await db.update(user).set(fields).where(eq(user.id, input.userId));
-        }
-      }
+          if (input.action === "clear") {
+            yield* attempt(() =>
+              db
+                .update(user)
+                .set({ trialEndsAt: null, trialAiCredits: null })
+                .where(eq(user.id, input.userId)),
+            );
+          } else {
+            // roleOf, not roleSchema.parse: a row carrying a legacy or unknown role
+            // must degrade to the least-privileged one, not 500 the request.
+            const fields = yield* attemptSync(() =>
+              resolveTrialInput(ctx.t, { days: input.days, aiCredits: input.aiCredits }, roleOf(target)),
+            );
+            if (fields) {
+              yield* attempt(() => db.update(user).set(fields).where(eq(user.id, input.userId)));
+            }
+          }
 
-      await recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
-        action:
-          input.action === "clear"
-            ? "trial_cleared"
-            : wasOnTrial
-              ? "trial_changed"
-              : "trial_started",
-        entityType: "user",
-        entityId: input.userId,
-        entityLabel: await userLabel(input.userId),
-        detail:
-          input.action === "set" ? `${input.days}d / ${input.aiCredits} AI` : undefined,
-      });
+          const eventLabel = yield* attempt(() => userLabel(input.userId));
+          yield* attempt(() =>
+            recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
+              action:
+                input.action === "clear"
+                  ? "trial_cleared"
+                  : wasOnTrial
+                    ? "trial_changed"
+                    : "trial_started",
+              entityType: "user",
+              entityId: input.userId,
+              entityLabel: eventLabel,
+              detail:
+                input.action === "set" ? `${input.days}d / ${input.aiCredits} AI` : undefined,
+            }),
+          );
 
-      return { success: true };
-    }),
+          return { success: true };
+        }),
+      ),
+    ),
 
   setBanned: companyPermissionProcedure("user:manage")
     .input(userIdSchema.extend({ banned: z.boolean(), reason: z.string().max(500).optional() }))
-    .mutation(async ({ ctx, input }) => {
-      await assertTargetManageable(ctx, input.userId);
-      const auditCompanyId = await auditCompanyFor(input.userId, ctx.companyId);
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertTargetManageable(ctx, input.userId));
+          const auditCompanyId = yield* attempt(() => auditCompanyFor(input.userId, ctx.companyId));
 
-      if (input.banned) {
-        assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "disable");
-        await assertNotLastSuperAdmin(ctx.t, input.userId, "disable");
+          if (input.banned) {
+            yield* attemptSync(() =>
+              assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "disable"),
+            );
+            yield* attempt(() => assertNotLastSuperAdmin(ctx.t, input.userId, "disable"));
 
-        await auth.api.banUser({
-          headers: ctx.headers,
-          body: { userId: input.userId, banReason: input.reason },
-        });
-      } else {
-        await auth.api.unbanUser({
-          headers: ctx.headers,
-          body: { userId: input.userId },
-        });
+            yield* attempt(() =>
+              auth.api.banUser({
+                headers: ctx.headers,
+                body: { userId: input.userId, banReason: input.reason },
+              }),
+            );
+          } else {
+            yield* attempt(() =>
+              auth.api.unbanUser({
+                headers: ctx.headers,
+                body: { userId: input.userId },
+              }),
+            );
 
-        const [resumed] = await db
-          .select({ companyId: user.companyId, role: user.role })
-          .from(user)
-          .where(eq(user.id, input.userId));
-        if (resumed && (resumed.role === "admin" || resumed.role === "user")) {
-          await reconcileProjectAccess(input.userId, resumed.role, resumed.companyId);
-        }
-      }
+            const [resumed] = yield* attempt(() =>
+              db
+                .select({ companyId: user.companyId, role: user.role })
+                .from(user)
+                .where(eq(user.id, input.userId)),
+            );
+            if (resumed && (resumed.role === "admin" || resumed.role === "user")) {
+              const resumedRole = resumed.role;
+              const resumedCompanyId = resumed.companyId;
+              yield* attempt(() =>
+                reconcileProjectAccess(input.userId, resumedRole, resumedCompanyId),
+              );
+            }
+          }
 
-      await recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
-        action: input.banned ? "paused" : "resumed",
-        entityType: "user",
-        entityId: input.userId,
-        entityLabel: await userLabel(input.userId),
-        detail: input.banned ? input.reason : undefined,
-      });
+          const eventLabel = yield* attempt(() => userLabel(input.userId));
+          yield* attempt(() =>
+            recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
+              action: input.banned ? "paused" : "resumed",
+              entityType: "user",
+              entityId: input.userId,
+              entityLabel: eventLabel,
+              detail: input.banned ? input.reason : undefined,
+            }),
+          );
 
-      return { success: true };
-    }),
+          return { success: true };
+        }),
+      ),
+    ),
 
   deleteUser: companyPermissionProcedure("user:manage")
     .input(userIdSchema)
-    .mutation(async ({ ctx, input }) => {
-      await assertTargetManageable(ctx, input.userId);
-      assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "delete");
-      await assertNotLastSuperAdmin(ctx.t, input.userId, "delete");
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertTargetManageable(ctx, input.userId));
+          yield* attemptSync(() => assertNotSelf(ctx.t, ctx.session.user.id, input.userId, "delete"));
+          yield* attempt(() => assertNotLastSuperAdmin(ctx.t, input.userId, "delete"));
 
-      // Read the label and company before removal — afterwards there is nothing
-      // left to name the row with, or to file it under.
-      const label = await userLabel(input.userId);
-      const auditCompanyId = await auditCompanyFor(input.userId, ctx.companyId);
+          // Read the label and company before removal — afterwards there is nothing
+          // left to name the row with, or to file it under.
+          const label = yield* attempt(() => userLabel(input.userId));
+          const auditCompanyId = yield* attempt(() => auditCompanyFor(input.userId, ctx.companyId));
 
-      await auth.api.removeUser({
-        headers: ctx.headers,
-        body: { userId: input.userId },
-      });
+          yield* attempt(() =>
+            auth.api.removeUser({
+              headers: ctx.headers,
+              body: { userId: input.userId },
+            }),
+          );
 
-      await recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
-        action: "deleted",
-        entityType: "user",
-        entityId: input.userId,
-        entityLabel: label,
-      });
+          yield* attempt(() =>
+            recordActivity({ session: ctx.session, companyId: auditCompanyId }, {
+              action: "deleted",
+              entityType: "user",
+              entityId: input.userId,
+              entityLabel: label,
+            }),
+          );
 
-      return { success: true };
-    }),
+          return { success: true };
+        }),
+      ),
+    ),
 });

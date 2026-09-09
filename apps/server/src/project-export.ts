@@ -5,7 +5,7 @@ import { todayStamp } from "./export-format";
 // Type-only: erased at runtime, so this module stays free of the database
 // client and its environment validation. The route supplies the real builder.
 import type { buildProjectDetailWorkbook } from "./project-detail-export";
-import { packageProjectWorkbooks, type ProjectWorkbookFile } from "./project-export-package";
+import { packageProjectWorkbooks } from "./project-export-package";
 
 /** The requested project resolved to no workbook — unknown, archived, or inaccessible. */
 export class ProjectExportUnavailable extends Data.TaggedError("ProjectExportUnavailable")<{
@@ -34,45 +34,28 @@ export type PackagedProjectExport = {
 /** The already-authorized workbook builder the route wires in at call time. */
 export type ProjectDetailWorkbookBuilder = typeof buildProjectDetailWorkbook;
 
-/**
- * Builds exactly the already-authorized projects supplied by the route. One
- * selection is an XLSX; multiple selections are a ZIP containing one XLSX per
- * project.
- *
- * The typed error channel replaces the old null sentinel: the route maps
- * ProjectExportUnavailable to a 404 without confusing "one bad id" with "the
- * builder blew up", and authorization stays owned by the route — this function
- * is never handed an unrequested id.
- */
-export const buildSelectedProjectExport = (
+/** Builds only the already-authorized projects supplied by the route. */
+export function buildSelectedProjectExport(
   input: SelectedProjectExportInput,
   buildProjectDetail: ProjectDetailWorkbookBuilder,
-): Effect.Effect<PackagedProjectExport, ProjectExportUnavailable | ProjectExportBuildFailed> =>
-  Effect.gen(function* () {
-    // Deliberately sequential (concurrency: 1). Up to 100 detailed workbooks
-    // can be large, and parallel ExcelJS builds multiply peak memory in a
-    // serverless process.
-    const files: ProjectWorkbookFile[] = yield* Effect.forEach(
-      input.projectIds,
-      (projectId) =>
-        Effect.tryPromise({
-          try: () =>
-            buildProjectDetail({
-              projectId,
-              locale: input.locale,
-              includeTeam: input.includeTeam,
-              dailyReportDate: input.dailyReportDate,
-            }),
+): Effect.Effect<PackagedProjectExport, ProjectExportUnavailable | ProjectExportBuildFailed> {
+  return Effect.gen(function* () {
+    // Sequential builds keep up to 100 large workbooks from multiplying peak memory.
+    const files = yield* Effect.forEach(input.projectIds, (projectId) =>
+      Effect.gen(function* () {
+        const built = yield* Effect.tryPromise({
+          try: () => buildProjectDetail({
+            projectId,
+            locale: input.locale,
+            includeTeam: input.includeTeam,
+            dailyReportDate: input.dailyReportDate,
+          }),
           catch: (cause) => new ProjectExportBuildFailed({ projectId, cause }),
-        }).pipe(
-          Effect.flatMap((built) =>
-            built === null
-              ? Effect.fail(new ProjectExportUnavailable({ projectId }))
-              : Effect.succeed(built),
-          ),
-        ),
-      { concurrency: 1 },
+        });
+        if (built === null) return yield* Effect.fail(new ProjectExportUnavailable({ projectId }));
+        return built;
+      }),
     );
-
     return packageProjectWorkbooks(files, todayStamp());
   });
+}

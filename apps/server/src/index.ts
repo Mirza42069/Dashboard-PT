@@ -42,11 +42,6 @@ import { logger } from "hono/logger";
 import { stream } from "hono/streaming";
 
 import {
-  decodeWorkbookTransport,
-  WORKBOOK_TRANSPORT_CONTENT_TYPE,
-  WorkbookTransportError,
-} from "./workbook-transport";
-import {
   assertTemporaryWorkbookPath,
   consumeTemporaryWorkbook,
   discardTemporaryWorkbook,
@@ -58,7 +53,7 @@ import {
 } from "./temporary-workbook";
 import { purgeAbandonedSupportScreenshots } from "./support-screenshot-storage";
 import { signWorkbookReviewState } from "./project-workbook-review";
-// Type-only: erased at runtime, so the exceljs-and-effect tree behind
+// Type-only: erased at runtime, so the exceljs tree behind
 // ./project-export never enters the boot graph through this file.
 import type { PackagedProjectExport } from "./project-export";
 
@@ -541,7 +536,6 @@ app.post("/projects/export", async (c) => {
   //
   // Keeping the whole module behind this await means a failure to resolve it
   // can only ever cost the spreadsheet download, never the ability to sign in.
-  // effect rides along lazily for the same reason.
   const [{ Effect }, { buildProjectDetailWorkbook }, { buildSelectedProjectExport, ProjectExportUnavailable }] =
     await Promise.all([
       import("effect"),
@@ -550,19 +544,17 @@ app.post("/projects/export", async (c) => {
     ]);
   let built: PackagedProjectExport;
   try {
-    built = await Effect.runPromise(
-      buildSelectedProjectExport(
-        {
-          // Preserve the request order rather than the database's unspecified IN
-          // order; the builder is never handed an unrequested id.
-          projectIds: request.projectIds,
-          locale: request.locale ?? localeFromHeaders(c.req.raw.headers),
-          includeTeam: hasPermission(roleOf(session.user), "member:manage"),
-          dailyReportDate: request.dailyReportDate,
-        },
-        buildProjectDetailWorkbook,
-      ),
-    );
+    built = await Effect.runPromise(buildSelectedProjectExport(
+      {
+        // Preserve the request order rather than the database's unspecified IN
+        // order; the builder is never handed an unrequested id.
+        projectIds: request.projectIds,
+        locale: request.locale ?? localeFromHeaders(c.req.raw.headers),
+        includeTeam: hasPermission(roleOf(session.user), "member:manage"),
+        dailyReportDate: request.dailyReportDate,
+      },
+      buildProjectDetailWorkbook,
+    ));
   } catch (error) {
     if (error instanceof ProjectExportUnavailable) {
       return c.json({ error: "Not found" }, 404);
@@ -702,30 +694,6 @@ async function readWorkbookRequest(c: HonoRequestContext) {
       });
     } catch (error) {
       if (error instanceof TemporaryWorkbookError) {
-        return { error: error.message, status: 400 as const };
-      }
-      throw error;
-    }
-  }
-
-  if ((c.req.header("content-type") ?? "").startsWith(WORKBOOK_TRANSPORT_CONTENT_TYPE)) {
-    try {
-      const decoded = decodeWorkbookTransport(new Uint8Array(await c.req.arrayBuffer()));
-      const upload = readUpload(tFor(c.req.raw.headers), decoded.bytes);
-      if ("error" in upload) return upload;
-      const sourceKind = importSourceKind(upload.bytes);
-      if (!sourceKind) return { error: "The uploaded project file type is invalid.", status: 400 as const };
-      return {
-        bytes: upload.bytes,
-        fields: decoded.metadata,
-        sourceKind,
-        filename:
-          typeof decoded.metadata.filename === "string"
-            ? decoded.metadata.filename
-            : sourceKind === "pdf" ? "document.pdf" : "workbook.xlsx",
-      };
-    } catch (error) {
-      if (error instanceof WorkbookTransportError) {
         return { error: error.message, status: 400 as const };
       }
       throw error;

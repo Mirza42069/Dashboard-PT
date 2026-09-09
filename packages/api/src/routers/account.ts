@@ -1,8 +1,9 @@
 import { changeOwnPassword } from "@DashboardV2/auth";
-import { TRPCError } from "@trpc/server";
+import { Effect } from "effect";
 import z from "zod";
 
 import { authenticatedProcedure, router } from "../index";
+import { attempt, fail, runProcedure } from "../lib/effect";
 
 export const accountRouter = router({
   /**
@@ -16,20 +17,27 @@ export const accountRouter = router({
         newPassword: z.string().max(128),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      if (!input.currentPassword) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.currentPasswordRequired });
-      }
-      if (input.newPassword.length < 12) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.passwordTooShort });
-      }
-      if (input.currentPassword.normalize("NFKC") === input.newPassword.normalize("NFKC")) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.passwordMustDiffer });
-      }
-      if (!await changeOwnPassword(ctx.session.user.id, ctx.session.session.id, input.currentPassword, input.newPassword)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: ctx.t.user.passwordChangeFailed });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          if (!input.currentPassword) {
+            return yield* fail("BAD_REQUEST", ctx.t.user.currentPasswordRequired);
+          }
+          if (input.newPassword.length < 12) {
+            return yield* fail("BAD_REQUEST", ctx.t.user.passwordTooShort);
+          }
+          if (input.currentPassword.normalize("NFKC") === input.newPassword.normalize("NFKC")) {
+            return yield* fail("BAD_REQUEST", ctx.t.user.passwordMustDiffer);
+          }
+          const changed = yield* attempt(() =>
+            changeOwnPassword(ctx.session.user.id, ctx.session.session.id, input.currentPassword, input.newPassword),
+          );
+          if (!changed) {
+            return yield* fail("BAD_REQUEST", ctx.t.user.passwordChangeFailed);
+          }
 
-      return { success: true };
-    }),
+          return { success: true };
+        }),
+      ),
+    ),
 });

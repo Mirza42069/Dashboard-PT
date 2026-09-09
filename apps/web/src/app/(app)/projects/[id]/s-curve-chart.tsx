@@ -31,8 +31,7 @@ import { useT } from "@/i18n/provider";
  * - Planned is a dashed area, actual a solid line. The two series are told
  *   apart by shape as well as by hue, so the chart survives greyscale printing
  *   and the common colour deficiencies. The legend below is hand-drawn for the
- *   same reason: `ChartLegendContent` draws filled squares, which would state
- *   the hue and drop the shape — the half that does the work here.
+ *   same reason: filled squares would state the hue and drop the shape.
  *
  * - The drawing itself is hidden from assistive technology and the figures are
  *   read from the summary table below instead, via `describedById`. An SVG of

@@ -1,3 +1,4 @@
+import { crc32 } from "node:zlib";
 import { zlibSync } from "fflate";
 
 export type ProjectCurveChartPoint = {
@@ -140,31 +141,10 @@ function uint32(value: number) {
   );
 }
 
-function concatenate(parts: readonly Uint8Array[]) {
-  const output = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    output.set(part, offset);
-    offset += part.length;
-  }
-  return output;
-}
-
-function crc32(data: Uint8Array) {
-  let crc = 0xffffffff;
-  for (const byte of data) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
 function chunk(type: string, data: Uint8Array) {
   const typeBytes = new TextEncoder().encode(type);
-  const content = concatenate([typeBytes, data]);
-  return concatenate([uint32(data.length), content, uint32(crc32(content))]);
+  const content = Buffer.concat([typeBytes, data]);
+  return Buffer.concat([uint32(data.length), content, uint32(crc32(content))]);
 }
 
 function encodePng(raster: Raster) {
@@ -174,12 +154,12 @@ function encodePng(raster: Raster) {
     raw.set(raster.pixels.subarray(y * WIDTH * 3, (y + 1) * WIDTH * 3), y * stride + 1);
   }
 
-  const header = concatenate([
+  const header = Buffer.concat([
     uint32(WIDTH),
     uint32(HEIGHT),
     Uint8Array.of(8, 2, 0, 0, 0),
   ]);
-  return concatenate([
+  return Buffer.concat([
     Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10),
     chunk("IHDR", header),
     chunk("IDAT", zlibSync(raw, { level: 9 })),

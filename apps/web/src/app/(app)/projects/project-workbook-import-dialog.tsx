@@ -1167,7 +1167,7 @@ export default function ProjectWorkbookImportDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-h-[min(90svh,52rem)] overflow-y-auto sm:max-w-2xl" closeLabel={t.common.close}>
+      <DialogContent className="max-h-[min(90svh,52rem)] overflow-y-auto sm:max-w-4xl" closeLabel={t.common.close}>
         <DialogHeader>
           <DialogTitle>{t.projectImport.wizardTitle}</DialogTitle>
         </DialogHeader>

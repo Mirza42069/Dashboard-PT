@@ -1,6 +1,6 @@
 /**
  * Read-only authenticated benchmark against existing listeners.
- * Run: node --import tsx scripts/benchmark-dashboard.ts
+ * Run: bun scripts/benchmark-dashboard.ts
  * Required execution env: BENCHMARK_EMAIL, BENCHMARK_PASSWORD.
  * Optional: BASE_URL, API_URL, BENCHMARK_MODE (observed listener mode).
  * Outputs sanitized JSON only. No traces, screenshots, or persisted auth state.

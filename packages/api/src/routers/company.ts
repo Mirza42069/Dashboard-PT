@@ -2,11 +2,12 @@ import { db } from "@DashboardV2/db";
 import { user } from "@DashboardV2/db/schema/auth";
 import { company } from "@DashboardV2/db/schema/company";
 import { project } from "@DashboardV2/db/schema/construction";
-import { TRPCError } from "@trpc/server";
+import { Effect } from "effect";
 import { asc, count, eq } from "drizzle-orm";
 import z from "zod";
 
 import { permissionProcedure, protectedProcedure, router } from "../index";
+import { attempt, fail, runProcedure } from "../lib/effect";
 import { interpolate } from "../lib/messages/index";
 import { roleOf } from "../lib/permissions";
 import { resolveCompanyIdForSession } from "../lib/scope";
@@ -27,91 +28,127 @@ export const companyRouter = router({
    * show which company they are in, an admin to populate the switcher. Regular
    * users only ever see their own — the list is not a directory of tenants.
    */
-  options: protectedProcedure.query(async ({ ctx }) => {
-    const canSwitch = roleOf(ctx.session.user) === "super_admin";
-    const rows = await db
-      .select({ id: company.id, name: company.name, code: company.code })
-      .from(company)
-      .orderBy(asc(company.createdAt));
+  options: protectedProcedure.query(({ ctx }) =>
+    runProcedure(
+      Effect.gen(function* () {
+        const canSwitch = roleOf(ctx.session.user) === "super_admin";
+        const rows = yield* attempt(() =>
+          db
+            .select({ id: company.id, name: company.name, code: company.code })
+            .from(company)
+            .orderBy(asc(company.createdAt)),
+        );
 
-    const activeId = await resolveCompanyIdForSession(ctx.session.user, ctx.headers);
-    return {
-      companies: canSwitch ? rows : rows.filter((row) => row.id === activeId),
-      activeId,
-      canSwitch,
-    };
-  }),
+        const activeId = yield* attempt(() =>
+          resolveCompanyIdForSession(ctx.session.user, ctx.headers),
+        );
+        return {
+          companies: canSwitch ? rows : rows.filter((row) => row.id === activeId),
+          activeId,
+          canSwitch,
+        };
+      }),
+    ),
+  ),
 
-  list: permissionProcedure("company:manage").query(async () => {
-    const rows = await db
-      .select({
-        id: company.id,
-        name: company.name,
-        code: company.code,
-        createdAt: company.createdAt,
-      })
-      .from(company)
-      .orderBy(asc(company.createdAt));
+  list: permissionProcedure("company:manage").query(() =>
+    runProcedure(
+      Effect.gen(function* () {
+        const rows = yield* attempt(() =>
+          db
+            .select({
+              id: company.id,
+              name: company.name,
+              code: company.code,
+              createdAt: company.createdAt,
+            })
+            .from(company)
+            .orderBy(asc(company.createdAt)),
+        );
 
-    // Counts drive the "can this be deleted?" affordance in the table.
-    const [projects, users] = await Promise.all([
-      db.select({ companyId: project.companyId, value: count() }).from(project).groupBy(project.companyId),
-      db.select({ companyId: user.companyId, value: count() }).from(user).groupBy(user.companyId),
-    ]);
+        // Counts drive the "can this be deleted?" affordance in the table.
+        const [projects, users] = yield* Effect.all([
+          attempt(() =>
+            db.select({ companyId: project.companyId, value: count() }).from(project).groupBy(project.companyId),
+          ),
+          attempt(() =>
+            db.select({ companyId: user.companyId, value: count() }).from(user).groupBy(user.companyId),
+          ),
+        ], { concurrency: "unbounded" });
 
-    const tally = (rows: { companyId: string | null; value: number }[], id: string) =>
-      rows.find((row) => row.companyId === id)?.value ?? 0;
+        const tally = (rows: { companyId: string | null; value: number }[], id: string) =>
+          rows.find((row) => row.companyId === id)?.value ?? 0;
 
-    return {
-      companies: rows.map((row) => ({
-        ...row,
-        projects: tally(projects, row.id),
-        users: tally(users, row.id),
-      })),
-    };
-  }),
+        return {
+          companies: rows.map((row) => ({
+            ...row,
+            projects: tally(projects, row.id),
+            users: tally(users, row.id),
+          })),
+        };
+      }),
+    ),
+  ),
 
-  create: permissionProcedure("company:manage").input(upsertSchema).mutation(async ({ ctx, input }) => {
-    const code = input.code.toUpperCase();
-    const [existing] = await db.select({ id: company.id }).from(company).where(eq(company.code, code));
-    if (existing) {
-      throw new TRPCError({ code: "CONFLICT", message: interpolate(ctx.t.company.codeInUse, { code }) });
-    }
+  create: permissionProcedure("company:manage")
+    .input(upsertSchema)
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const code = input.code.toUpperCase();
+          const [existing] = yield* attempt(() =>
+            db.select({ id: company.id }).from(company).where(eq(company.code, code)),
+          );
+          if (existing) {
+            return yield* fail("CONFLICT", interpolate(ctx.t.company.codeInUse, { code }));
+          }
 
-    const [created] = await db
-      .insert(company)
-      .values({ name: input.name, code })
-      .returning({ id: company.id });
+          const [created] = yield* attempt(() =>
+            db
+              .insert(company)
+              .values({ name: input.name, code })
+              .returning({ id: company.id }),
+          );
 
-    return { id: created?.id };
-  }),
+          return { id: created?.id };
+        }),
+      ),
+    ),
 
   update: permissionProcedure("company:manage")
     .input(upsertSchema.partial().extend({ id: z.string().min(1) }))
-    .mutation(async ({ ctx, input }) => {
-      const { id, name, code } = input;
-      const [current] = await db.select().from(company).where(eq(company.id, id));
-      if (!current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.company.notFound });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const { id, name, code } = input;
+          const [current] = yield* attempt(() => db.select().from(company).where(eq(company.id, id)));
+          if (!current) {
+            return yield* fail("NOT_FOUND", ctx.t.company.notFound);
+          }
 
-      if (code && code.toUpperCase() !== current.code) {
-        const [clash] = await db
-          .select({ id: company.id })
-          .from(company)
-          .where(eq(company.code, code.toUpperCase()));
-        if (clash) {
-          throw new TRPCError({ code: "CONFLICT", message: interpolate(ctx.t.company.codeInUse, { code }) });
-        }
-      }
+          if (code && code.toUpperCase() !== current.code) {
+            const [clash] = yield* attempt(() =>
+              db
+                .select({ id: company.id })
+                .from(company)
+                .where(eq(company.code, code.toUpperCase())),
+            );
+            if (clash) {
+              return yield* fail("CONFLICT", interpolate(ctx.t.company.codeInUse, { code }));
+            }
+          }
 
-      await db
-        .update(company)
-        .set({ ...(name ? { name } : {}), ...(code ? { code: code.toUpperCase() } : {}) })
-        .where(eq(company.id, id));
+          yield* attempt(() =>
+            db
+              .update(company)
+              .set({ ...(name ? { name } : {}), ...(code ? { code: code.toUpperCase() } : {}) })
+              .where(eq(company.id, id)),
+          );
 
-      return { success: true };
-    }),
+          return { success: true };
+        }),
+      ),
+    ),
 
   /**
    * Refused while anything still belongs to the company. The restrict FKs
@@ -120,41 +157,45 @@ export const companyRouter = router({
    */
   delete: permissionProcedure("company:manage")
     .input(z.object({ id: z.string().min(1) }))
-    .mutation(async ({ ctx, input }) => {
-      const [current] = await db
-        .select({ id: company.id })
-        .from(company)
-        .where(eq(company.id, input.id));
-      if (!current) {
-        throw new TRPCError({ code: "NOT_FOUND", message: ctx.t.company.notFound });
-      }
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          const [current] = yield* attempt(() =>
+            db
+              .select({ id: company.id })
+              .from(company)
+              .where(eq(company.id, input.id)),
+          );
+          if (!current) {
+            return yield* fail("NOT_FOUND", ctx.t.company.notFound);
+          }
 
-      const [[projects], [users]] = await Promise.all([
-        db.select({ value: count() }).from(project).where(eq(project.companyId, input.id)),
-        db.select({ value: count() }).from(user).where(eq(user.companyId, input.id)),
-      ]);
+          const [[projects], [users]] = yield* Effect.all([
+            attempt(() => db.select({ value: count() }).from(project).where(eq(project.companyId, input.id))),
+            attempt(() => db.select({ value: count() }).from(user).where(eq(user.companyId, input.id))),
+          ], { concurrency: "unbounded" });
 
-      const owned = (projects?.value ?? 0) + (users?.value ?? 0);
-      if (owned > 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            `This company still owns ${projects?.value ?? 0} project(s) ` +
-            `and ${users?.value ?? 0} user(s). Move or delete them first.`,
-        });
-      }
+          const owned = (projects?.value ?? 0) + (users?.value ?? 0);
+          if (owned > 0) {
+            return yield* fail(
+              "BAD_REQUEST",
+              `This company still owns ${projects?.value ?? 0} project(s) ` +
+                `and ${users?.value ?? 0} user(s). Move or delete them first.`,
+            );
+          }
 
-      // Last company standing: deleting it would leave every request unable to
-      // resolve a scope, locking the whole dashboard.
-      const [{ value: total } = { value: 0 }] = await db.select({ value: count() }).from(company);
-      if (total <= 1) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: ctx.t.company.cannotDeleteLast,
-        });
-      }
+          // Last company standing: deleting it would leave every request unable to
+          // resolve a scope, locking the whole dashboard.
+          const [{ value: total } = { value: 0 }] = yield* attempt(() =>
+            db.select({ value: count() }).from(company),
+          );
+          if (total <= 1) {
+            return yield* fail("BAD_REQUEST", ctx.t.company.cannotDeleteLast);
+          }
 
-      await db.delete(company).where(eq(company.id, input.id));
-      return { success: true };
-    }),
+          yield* attempt(() => db.delete(company).where(eq(company.id, input.id)));
+          return { success: true };
+        }),
+      ),
+    ),
 });

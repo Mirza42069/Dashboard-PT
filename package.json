@@ -15,7 +15,6 @@
       "@trpc/server": "^11.18.0",
       "better-auth": "1.6.26",
       "fflate": "^0.8.3",
-      "next-themes": "^0.4.6",
       "react": "^19.2.7",
       "react-dom": "^19.2.7",
       "sonner": "^2.0.7",
@@ -61,7 +60,6 @@
     "@DashboardV2/env": "workspace:*",
     "dotenv": "catalog:",
     "drizzle-orm": "^0.45.2",
-    "effect": "^4.0.0-rc.112",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -69,7 +67,6 @@
     "@types/bun": "catalog:",
     "@types/node": "^26.1.2",
     "playwright": "^1.62.1",
-    "tsx": "^4.23.5",
     "typescript": "catalog:",
     "vercel": "^58.5.1"
   },
