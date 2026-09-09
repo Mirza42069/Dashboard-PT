@@ -109,7 +109,7 @@ export default function SignInForm() {
       noValidate
     >
       <div className="space-y-1">
-        <h1 className="text-sm font-medium">{t.auth.signIn}</h1>
+        <h2 className="text-lg font-medium">{t.auth.signIn}</h2>
         <p className="text-xs text-muted-foreground">{t.auth.useIssuedCredentials}</p>
       </div>
 

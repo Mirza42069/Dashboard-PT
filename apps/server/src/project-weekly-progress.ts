@@ -151,7 +151,7 @@ export type WeeklyItemProgress = {
   pctComplete: number;
   sourceSheetName: string;
   sourceRow: number;
-  sourceColumn: number;
+  sourceColumn: number | null;
   sourceValue: string;
 };
 

@@ -407,12 +407,14 @@ export function parseDailyProgressWorkbook(
           parentCode = null;
           parentDescription = null;
         } else if (
-          code &&
           label &&
+          typeof amount !== "number" &&
+          typeof weight !== "number" &&
           !/^TOTAL\b/i.test(code) &&
+          !/^TOTAL\b/i.test(label) &&
           !/^GRAND TOTAL\b/i.test(label)
         ) {
-          parentCode = code;
+          parentCode = code || null;
           parentDescription = label;
         }
         continue;
@@ -476,6 +478,13 @@ export function parseDailyProgressWorkbook(
         errors,
       );
       const normalizedPrevious = previous ?? 0;
+      if (cumulative === null && remaining === null) {
+        errors.push({
+          row,
+          column: columnLetter(plan.mapping.cumulativePercent),
+          message: `Cumulative or remaining progress on ${source.sheetName} must be supplied; blank progress is not zero.`,
+        });
+      }
       const normalizedCumulative = cumulative ?? (remaining === null ? 0 : 100 - remaining);
       const normalizedRemaining = remaining ?? 100 - normalizedCumulative;
       const normalizedPreviousWeighted = previousWeighted ?? (normalizedPrevious / 100) * weight;

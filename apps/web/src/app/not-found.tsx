@@ -30,8 +30,6 @@ export default async function NotFound() {
           <EmptyDescription>{t.common.notFoundDescription}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
-          {/* Straight to /dashboard rather than /, which only exists to redirect
-              here anyway (app/page.tsx) — no reason to spend a round trip. */}
           <Link href="/dashboard" className={buttonVariants()}>
             <House />
             {t.common.backToDashboard}

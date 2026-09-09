@@ -3,6 +3,7 @@ import { projectMembershipIds } from "@DashboardV2/api/lib/project-manager";
 import type { Role } from "@DashboardV2/api/lib/permissions";
 import { db } from "@DashboardV2/db";
 import {
+  boqItem,
   dailyProgressItem,
   dailyProgressSnapshot,
   project,
@@ -93,6 +94,8 @@ export async function commitProjectWorkbook(input: {
           ? null
           : {
               ...prepared.plan.dailyProgress,
+              itemProgress: prepared.itemProgress,
+              warnings: prepared.plan.warnings,
               preview: {
                 sheetCount: prepared.dailyProgress.length,
                 itemCount: prepared.dailyProgress[0]?.items.length ?? 0,
@@ -160,8 +163,8 @@ export async function commitProjectWorkbook(input: {
       projectId,
       periodId: period.id,
       boqItemId,
-      cumulativeQuantity: entry.cumulativeQuantity.toFixed(BOQ_NUMERIC_SCALE),
-      cumulativePercent: null,
+      cumulativeQuantity: prepared.dailyProgress.length > 0 ? null : entry.cumulativeQuantity.toFixed(BOQ_NUMERIC_SCALE),
+      cumulativePercent: prepared.dailyProgress.length > 0 ? entry.pctComplete.toFixed(4) : null,
       pctComplete: entry.pctComplete.toFixed(4),
       noProgress: false,
       note: null,
@@ -256,6 +259,9 @@ export async function commitProjectWorkbook(input: {
       : []),
     db.insert(reportingPeriod).values(periods),
     ...revision.statements,
+    ...(prepared.dailyProgress.length > 0 && itemProgressValues.length > 0
+      ? [db.update(boqItem).set({ progressMode: "by_percent" }).where(eq(boqItem.boqVersionId, revision.result.versionId))]
+      : []),
     ...(itemProgressValues.length > 0
       ? [db.insert(progressEntry).values(itemProgressValues)]
       : []),
@@ -268,5 +274,5 @@ export async function commitProjectWorkbook(input: {
     ...chunks(dailyItemValues, 250).map((values) => db.insert(dailyProgressItem).values(values)),
   ]);
 
-  return { projectId, ...revision.result, periodCount: periods.length };
+  return { projectId, ...revision.result, periodCount: periods.length, warnings: prepared.plan.warnings };
 }

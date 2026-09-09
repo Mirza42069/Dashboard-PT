@@ -17,9 +17,6 @@ import { cn } from "@DashboardV2/ui/lib/utils";
  * zero, that the previous baseline keeps serving reports until this one is
  * activated. Those have to stay somewhere, but they do not have to be a
  * paragraph the fluent user re-reads every visit.
- *
- * Generalised from the pattern already in delay-contributors.tsx, which was the
- * only place in the product doing this.
  */
 export function Hint({ text, className }: { text: string; className?: string }) {
   return (

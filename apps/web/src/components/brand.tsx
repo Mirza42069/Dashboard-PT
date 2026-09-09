@@ -5,9 +5,8 @@ export const BRAND_NAME = "Fushin";
 /**
  * Where an account that cannot use the app reaches a human.
  *
- * Mirrors CONTACT_EMAIL in apps/marketing/src/lib/site.ts — same address, same
- * NEXT_PUBLIC_ variable, so setting it once covers both apps. Public by design:
- * it is rendered as a mailto link.
+ * Public by design: rendered as a mailto link on the combined entry page and
+ * account-access screens.
  */
 export const CONTACT_EMAIL = process.env.NEXT_PUBLIC_CONTACT_EMAIL ?? "hyperferno@gmail.com";
 

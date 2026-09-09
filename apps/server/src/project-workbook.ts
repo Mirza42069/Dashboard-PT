@@ -40,6 +40,7 @@ import {
   type PdfExtraction,
 } from "./project-pdf";
 import { parsePdfDailyProgress } from "./project-pdf-progress";
+import { aggregateDailyProgress } from "./project-daily-aggregation";
 import {
   isWeeklyProgressWorkbook,
   parseWeeklyProgressWorkbook,
@@ -2042,6 +2043,19 @@ export async function reviewProjectWorkbook(
     });
   }
 
+  const bounds = daily && plan.profile === "reference-s-curve" ? referenceBounds(sheet) : null;
+  if (daily && bounds?.scheduleStartDate && bounds.endDate && validationErrors.length === 0) {
+    const parentCodes = new Set(parsed.rows.map((row) => row.parentCode).filter(Boolean));
+    const aggregation = aggregateDailyProgress(
+      lines.filter((row) => !parentCodes.has(row.code)),
+      daily.snapshots,
+      generatePeriods(bounds.scheduleStartDate, bounds.endDate, "weekly", null),
+      actual.snapshots,
+    );
+    plan.warnings = [...new Set([...plan.warnings.filter((warning) => !warning.startsWith("Daily item progress:")), ...aggregation.warnings])]
+      .slice(0, 20).map((warning) => warning.slice(0, 300));
+  }
+
   return {
     plan,
     columns: describeSheet(sheet, plan.headerRow).columns,
@@ -2317,12 +2331,19 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
     });
   }
 
+  const parentCodes = new Set(rows.rows.map((row) => row.parentCode).filter(Boolean));
+  const aggregated = aggregateDailyProgress(
+    rows.rows.filter((row) => !parentCodes.has(row.code) && !plan.sectionRows.includes(row.row)),
+    daily?.snapshots ?? [],
+    generated,
+    [...mergedActuals.values()],
+  );
   return {
-    plan,
+    plan: { ...plan, warnings: [...new Set([...plan.warnings, ...aggregated.warnings])].slice(0, 20).map((warning) => warning.slice(0, 300)) },
     rows: rows.rows,
     periods: generated,
     actualSnapshots: [...mergedActuals.values()].sort((a, b) => a.periodIndex - b.periodIndex),
-    itemProgress: [],
+    itemProgress: aggregated.entries,
     weeklyProgressPreview: undefined,
     dailyProgress: daily?.snapshots ?? [],
   };

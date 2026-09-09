@@ -48,6 +48,10 @@ test("parses every dated daily progress sheet and reconciles the latest total", 
     parentCode: "1",
     parentDescription: "Detail Base plate (SC1)",
   });
+  expect(parsed?.snapshots.at(-1)?.items.find((item) => item.sourceRow === 157)?.parentDescription)
+    .toBe("Pekerjaan Relokasi Outdoor AC Existing Lantai 5 dan Instalasi Pipa Refrigrant");
+  expect(parsed?.snapshots.at(-1)?.items.find((item) => item.sourceRow === 162)?.parentDescription)
+    .toBe("Pekerjaan Relokasi Water Heater  Existing");
 });
 
 test("entire-workbook analysis signs and prepares all dated readings", async () => {
@@ -76,6 +80,19 @@ test("entire-workbook analysis signs and prepares all dated readings", async () 
   expect(prepared.dailyProgress[0]?.items).toHaveLength(125);
   expect(prepared.actualSnapshots.at(-1)?.periodIndex).toBe(16);
   expect(prepared.actualSnapshots.at(-1)?.cumulativePercent).toBeCloseTo(56.9230209578, 8);
+  expect(prepared.itemProgress).toHaveLength(22);
+  expect(prepared.itemProgress.every((entry) => entry.periodIndex === 16)).toBe(true);
+  expect(prepared.itemProgress.find((entry) => entry.row === 13)?.pctComplete).toBeCloseTo(49, 8);
+  expect(prepared.itemProgress.find((entry) => entry.row === 30)?.pctComplete).toBeCloseTo(53.7580261846, 8);
+  expect(prepared.itemProgress.find((entry) => entry.row === 24)?.pctComplete).toBe(0);
+  const weightedTotal = prepared.itemProgress.reduce((total, entry) =>
+    total + (prepared.rows.find((row) => row.row === entry.row)!.weight ?? 0) * entry.pctComplete / 100, 0);
+  expect(weightedTotal).toBeCloseTo(56.9230209578, 8);
+  const persistedTotal = prepared.itemProgress.reduce((total, entry) =>
+    total + Number(prepared.rows.find((row) => row.row === entry.row)!.weight!.toFixed(6)) *
+      Number(entry.pctComplete.toFixed(4)) / 100, 0);
+  expect(Math.abs(persistedTotal - weightedTotal)).toBeLessThan(0.0001);
+  expect(prepared.plan.warnings.some((warning) => warning.includes("entries were not imported"))).toBe(false);
 });
 
 test("choosing a dated sheet still analyzes the complete progress workbook", async () => {
@@ -123,4 +140,14 @@ test("rejects item progress that decreases between dated sheets", async () => {
 
   const parsed = parseDailyProgressWorkbook(workbook);
   expect(parsed?.errors.some((error) => error.message.includes("decreases"))).toBe(true);
+});
+
+test("blank cumulative and remaining cells are not imported as explicit zero", async () => {
+  const workbook = await loadWorkbook(await referenceBytes());
+  const sheet = workbook.getWorksheet("16 AGUSTUS 2026")!;
+  for (const column of ["I", "J", "K", "L", "M", "N", "O", "P"]) {
+    sheet.getCell(`${column}30`).value = null;
+  }
+  const parsed = parseDailyProgressWorkbook(workbook);
+  expect(parsed?.errors.some((error) => error.row === 30 && error.message.includes("blank progress is not zero"))).toBe(true);
 });

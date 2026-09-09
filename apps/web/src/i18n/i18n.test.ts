@@ -61,6 +61,7 @@ describe("the Indonesian dictionary", () => {
   const SHARED_WITH_ENGLISH = new Set([
     "common.none", // an em dash, standing in for "no value"
     "auth.email", // loanwords and acronyms Indonesian took whole
+    "auth.sourceLabel", // the file formats, named the same in both languages
     "users.email",
     "actions.typeRfi",
     "projects.statusLabel",

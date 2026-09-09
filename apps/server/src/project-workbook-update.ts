@@ -17,6 +17,8 @@ import { z } from "zod";
 
 import { prepareBoqRevision } from "./boq-import";
 import { BOQ_NUMERIC_SCALE, loadWorkbook } from "./boq-import-parse";
+import { aggregateDailyProgress } from "./project-daily-aggregation";
+import type { WeeklyItemProgress } from "./project-weekly-progress";
 import {
   parseDailyProgressWorkbook,
   type ParsedDailyProgressSnapshot,
@@ -133,6 +135,80 @@ function chunks<T>(values: T[], size: number) {
   return result;
 }
 
+type ItemReading = {
+  boqItemId: string;
+  periodId: string;
+  pctComplete: number;
+  cumulativeQuantity: number | null;
+  cumulativePercent: number | null;
+};
+
+// Compare at database precision, and keep identical stored readings untouched.
+export function reconcileWorkbookItemReadings(
+  existing: readonly ItemReading[],
+  incoming: readonly ItemReading[],
+  periods: readonly { id: string; periodIndex: number }[],
+) {
+  const periodIndexes = new Map(periods.map((period) => [period.id, period.periodIndex]));
+  const readings = new Map<string, Map<string, ItemReading>>();
+  for (const entry of existing) {
+    const item = readings.get(entry.boqItemId) ?? new Map<string, ItemReading>();
+    item.set(entry.periodId, entry);
+    readings.set(entry.boqItemId, item);
+  }
+  const additions: ItemReading[] = [];
+  for (const entry of incoming) {
+    if (!periodIndexes.has(entry.periodId) || !Number.isFinite(entry.pctComplete) ||
+      entry.pctComplete < 0 || entry.pctComplete > 100 ||
+      (entry.cumulativeQuantity === null && entry.cumulativePercent === null)) {
+      invalid("Imported item progress contains an invalid reading or reporting period.", "item_progress_invalid");
+    }
+    const item = readings.get(entry.boqItemId) ?? new Map<string, ItemReading>();
+    const stored = item.get(entry.periodId);
+    if (stored) {
+      if (
+        (stored.cumulativeQuantity === null && stored.cumulativePercent === null) ||
+        stored.pctComplete.toFixed(4) !== entry.pctComplete.toFixed(4) ||
+        (stored.cumulativePercent !== null && entry.cumulativePercent !== null &&
+          stored.cumulativePercent.toFixed(4) !== entry.cumulativePercent.toFixed(4)) ||
+        (stored.cumulativeQuantity !== null && entry.cumulativeQuantity !== null &&
+          stored.cumulativeQuantity.toFixed(BOQ_NUMERIC_SCALE) !==
+            entry.cumulativeQuantity.toFixed(BOQ_NUMERIC_SCALE))
+      ) {
+        invalid(
+          `Imported item progress conflicts with an existing reading for item ${entry.boqItemId} at period ${periodIndexes.get(entry.periodId)}. Correct the stored reading first.`,
+          "item_progress_conflict",
+        );
+      }
+      continue;
+    }
+    item.set(entry.periodId, entry);
+    readings.set(entry.boqItemId, item);
+    additions.push(entry);
+  }
+  for (const itemId of new Set(incoming.map((entry) => entry.boqItemId))) {
+    let previous: ItemReading | undefined;
+    for (const entry of [...readings.get(itemId)!.values()].sort(
+      (a, b) => periodIndexes.get(a.periodId)! - periodIndexes.get(b.periodId)!,
+    )) {
+      if (entry.cumulativeQuantity === null && entry.cumulativePercent === null) continue;
+      if (previous && (
+        Number(entry.pctComplete.toFixed(4)) < Number(previous.pctComplete.toFixed(4)) ||
+        (entry.cumulativeQuantity !== null && previous.cumulativeQuantity !== null &&
+          Number(entry.cumulativeQuantity.toFixed(BOQ_NUMERIC_SCALE)) <
+            Number(previous.cumulativeQuantity.toFixed(BOQ_NUMERIC_SCALE)))
+      )) {
+        invalid(
+          `Imported item progress would decrease for item ${itemId} at period ${periodIndexes.get(entry.periodId)}. Correct the stored readings first.`,
+          "item_progress_decrease",
+        );
+      }
+      previous = entry;
+    }
+  }
+  return additions;
+}
+
 export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUpdateInput) {
   if (!Object.values(input.sections).some(Boolean)) {
     invalid("Select at least one project section to update.", "section_required");
@@ -199,6 +275,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
         label: reportingPeriod.label,
         startDate: reportingPeriod.startDate,
         endDate: reportingPeriod.endDate,
+        status: reportingPeriod.status,
       })
       .from(reportingPeriod)
       .where(eq(reportingPeriod.projectId, input.projectId))
@@ -452,7 +529,10 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
           "daily_progress_date_outside_calendar",
         );
       }
-      latestDailyByPeriod.set(period.periodIndex, snapshot);
+      const latest = latestDailyByPeriod.get(period.periodIndex);
+      if (!latest || snapshot.reportDate > latest.reportDate) {
+        latestDailyByPeriod.set(period.periodIndex, snapshot);
+      }
     }
     for (const [periodIndex, snapshot] of latestDailyByPeriod) {
       if (merged.has(periodIndex)) continue;
@@ -480,6 +560,52 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
   }
 
   const periodByIndex = new Map(periods.map((period) => [period.periodIndex, period]));
+  const storedDaily = input.sections.progress && dailyProgress.length > 0
+    ? await db.select({
+        id: dailyProgressSnapshot.id,
+        periodId: dailyProgressSnapshot.periodId,
+        reportDate: dailyProgressSnapshot.reportDate,
+      }).from(dailyProgressSnapshot)
+        .where(eq(dailyProgressSnapshot.projectId, input.projectId))
+        .orderBy(asc(dailyProgressSnapshot.id))
+    : [];
+  for (const stored of storedDaily) {
+    const period = periods.find((candidate) => candidate.id === stored.periodId);
+    const importedDates = dailyProgress.filter((snapshot) => period &&
+      snapshot.reportDate >= period.startDate && snapshot.reportDate <= period.endDate);
+    if (importedDates.length > 0 && importedDates.every(
+      (snapshot) => snapshot.reportDate < stored.reportDate,
+    )) {
+      invalid(
+        `A later daily report (${stored.reportDate}) is already stored for period ${period!.periodIndex}. Import the latest report instead.`,
+        "daily_progress_backdated",
+      );
+    }
+  }
+  let itemProgress: WeeklyItemProgress[] = input.sections.progress
+    ? [...(prepared?.itemProgress ?? [])]
+    : [];
+  const aggregationWarnings: string[] = [];
+  if (input.sections.progress && prepared && dailyProgress.length > 0) {
+    const parentCodes = new Set(prepared.rows.map((row) => row.parentCode).filter(Boolean));
+    const aggregation = aggregateDailyProgress(
+      prepared.rows.filter((row) => !parentCodes.has(row.code) && !prepared.plan.sectionRows.includes(row.row)),
+      dailyProgress, periods, snapshots,
+    );
+    itemProgress = aggregation.entries;
+    aggregationWarnings.push(...aggregation.warnings);
+  }
+  let itemReadings: ItemReading[] = [];
+  const itemIdByRow = new Map<number, string>();
+  const percentItemIds = new Set<string>();
+  let activeLeafState: {
+    id: string;
+    description: string;
+    weight: string;
+    quantity: string | null;
+    unitRate: string | null;
+    progressMode: "by_quantity" | "by_percent";
+  }[] = [];
   for (const snapshot of snapshots) {
     if (!periodByIndex.has(snapshot.periodIndex)) {
       invalid(
@@ -514,7 +640,14 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     if (activeVersion) {
       const [leaves, entries] = await Promise.all([
         db
-          .select({ id: boqItem.id, weight: boqItem.weight })
+          .select({
+            id: boqItem.id,
+            description: boqItem.description,
+            weight: boqItem.weight,
+            quantity: boqItem.quantity,
+            unitRate: boqItem.unitRate,
+            progressMode: boqItem.progressMode,
+          })
           .from(boqItem)
           .where(
             and(
@@ -568,6 +701,40 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
         cumulativePercent:
           entry.cumulativePercent === null ? null : Number(entry.cumulativePercent),
       }));
+      if (!importsBoqAndSchedule && dailyProgress.length > 0) {
+        activeLeafState = [...leaves].sort((a, b) => a.id.localeCompare(b.id));
+        const aggregation = aggregateDailyProgress(leaves.map((leaf, index) => {
+          itemIdByRow.set(index + 1, leaf.id);
+          return {
+            row: index + 1,
+            description: leaf.description,
+            weight: Number(leaf.weight),
+            quantity: leaf.quantity === null ? null : Number(leaf.quantity),
+            unitRate: leaf.unitRate === null ? null : Number(leaf.unitRate),
+          };
+        }), dailyProgress, periods, snapshots);
+        itemProgress = aggregation.entries;
+        aggregationWarnings.push(...aggregation.warnings);
+        const leavesById = new Map(leaves.map((leaf) => [leaf.id, leaf]));
+        const incoming = itemProgress.map((entry) => {
+          const boqItemId = itemIdByRow.get(entry.row)!;
+          const leaf = leavesById.get(boqItemId)!;
+          // Active modes must stay stable for manual saves already in flight.
+          const byPercent = leaf.progressMode === "by_percent";
+          if (!byPercent && (leaf.quantity === null || Number(leaf.quantity) <= 0)) {
+            invalid("The active baseline needs a positive quantity before importing quantity-based progress.", "item_progress_invalid");
+          }
+          return {
+            boqItemId,
+            periodId: periodByIndex.get(entry.periodIndex)!.id,
+            pctComplete: Number(entry.pctComplete.toFixed(4)),
+            cumulativeQuantity: byPercent ? null : Number(entry.cumulativeQuantity.toFixed(BOQ_NUMERIC_SCALE)),
+            cumulativePercent: byPercent ? Number(entry.pctComplete.toFixed(4)) : null,
+          };
+        });
+        itemReadings = reconcileWorkbookItemReadings(curveEntries, incoming, periods);
+        curveEntries.push(...itemReadings);
+      }
       const mergedSnapshots = new Map(
         existingSnapshots.map((snapshot) => [
           snapshot.periodId,
@@ -592,7 +759,8 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
         const next = nextCurve[index];
         if (previousNext == null || next == null) continue;
         const nextDrop = previousNext - next;
-        if (nextDrop > 0.000001) {
+        // Item readings are stored at four decimals, snapshots at six.
+        if (nextDrop > (dailyProgress.length > 0 ? 0.0001 : 0.000001)) {
           invalid(
             `The imported progress would make cumulative progress decrease at period ${periods[index]!.periodIndex}.`,
             "actual_curve_decrease",
@@ -631,6 +799,10 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     userExcludedRows: analysis.plan.userExcludedRows,
     parentAssignments: analysis.plan.parentAssignments,
     actualCurve: analysis.plan.actualCurve,
+    itemProgress: {
+      entries: itemProgress.map((entry) => ({ ...entry, boqItemId: itemIdByRow.get(entry.row) ?? null })),
+      warnings: [...(prepared?.plan.warnings ?? []), ...aggregationWarnings],
+    },
     dailyProgress:
       analysis.plan.dailyProgress == null
         ? null
@@ -694,6 +866,43 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
       })
     : null;
   const updateImportId = revision?.result.importId ?? crypto.randomUUID();
+  if (revision && input.sections.progress) {
+    const incoming = itemProgress.map((entry) => {
+      const boqItemId = revision.itemIdByRow.get(entry.row);
+      const period = periodByIndex.get(entry.periodIndex);
+      if (!boqItemId || !period) {
+        invalid(`Imported item progress could not be attached at period ${entry.periodIndex}.`, "item_progress_unmatched");
+      }
+      itemIdByRow.set(entry.row, boqItemId);
+      if (dailyProgress.length > 0) percentItemIds.add(boqItemId);
+      return {
+        boqItemId,
+        periodId: period.id,
+        pctComplete: Number(entry.pctComplete.toFixed(4)),
+        cumulativeQuantity: dailyProgress.length > 0 ? null : Number(entry.cumulativeQuantity.toFixed(BOQ_NUMERIC_SCALE)),
+        cumulativePercent: dailyProgress.length > 0 ? Number(entry.pctComplete.toFixed(4)) : null,
+      };
+    });
+    itemReadings = reconcileWorkbookItemReadings([], incoming, periods);
+    const parentCodes = new Set(prepared!.rows.map((row) => row.parentCode).filter(Boolean));
+    const curve = computeActualCurve(
+      prepared!.rows.filter((row) => !parentCodes.has(row.code)).map((row) => ({
+        leaf: { id: revision.itemIdByRow.get(row.row)!, weight: row.weight ?? 0 },
+      })),
+      periods,
+      itemReadings,
+      null,
+      [...new Map([
+        ...existingSnapshots.map((snapshot) => [snapshot.periodId, Number(snapshot.cumulativePercent)] as const),
+        ...snapshots.map((snapshot) => [periodByIndex.get(snapshot.periodIndex)!.id, snapshot.cumulativePercent] as const),
+      ])].map(([periodId, cumulativePercent]) => ({ periodId, cumulativePercent })),
+    ).cumulative;
+    for (let index = 1; index < curve.length; index++) {
+      if (curve[index - 1] != null && curve[index] != null && curve[index - 1]! - curve[index]! > (dailyProgress.length > 0 ? 0.0001 : 0.000001)) {
+        invalid(`The imported progress would make cumulative progress decrease at period ${periods[index]!.periodIndex}.`, "actual_curve_decrease");
+      }
+    }
+  }
   const dailyVersionId = revision?.result.versionId ?? activeVersion?.id ?? null;
   if (dailyProgress.length > 0 && !dailyVersionId) {
     invalid("Activate a baseline before importing dated item progress.", "active_baseline_required");
@@ -817,6 +1026,28 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
 
   if (input.sections.progress) {
     statements.push(
+      ...(!importsBoqAndSchedule && dailyProgress.length > 0 ? [db.execute(sql`
+        select 1 / case when coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'id', item.id, 'description', item.description, 'weight', item.weight::text,
+            'quantity', item.quantity::text, 'unitRate', item.unit_rate::text,
+            'progressMode', item.progress_mode
+          ) order by item.id)
+          from boq_item item
+          where item.boq_version_id = ${activeVersion?.id ?? null} and item.deleted_at is null
+            and not exists (
+              select 1 from boq_item child where child.parent_id = item.id and child.deleted_at is null
+            )
+        ), '[]'::jsonb) = ${JSON.stringify(activeLeafState)}::jsonb then 1 else 0 end
+      `)] : []),
+      ...(dailyProgress.length > 0 ? [db.execute(sql`
+        select 1 / case when coalesce((
+          select jsonb_agg(jsonb_build_object(
+            'id', id, 'periodId', period_id, 'reportDate', report_date
+          ) order by id)
+          from daily_progress_snapshot where project_id = ${input.projectId}
+        ), '[]'::jsonb) = ${JSON.stringify(storedDaily)}::jsonb then 1 else 0 end
+      `)] : []),
       db.execute(sql`
         select 1 / case when coalesce((
           select jsonb_agg(jsonb_build_object(
@@ -858,7 +1089,8 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
         then 1 else 0 end
       `),
     );
-  } else if (input.sections.progress) {
+  }
+  if (input.sections.progress) {
     statements.push(
       db.execute(sql`
         select 1 / case when (
@@ -900,6 +1132,57 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
   }
 
   if (revision) statements.push(...revision.statements);
+
+  if (itemReadings.length > 0) {
+    const writtenPeriodIds = [...new Set(itemReadings.map((entry) => entry.periodId))];
+    if (periods.some((period) => writtenPeriodIds.includes(period.id) &&
+      !["open", "draft", "returned"].includes(period.status))) {
+      invalid("Item progress can only be imported into open, draft, or returned reporting periods.", "period_not_editable");
+    }
+    statements.push(db.execute(sql`
+      with editable as (
+        update reporting_period
+        set status = case when status = 'open' then 'draft' else status end,
+            updated_at = now()
+        where project_id = ${input.projectId}
+          and id in (${sql.join(writtenPeriodIds.map((id) => sql`${id}`), sql`, `)})
+          and status in ('open', 'draft', 'returned')
+        returning id
+      )
+      select 1 / case when (select count(*) from editable) = ${writtenPeriodIds.length}
+        then 1 else 0 end
+    `));
+  }
+
+  if (itemProgress.length > 0) {
+    // Revision imports serialize their audit before their generated item IDs are available.
+    if (revision) statements.push(db.update(boqImport).set({ mapping: JSON.stringify({
+      ...mappingAudit,
+      itemProgress: {
+        ...mappingAudit.itemProgress,
+        entries: itemProgress.map((entry) => ({ ...entry, boqItemId: itemIdByRow.get(entry.row) })),
+      },
+    }) }).where(eq(boqImport.id, updateImportId)));
+    if (percentItemIds.size > 0) statements.push(db.update(boqItem)
+      .set({ progressMode: "by_percent" })
+      .where(inArray(boqItem.id, [...percentItemIds])));
+    if (revision && dailyProgress.length === 0) statements.push(db.update(boqItem)
+      .set({ progressMode: "by_quantity" })
+      .where(inArray(boqItem.id, [...new Set(itemReadings.map((entry) => entry.boqItemId))])));
+    statements.push(...chunks(itemReadings, 250).map((values) => db.insert(progressEntry).values(
+      values.map((entry) => ({
+        id: crypto.randomUUID(),
+        projectId: input.projectId,
+        boqItemId: entry.boqItemId,
+        periodId: entry.periodId,
+        pctComplete: entry.pctComplete.toFixed(4),
+        cumulativePercent: entry.cumulativePercent?.toFixed(4) ?? null,
+        cumulativeQuantity: entry.cumulativeQuantity?.toFixed(BOQ_NUMERIC_SCALE) ?? null,
+        noProgress: false,
+        recordedById: input.actor.id,
+      })),
+    )));
+  }
 
   if (!revision) {
     statements.push(
@@ -1009,6 +1292,8 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
   );
   const warnings = [
     ...analysis.plan.warnings,
+    ...(prepared?.plan.warnings ?? []),
+    ...aggregationWarnings,
     ...(!importsBoqAndSchedule ? analysis.summary.validationErrors.map(warningText) : []),
   ];
 

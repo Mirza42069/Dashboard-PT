@@ -40,6 +40,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { toast } from "@/lib/toast";
+import { selectedReportingPeriod } from "@/lib/reporting-period";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
@@ -129,10 +130,7 @@ export default function ReportingWorkflow({
   // Default to the period the project is actually working on: the earliest one
   // that is not finished. Landing on period 1 of a job in its ninth month would
   // be technically correct and useless.
-  const current =
-    periods.find((period) => period.id === selectedPeriodId) ??
-    periods.find((period) => period.status !== "approved" && period.status !== "locked") ??
-    periods[periods.length - 1]!;
+  const current = selectedReportingPeriod(periods, selectedPeriodId)!;
 
   const { completeness } = current;
   const addressed = completeness.reported + completeness.noProgress;

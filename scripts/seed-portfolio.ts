@@ -18,15 +18,11 @@
  * the activity-log rows — which carry no foreign key and so never cascade — can
  * be cleaned up by id rather than by a prefix match on live data.
  *
- * The target company is resolved from the account the marketing screenshots are
- * captured as, not hardcoded to SKN. Seeding into a tenant that account cannot
- * see would produce ten invisible projects and four unchanged screenshots.
+ * The target company is resolved from the demo account, not hardcoded to SKN,
+ * so the seeded portfolio is visible to that account.
  *
  * Contract dates are relative to the day it runs, so re-running on a later date
- * advances every project. That is the right behaviour for a demo portfolio, but
- * it does move the figures quoted on the marketing page
- * (apps/marketing/src/lib/content.ts). Re-run `bun run shots` after reseeding,
- * and check those numbers still match what the screenshots show.
+ * advances every project to keep the demo portfolio current.
  */
 import { createHash } from "node:crypto";
 
@@ -65,8 +61,8 @@ import type {
 } from "@DashboardV2/db/schema";
 import { and, asc, eq, inArray } from "drizzle-orm";
 
-/** The account the marketing capture script signs in as. */
-const DEFAULT_CAPTURE_EMAIL = "box@papa.com";
+/** Default demo account; override with --user. */
+const DEFAULT_DEMO_EMAIL = "box@papa.com";
 
 /** Codes this script owns. Nothing outside this list is ever touched. */
 const CODES = Array.from({ length: 10 }, (_, index) => `PRJ-${101 + index}`);
@@ -738,7 +734,7 @@ const ACTION_POOL: {
 
 type Ctx = {
   companyId: string;
-  /** Who prepares and records. The account the screenshots are captured as. */
+  /** Who prepares and records: the demo account. */
   actorId: string;
   actorName: string;
   /**
@@ -746,7 +742,7 @@ type Ctx = {
    *
    * Deliberately a different account where one exists: progress:review and
    * progress:lock are not granted to role=user (see lib/permissions.ts), so
-   * stamping the capture account as its own approver would depict a state the
+   * stamping the demo account as its own approver would depict a state the
    * application itself would refuse to create.
    */
   reviewerId: string;
@@ -1296,9 +1292,9 @@ const rupiah = (value: number) =>
 /**
  * Which tenant the projects belong in.
  *
- * Not hardcoded, because the point of this data is to be visible to the account
- * the marketing screenshots are taken as. `--company` wins if given; otherwise
- * the capture account's own company; otherwise the oldest one, which is what
+ * Not hardcoded, because this data must be visible to the demo account.
+ * `--company` wins if given; otherwise the demo account's own company;
+ * otherwise the oldest one, which is what
  * resolveCompanyIdForSession falls back to for a super admin with no company
  * cookie set.
  */
@@ -1316,7 +1312,7 @@ async function resolveTarget(email: string) {
 
   if (!account) {
     throw new Error(
-      `No account ${email}. That is the address the screenshot capture signs in as (CAPTURE_EMAIL in apps/marketing/.env.local) — create it first, or pass --user=<email>.`,
+      `No account ${email}. Create the demo account first, or pass --user=<email>.`,
     );
   }
 
@@ -1341,7 +1337,7 @@ async function resolveTarget(email: string) {
   /*
    * Someone who may actually sign a period off: a super admin first (they act
    * across companies), then an admin inside this company. Falling back to the
-   * capture account is honest but produces a history the workflow would not
+   * demo account is honest but produces a history the workflow would not
    * have allowed, so it says so.
    */
   const supervisors = await db
@@ -1357,10 +1353,10 @@ async function resolveTarget(email: string) {
 }
 
 async function main() {
-  const email = flag("user") ?? DEFAULT_CAPTURE_EMAIL;
+  const email = flag("user") ?? DEFAULT_DEMO_EMAIL;
   const { account, target, reviewer } = await resolveTarget(email);
 
-  console.log(`Capture account   ${email}`);
+  console.log(`Demo account      ${email}`);
   console.log(`  role            ${account.role ?? "user"}`);
   console.log(`  companyId       ${account.companyId ?? "(none, resolves by cookie or oldest)"}`);
   console.log(`  must change pw  ${account.mustChangePassword}`);
@@ -1371,7 +1367,7 @@ async function main() {
 
   if (account.mustChangePassword) {
     console.warn(
-      "\nWarning: this account still has to change its password on next sign-in, so `bun run shots` will fail on it. Sign in once and set a permanent password.",
+      "\nWarning: this account must change its password on next sign-in. Sign in once and set a permanent password.",
     );
   }
 
@@ -1479,7 +1475,7 @@ async function main() {
   }
 
   console.log(`\nWrote ${built.length} projects into ${target.name} (${target.code}).`);
-  console.log("Next: bun run dev:server + bun run dev:web, then bun run shots.");
+  console.log("Next: run bun run dev:server and bun run dev:web to view the portfolio.");
 }
 
 main().catch((error) => {

@@ -15,7 +15,7 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, Save, Trash2, Upload } from "@DashboardV2/ui/components/icons";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
@@ -46,7 +46,6 @@ import {
   buildPeriodSummary,
   computeActualCurve,
   computePlannedCurve,
-  delayContributors,
   distributionMap,
   latestPosition,
   scheduleRows,
@@ -60,13 +59,14 @@ import {
   buildPeriodHeader,
   findPeriodColumnIndex,
   lastPeriodOf,
+  monthKeyOf,
 } from "@/lib/period-header";
+import { selectedReportingPeriod } from "@/lib/reporting-period";
 import { useFormat } from "@/lib/use-format";
 import { useMatrixKeyboard } from "@/lib/use-matrix-keyboard";
 import { useRowSelection } from "@/lib/use-row-selection";
 import { trpc } from "@/utils/trpc";
 
-import DelayContributors from "./delay-contributors";
 import DailyProgressHistory from "./daily-progress-history";
 import { decimalOnly } from "./matrix-input";
 import PeriodSummaryTable from "./period-summary-table";
@@ -129,11 +129,13 @@ export default function ProgressTab({
    * something you ask for rather than something it does to fit the card.
    */
   const [monthFold, setMonthFold] = useState<MonthFoldState>(() => new Set());
+  const [leadingWidth, setLeadingWidth] = useState(LEADING_WIDTH);
 
   const reportQuery = useQuery(trpc.progress.report.queryOptions({ projectId }));
   const matrixPeriods = reportQuery.data?.periods ?? [];
-  const effectiveSelectedPeriodId =
-    selectedPeriodId ?? matrixPeriods.find((period) => isEditable(period.status))?.id ?? "";
+  const selectedPeriod = selectedReportingPeriod(matrixPeriods, selectedPeriodId);
+  const effectiveSelectedPeriodId = selectedPeriod?.id ?? "";
+  const selectedMonthKey = selectedPeriod ? monthKeyOf(selectedPeriod) : null;
   // Built above the early returns because the selection hook needs it, and a
   // hook cannot be called conditionally.
   const matrixRows = scheduleRows(reportQuery.data?.items ?? []);
@@ -143,7 +145,7 @@ export default function ProgressTab({
     resetKey: effectiveSelectedPeriodId,
   });
   const fit = fitMatrix({
-    leadingWidth: LEADING_WIDTH,
+    leadingWidth,
     trailingWidth: 0,
     periods: matrixPeriods,
     state: monthFold,
@@ -153,15 +155,15 @@ export default function ProgressTab({
     allMatrixColumns,
     effectiveSelectedPeriodId,
   );
-  const lastRevealedPeriodId = useRef("");
+  const lastRevealedAnchor = useRef("");
   const matrixWindow = useMatrixWindow({
     rowCount: matrixRows.length,
     columnCount: allMatrixColumns.length,
     estimatedRowHeight: ESTIMATED_ROW_HEIGHT,
     columnWidth: MAX_PERIOD_WIDTH,
     estimatedHeaderHeight: ESTIMATED_HEADER_HEIGHT,
-    leadingWidth: LEADING_WIDTH,
-    stickyLeadingWidth: LEADING_WIDTH,
+    leadingWidth,
+    stickyLeadingWidth: leadingWidth,
     windowed: true,
     // The grid has no vertical scrollbar of its own — it grows to full height
     // and the page scrolls it. `scrollTop` is therefore always 0, which row
@@ -169,19 +171,29 @@ export default function ProgressTab({
     windowRows: false,
   });
   useEffect(() => {
-    if (lastRevealedPeriodId.current === effectiveSelectedPeriodId) return;
+    if (matrixWindow.containerWidth === 0) return;
+    // Keep at least one input visible beside the item names on small screens.
+    const fittedLeadingWidth = Math.min(LEADING_WIDTH, Math.max(120, matrixWindow.containerWidth - MAX_PERIOD_WIDTH));
+    if (leadingWidth !== fittedLeadingWidth) {
+      setLeadingWidth(fittedLeadingWidth);
+      return;
+    }
+    const anchor = `${effectiveSelectedPeriodId}:${selectedColumnIndex}:${matrixWindow.containerWidth}:${leadingWidth}`;
+    if (lastRevealedAnchor.current === anchor) return;
     if (!effectiveSelectedPeriodId || selectedColumnIndex < 0) return;
     const element = matrixWindow.scrollRef.current;
-    if (!element) return;
-    const left = selectedColumnIndex * MAX_PERIOD_WIDTH;
-    const right = left + MAX_PERIOD_WIDTH;
-    const visibleLeft = element.scrollLeft;
-    const visibleRight = visibleLeft + element.clientWidth - LEADING_WIDTH;
-    if (left < visibleLeft || right > visibleRight) {
-      element.scrollTo({ left: Math.max(0, left - MAX_PERIOD_WIDTH), behavior: "auto" });
+    if (!element || matrixWindow.containerWidth === 0) return;
+    if (selectedMonthKey && monthFold.has(selectedMonthKey)) {
+      setMonthFold((current) => {
+        const next = new Set(current);
+        next.delete(selectedMonthKey);
+        return next;
+      });
+      return;
     }
-    lastRevealedPeriodId.current = effectiveSelectedPeriodId;
-  }, [effectiveSelectedPeriodId, matrixWindow.scrollRef, selectedColumnIndex]);
+    element.scrollTo({ left: selectedColumnIndex * MAX_PERIOD_WIDTH, behavior: "instant" });
+    lastRevealedAnchor.current = anchor;
+  }, [effectiveSelectedPeriodId, matrixWindow.scrollRef, matrixWindow.containerWidth, selectedColumnIndex, selectedMonthKey, monthFold, leadingWidth]);
   const matrixKeyboard = useMatrixKeyboard({
     scrollRef: matrixWindow.scrollRef,
     rowCount: matrixRows.length,
@@ -231,7 +243,6 @@ export default function ProgressTab({
   const planned = computePlannedCurve(rows, periods, cells);
   const actual = computeActualCurve(rows, periods, entries, dataDate, actualSnapshots);
   const position = latestPosition(actual.cumulative, planned.cumulative);
-  const actualSource = position.index < 0 ? null : (actual.sources[position.index] ?? null);
 
   // The chart and the table below it are built from this one call, so the line
   // someone is looking at and the figure they are about to quote cannot
@@ -242,9 +253,12 @@ export default function ProgressTab({
     matrixWindow.columnWindow.start,
     matrixWindow.columnWindow.end,
   );
-  const visibleHeader = buildPeriodHeader(format, visibleColumns, dataDate, fit.collapsed);
+  const visibleHeader = buildPeriodHeader(format, visibleColumns, selectedPeriod?.endDate ?? null, fit.collapsed);
+  // Leave room after the final period so it can align with the sticky item names.
+  const scrollRunway = Math.max(0, matrixWindow.containerWidth - leadingWidth - MAX_PERIOD_WIDTH);
+  const afterSize = matrixWindow.columnWindow.afterSize + scrollRunway;
   const beforeColumns = matrixWindow.columnWindow.beforeSize > 0 ? 1 : 0;
-  const afterColumns = matrixWindow.columnWindow.afterSize > 0 ? 1 : 0;
+  const afterColumns = afterSize > 0 ? 1 : 0;
   const renderedColumnCount = 2 + beforeColumns + visibleColumns.length + afterColumns;
   /**
    * Narrow enough that a column can hold a figure but not a caption under it.
@@ -254,7 +268,6 @@ export default function ProgressTab({
    * thing that gets tuned.
    */
   const compact = fit.periodWidth < COMPACT_CELL_WIDTH;
-  const contributors = delayContributors(rows, periods, cells, entries, dataDate);
 
   const chartData = periods.map((period, index) => ({
     label: String(period.periodIndex),
@@ -359,7 +372,6 @@ export default function ProgressTab({
    * point and the grid is read-only. Same components either way, ordered by
    * which of the two this is.
    */
-  const selectedPeriod = periods.find((period) => period.id === effectiveSelectedPeriodId);
   const entryFirst = canEdit && Boolean(selectedPeriod && isEditable(selectedPeriod.status));
   /**
    * A selection here only means something against an open period.
@@ -437,7 +449,7 @@ export default function ProgressTab({
   }
 
   const reading = (
-    <Tabs defaultValue="curve" className="gap-3">
+    <Tabs key="reading" defaultValue="curve" className="gap-3">
       <TabsList aria-label={t.progress.title}>
         <TabsTrigger value="curve">{t.progress.viewCurve}</TabsTrigger>
         <TabsTrigger value="daily">{t.progress.viewDaily}</TabsTrigger>
@@ -528,14 +540,6 @@ export default function ProgressTab({
           </Card>
         )}
 
-        {periods.length > 0 && (
-          <DelayContributors
-            contributors={contributors}
-            dataDate={dataDate}
-            totalDeviation={hasReadings ? position.deviation : null}
-            actualSource={actualSource}
-          />
-        )}
       </TabsContent>
       <TabsContent value="daily">
         <DailyProgressHistory
@@ -548,7 +552,7 @@ export default function ProgressTab({
   );
 
   const entry = (
-    <>
+    <Fragment key="entry">
         {periods.length > 0 && (
           <Card>
             <CardHeader>
@@ -657,7 +661,7 @@ export default function ProgressTab({
                       // the card. minWidth keeps a short project's grid
                       // spanning the card rather than leaving a gap down its
                       // right-hand side.
-                      width: fit.tableWidth,
+                      width: fit.tableWidth + scrollRunway,
                       minWidth: "100%",
                     }}
                   >
@@ -669,7 +673,7 @@ export default function ProgressTab({
                           now divided rather than enlarged, so the fit maths
                           does not have to know the checkbox exists. */}
                       <col style={{ width: SELECT_WIDTH }} />
-                      <col style={{ width: LEADING_WIDTH - SELECT_WIDTH }} />
+                      <col style={{ width: leadingWidth - SELECT_WIDTH }} />
                       {beforeColumns > 0 && (
                         <col style={{ width: matrixWindow.columnWindow.beforeSize }} />
                       )}
@@ -677,7 +681,7 @@ export default function ProgressTab({
                         <col key={column.key} style={{ width: MAX_PERIOD_WIDTH }} />
                       ))}
                       {afterColumns > 0 && (
-                        <col style={{ width: matrixWindow.columnWindow.afterSize }} />
+                        <col style={{ width: afterSize }} />
                       )}
                     </colgroup>
                     {/*
@@ -700,7 +704,7 @@ export default function ProgressTab({
                       leadingLabel={t.schedule.line}
                       leadingColSpan={2}
                       beforeSize={matrixWindow.columnWindow.beforeSize}
-                      afterSize={matrixWindow.columnWindow.afterSize}
+                      afterSize={afterSize}
                       onToggleMonth={toggleMonth}
                       gridId="progress-matrix-table"
                     />
@@ -758,12 +762,12 @@ export default function ProgressTab({
                             // through. The current-period marker stays a border
                             // — it is on the cell, so it travels — and replaces
                             // the shadow rule rather than doubling it.
-                            className={`h-auto bg-card py-2 text-right ${
+                            className={`h-auto py-2 text-right ${
                               compact ? "px-1" : "px-2"
                             } ${
                               view.isCurrent
-                                ? "border-b-2 border-b-[var(--chart-1)]"
-                                : HEADER_RULE
+                                ? "border-b-2 border-b-primary bg-primary/10"
+                                : `bg-card ${HEADER_RULE}`
                             }`}
                           >
                             {/* A folded column names the periods it swallowed —
@@ -803,7 +807,7 @@ export default function ProgressTab({
                           </TableHead>
                         );
                       })}
-                      <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} header />
+                      <MatrixColumnSpacer size={afterSize} header />
                     </TableRow>
                     </TableHeader>
 
@@ -859,7 +863,7 @@ export default function ProgressTab({
                         </th>
 
                         <MatrixColumnSpacer size={matrixWindow.columnWindow.beforeSize} />
-                        {visibleHeader.columns.map(({ column, accessibleName }, index) => {
+                        {visibleHeader.columns.map(({ column, accessibleName, isCurrent }, index) => {
                           // A folded month shows the position it reached, which
                           // for a cumulative figure is the last period in it that
                           // holds a reading — never the sum, which would count the
@@ -879,7 +883,8 @@ export default function ProgressTab({
                             <TableCell
                               key={column.key}
                               aria-colindex={matrixWindow.columnWindow.start + index + 3}
-                              className={`py-2 ${compact ? "px-1" : "px-1.5"}`}
+                              data-current-period={isCurrent || undefined}
+                              className={`py-2 ${compact ? "px-1" : "px-1.5"} ${isCurrent ? "bg-primary/10" : ""}`}
                             >
                               {editable ? (
                                 <Input
@@ -888,7 +893,7 @@ export default function ProgressTab({
                                   type="text"
                                   inputMode="decimal"
                                   value={cellValue(row.leaf.id, period.id)}
-                                  aria-label={`${row.leaf.code} - ${accessibleName}`}
+                                  aria-label={`${row.leaf.code} - ${accessibleName}${isCurrent ? `, ${t.periodSummary.current}` : ""}`}
                                   {...matrixKeyboard.cellProps(
                                     rowIndex,
                                     matrixWindow.columnWindow.start + index,
@@ -906,7 +911,7 @@ export default function ProgressTab({
                                   // every screen this grid is used on.
                                   className={`h-9 text-right tabular-nums md:h-9 ${
                                     compact ? "px-1" : "md:text-sm"
-                                  } ${drafts.has(key) ? "border-[var(--chart-1)]" : ""}`}
+                                  } ${isCurrent ? "border-primary/50 bg-background" : ""} ${drafts.has(key) ? "border-[var(--chart-1)]" : ""}`}
                                   onChange={(e) =>
                                     setDrafts((current) =>
                                       new Map(current).set(key, decimalOnly(e.target.value)),
@@ -941,7 +946,7 @@ export default function ProgressTab({
                             </TableCell>
                           );
                         })}
-                        <MatrixColumnSpacer size={matrixWindow.columnWindow.afterSize} />
+                        <MatrixColumnSpacer size={afterSize} />
                         </TableRow>
                       );
                     })}
@@ -957,14 +962,14 @@ export default function ProgressTab({
                     scrollRef={matrixWindow.scrollRef}
                     edges={matrixWindow.edges}
                     gutter={matrixWindow.gutter}
-                    leadingWidth={LEADING_WIDTH}
+                    leadingWidth={leadingWidth}
                     controls="progress-matrix-table"
                   />
               </div>
             </CardContent>
           </Card>
         )}
-    </>
+    </Fragment>
   );
 
   return (
@@ -974,7 +979,7 @@ export default function ProgressTab({
         canEdit={canEdit}
         canReview={canReview}
         canLock={canLock}
-        selectedPeriodId={selectedPeriodId}
+        selectedPeriodId={effectiveSelectedPeriodId || null}
         onSelectPeriod={setSelectedPeriodId}
         onBeforeSubmit={() => save(false)}
       />
