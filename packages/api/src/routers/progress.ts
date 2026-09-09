@@ -61,7 +61,8 @@ async function findPeriod(ctx: ProjectScopeCtx, periodId: string) {
       periodIndex: reportingPeriod.periodIndex,
       label: reportingPeriod.label,
       status: reportingPeriod.status,
-      updatedAt: reportingPeriod.updatedAt,
+      // Keep PostgreSQL microseconds intact for the optimistic transition check.
+      updatedAtToken: sql<string>`${reportingPeriod.updatedAt}::text`,
     })
     .from(reportingPeriod)
     .innerJoin(project, eq(project.id, reportingPeriod.projectId))
@@ -920,7 +921,8 @@ export const progressRouter = router({
         with changed as (
           update reporting_period
           set ${sql.join(assignments, sql`, `)}
-          where id = ${input.periodId} and status = ${from} and updated_at = ${period.updatedAt}
+          where id = ${input.periodId} and status = ${from}
+            and updated_at = ${period.updatedAtToken}::timestamp
           returning id
         )
         insert into reporting_period_event

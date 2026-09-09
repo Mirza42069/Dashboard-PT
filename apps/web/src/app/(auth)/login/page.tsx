@@ -3,14 +3,39 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
-import { BRAND_NAME, BrandMark, CONTACT_EMAIL } from "@/components/brand";
+import { BRAND_NAME, BrandMark } from "@/components/brand";
+import LanguageSwitcher from "@/components/language-switcher";
 import SignInForm from "@/components/sign-in-form";
 import { getDictionary, getLocale } from "@/i18n";
 import { getSession } from "@/lib/session";
+import { SITE_URL } from "@/lib/site";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const { auth } = getDictionary(await getLocale());
-  return { title: `${BRAND_NAME} | ${auth.tagline}`, description: auth.landingBody };
+  const locale = await getLocale();
+  const { auth } = getDictionary(locale);
+  const title = `${BRAND_NAME} | ${auth.tagline}`;
+  const description = auth.landingBody;
+  return {
+    title,
+    description,
+    alternates: { canonical: `${SITE_URL}/` },
+    robots: { index: true, follow: true },
+    openGraph: {
+      type: "website",
+      siteName: BRAND_NAME,
+      url: `${SITE_URL}/`,
+      title,
+      description,
+      locale: locale === "id" ? "id_ID" : "en_US",
+      images: [{ url: `${SITE_URL}/opengraph-image`, width: 1200, height: 630, alt: "Fushin - Construction progress reporting" }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [`${SITE_URL}/opengraph-image`],
+    },
+  };
 }
 
 export default async function LoginPage() {
@@ -23,9 +48,7 @@ export default async function LoginPage() {
           <BrandMark />
           <span className="text-xl font-semibold tracking-tight">{BRAND_NAME}</span>
         </div>
-        <a href={`mailto:${CONTACT_EMAIL}`} className="inline-flex min-h-10 items-center gap-3 rounded-md border border-border px-4 text-sm hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring">
-          {auth.contactLabel}<span aria-hidden="true">{"\u2197"}</span>
-        </a>
+        <LanguageSwitcher />
       </header>
 
       <main className="grid lg:min-h-0 lg:flex-1 lg:grid-cols-2 [@media(min-width:64rem)_and_(max-height:48rem)]:min-h-fit">

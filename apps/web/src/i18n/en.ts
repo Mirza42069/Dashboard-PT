@@ -93,7 +93,6 @@ export const en = {
     plannedLabel: "Planned",
     actualLabel: "Actual",
     periodLabel: "Reporting periods",
-    contactLabel: "Contact the team",
     tagline: "Construction management",
     signIn: "Sign in",
     signingIn: "Signing in…",

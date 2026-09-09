@@ -5,6 +5,7 @@ import type { Metadata } from "next";
 
 import "../index.css";
 import { BRAND_NAME } from "@/components/brand";
+import { SITE_URL } from "@/lib/site";
 import Providers from "@/components/providers";
 import { getDictionary, getLocale } from "@/i18n";
 import { getTextScale, TEXT_SCALE_CLASS } from "@/lib/text-scale";
@@ -13,6 +14,9 @@ import { getTheme } from "@/lib/theme";
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
   return {
+    metadataBase: new URL(SITE_URL),
+    applicationName: BRAND_NAME,
+    robots: { index: false, follow: false },
     title: BRAND_NAME,
     description: dict.auth.tagline,
   };

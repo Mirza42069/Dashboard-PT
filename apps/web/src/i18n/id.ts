@@ -95,7 +95,6 @@ export const id = {
     plannedLabel: "Rencana",
     actualLabel: "Aktual",
     periodLabel: "Periode pelaporan",
-    contactLabel: "Hubungi kami",
     tagline: "Kontrol progres konstruksi",
     signIn: "Masuk",
     signingIn: "Sedang masuk…",

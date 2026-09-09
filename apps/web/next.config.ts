@@ -20,6 +20,10 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        source: "/:path(dashboard|projects|admin|archive|support|change-password|trial-ended)/:rest*",
+        headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }],
+      },
+      {
         source: "/set-password",
         headers: [
           { key: "Cache-Control", value: "no-store" },
