@@ -479,6 +479,7 @@ export const id = {
     validationTitle: "Validasi sumber",
     validationRequired: "Perbaiki kesalahan sumber terlebih dahulu.",
     importNeedsAttention: "Impor perlu diperiksa",
+    itemProgressImported: "Entri tabel kumulatif ditambahkan: {count}. Periode pelaporan: {periods}.",
     requiredMappings: "Petakan uraian, periode mulai, dan periode selesai terlebih dahulu.",
     createAction: "Buat proyek dan draf baseline",
     rowError: "Baris {row}: {message}",
@@ -562,7 +563,7 @@ export const id = {
       "Laporan mingguan multi-lembar ini hanya dapat menyusun BoQ dan jadwal saat membuat proyek. Proyek yang sudah ada dapat mengimpor titik progres agregatnya.",
     sectionProgress: "Progres aktual",
     sectionProgressHint:
-      "Impor kurva aktual kumulatif dan simpan laporan terperinci yang didukung dalam riwayat progres. Pembacaan item baseline tidak pernah diperkirakan.",
+      "Impor kurva aktual, laporan terperinci, dan pembacaan item yang cocok untuk setiap periode pelaporan yang didukung nilai sumber.",
     progressUnavailableHint: "Tidak ada progres aktual yang valid, sehingga progres tidak dapat diperbarui.",
     pdfProgressDescription:
       "Ditemukan {items} item progres terperinci dan total kumulatif yang dilaporkan. Pilih tanggal yang diwakili laporan ini.",
@@ -851,6 +852,10 @@ export const id = {
     dataDateIs: "Diukur sampai",
     missingNote:
       "Tanda hubung berarti belum ada laporan. Angka yang tertinggal dari rencana ditulis dalam kurung.",
+    addPeriod: "Tambah periode setelah periode {period}",
+    removePeriod: "Hapus periode {period}",
+    periodAdded: "Periode {period} ditambahkan.",
+    periodRemoved: "Periode {period} dihapus.",
   },
   reporting: {
     title: "Alur pelaporan",

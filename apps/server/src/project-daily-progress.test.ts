@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { loadWorkbook } from "./boq-import-parse";
 import { parseDailyProgressWorkbook } from "./project-daily-progress";
+import { aggregateDailyProgress } from "./project-daily-aggregation";
 import {
   analyzeProjectWorkbook,
   prepareConfirmedWorkbook,
@@ -80,18 +81,29 @@ test("entire-workbook analysis signs and prepares all dated readings", async () 
   expect(prepared.dailyProgress[0]?.items).toHaveLength(125);
   expect(prepared.actualSnapshots.at(-1)?.periodIndex).toBe(16);
   expect(prepared.actualSnapshots.at(-1)?.cumulativePercent).toBeCloseTo(56.9230209578, 8);
-  expect(prepared.itemProgress).toHaveLength(22);
-  expect(prepared.itemProgress.every((entry) => entry.periodIndex === 16)).toBe(true);
-  expect(prepared.itemProgress.find((entry) => entry.row === 13)?.pctComplete).toBeCloseTo(49, 8);
-  expect(prepared.itemProgress.find((entry) => entry.row === 30)?.pctComplete).toBeCloseTo(53.7580261846, 8);
-  expect(prepared.itemProgress.find((entry) => entry.row === 24)?.pctComplete).toBe(0);
-  const weightedTotal = prepared.itemProgress.reduce((total, entry) =>
-    total + (prepared.rows.find((row) => row.row === entry.row)!.weight ?? 0) * entry.pctComplete / 100, 0);
-  expect(weightedTotal).toBeCloseTo(56.9230209578, 8);
-  const persistedTotal = prepared.itemProgress.reduce((total, entry) =>
-    total + Number(prepared.rows.find((row) => row.row === entry.row)!.weight!.toFixed(6)) *
-      Number(entry.pctComplete.toFixed(4)) / 100, 0);
-  expect(Math.abs(persistedTotal - weightedTotal)).toBeLessThan(0.0001);
+  expect(prepared.itemProgress).toHaveLength(44);
+  expect([...new Set(prepared.itemProgress.map((entry) => entry.periodIndex))]).toEqual([15, 16]);
+  const current = prepared.itemProgress.filter((entry) => entry.periodIndex === 16);
+  expect(current.find((entry) => entry.row === 13)?.pctComplete).toBeCloseTo(49, 8);
+  expect(current.find((entry) => entry.row === 30)?.pctComplete).toBeCloseTo(53.7580261846, 8);
+  expect(current.find((entry) => entry.row === 24)?.pctComplete).toBe(0);
+  for (const [periodIndex, expectedTotal] of [[15, 49.2583702648], [16, 56.9230209578]]) {
+    const entries = prepared.itemProgress.filter((entry) => entry.periodIndex === periodIndex);
+    expect(entries).toHaveLength(22);
+    const weightedTotal = entries.reduce((total, entry) =>
+      total + (prepared.rows.find((row) => row.row === entry.row)!.weight ?? 0) * entry.pctComplete / 100, 0);
+    expect(weightedTotal).toBeCloseTo(expectedTotal!, 8);
+    const persistedTotal = entries.reduce((total, entry) =>
+      total + Number(prepared.rows.find((row) => row.row === entry.row)!.weight!.toFixed(6)) *
+        Number(entry.pctComplete.toFixed(4)) / 100, 0);
+    expect(Math.abs(persistedTotal - weightedTotal)).toBeLessThan(0.0001);
+  }
+  const previous = prepared.itemProgress.find((entry) => entry.periodIndex === 15)!;
+  expect(previous.sourceSheetName).toBe("16 AGUSTUS 2026");
+  expect(previous.sourceColumn).toBe(analysis.plan.dailyProgress!.mapping.previousPercent);
+  expect(JSON.parse(previous.sourceValue)).toMatchObject({
+    basis: "previous", reportDate: "2026-08-16", readingDate: "2026-08-15",
+  });
   expect(prepared.plan.warnings.some((warning) => warning.includes("entries were not imported"))).toBe(false);
 });
 
@@ -109,6 +121,30 @@ test("choosing a dated sheet still analyzes the complete progress workbook", asy
     latestCumulativePercent: expect.any(Number),
   });
   expect(analysis.summary.validationErrors).toEqual([]);
+});
+
+test("AI ranges starting at the first priced line retain headings needed for cumulative table entries", async () => {
+  const bytes = await referenceBytes();
+  const analysis = await analyzeProjectWorkbook(bytes);
+  const parsed = parseDailyProgressWorkbook(await loadWorkbook(bytes), {
+    ...analysis.plan.dailyProgress!, mappingSource: "ai", dataStartRow: 12, dataEndRow: 169,
+  })!;
+  expect(parsed.errors).toEqual([]);
+  expect(parsed.snapshots[0]?.items[0]?.sectionDescription).toBe("PRELIMINARIES");
+  expect(parsed.preview.itemCount).toBe(125);
+  const aggregated = aggregateDailyProgress(
+    analysis.rowPreview.filter((row) => row.kind === "item"), parsed.snapshots,
+    [
+      { periodIndex: 15, startDate: "2026-08-09", endDate: "2026-08-15" },
+      { periodIndex: 16, startDate: "2026-08-16", endDate: "2026-08-22" },
+    ], analysis.actualSnapshots, parsed.plan.mapping,
+  );
+  expect(aggregated.warnings).toEqual([]);
+  expect(aggregated.entries).toHaveLength(44);
+  const omitted = parseDailyProgressWorkbook(await loadWorkbook(bytes), {
+    ...parsed.plan, dataStartRow: 13,
+  });
+  expect(omitted?.errors.some((error) => error.row === 12 && error.message.includes("omits a priced detail row"))).toBe(true);
 });
 
 test("daily progress plan coordinates cannot be changed after analysis", async () => {

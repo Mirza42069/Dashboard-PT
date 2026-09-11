@@ -76,6 +76,26 @@ test("a formula with no cached result is empty, never zero", () => {
   expect(readCell({ formula: "SUM(J13:J34)" })).toEqual({ kind: "empty" });
 });
 
+test("worksheet formulas preserve cached zeros and false without inventing missing results", async () => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Cached results");
+  sheet.getCell("A1").value = { formula: "1-1", result: 0 };
+  sheet.getCell("A2").value = { sharedFormula: "A1", result: 0 };
+  sheet.getCell("B1").value = { formula: "1=2", result: false };
+  sheet.getCell("C1").value = { formula: "SUM(A1:A2)" };
+  sheet.getCell("D1").value = { formula: "1/0", result: { error: "#DIV/0!" } };
+  sheet.mergeCells("A2:B2");
+  const loaded = await loadWorkbook(new Uint8Array(await workbook.xlsx.writeBuffer()));
+  const restored = loaded.getWorksheet("Cached results")!;
+  for (const address of ["A1", "A2", "B2"]) {
+    expect(readCell(restored.getCell(address))).toEqual({ kind: "number", value: 0 });
+  }
+  expect(readCell(restored.getCell("B1"))).toEqual({ kind: "string", value: "FALSE" });
+  expect(readCell(restored.getCell("C1"))).toEqual({ kind: "empty" });
+  expect(readCell(restored.getCell("D1"))).toEqual({ kind: "error", value: "#DIV/0!" });
+  expect(readCell(restored.getCell("E1"))).toEqual({ kind: "empty" });
+});
+
 test("an error cell is reported rather than coerced", () => {
   expect(readCell({ error: "#REF!" })).toEqual({ kind: "error", value: "#REF!" });
 });

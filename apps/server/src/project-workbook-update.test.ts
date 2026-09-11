@@ -92,3 +92,16 @@ test("readings must reference the project calendar", () => {
   expect(() => reconcileWorkbookItemReadings([], [reading(4, 10)], periods))
     .toThrow("invalid reading or reporting period");
 });
+
+test("reimporting multiple weeks fills historical cells once without replacing the current week", () => {
+  const calendar = [15, 16].map((periodIndex) => ({ id: `p${periodIndex}`, periodIndex }));
+  const current = Array.from({ length: 22 }, (_, index) => reading(16, index * 4, `item-${index}`));
+  const previous = Array.from({ length: 22 }, (_, index) => reading(15, index * 3, `item-${index}`));
+  const incoming = [...previous, ...current];
+  const additions = reconcileWorkbookItemReadings(current, incoming, calendar);
+  expect(additions).toEqual(previous);
+  expect(reconcileWorkbookItemReadings([...current, ...additions], incoming, calendar)).toEqual([]);
+  expect(() => reconcileWorkbookItemReadings(
+    [...current, reading(15, 1, "item-0")], incoming, calendar,
+  )).toThrow("conflicts with an existing reading");
+});

@@ -185,8 +185,8 @@ test("the DSO weekly workbook combines its BoQ and progress sheets", async () =>
     detailSheetCount: 14,
     previousPeriodIndex: 2,
     currentPeriodIndex: 3,
-    previousEntryCount: 192,
-    currentEntryCount: 14,
+    previousEntryCount: 193,
+    currentEntryCount: 192,
     aggregateCurrentPercent: 1.38,
     confirmationRequired: true,
   });
@@ -220,9 +220,10 @@ test("the DSO itemized discrepancy requires confirmation before preparation", as
   });
   expect(prepared.periods).toHaveLength(24);
   expect(prepared.rows).toHaveLength(500);
-  expect(prepared.itemProgress).toHaveLength(206);
-  expect(prepared.itemProgress.filter((entry) => entry.periodIndex === 2)).toHaveLength(192);
-  expect(prepared.itemProgress.filter((entry) => entry.periodIndex === 3)).toHaveLength(14);
+  expect(prepared.itemProgress).toHaveLength(385);
+  expect(prepared.itemProgress.filter((entry) => entry.periodIndex === 2)).toHaveLength(193);
+  expect(prepared.itemProgress.filter((entry) => entry.periodIndex === 3)).toHaveLength(192);
+  expect(prepared.itemProgress.filter((entry) => entry.periodIndex === 3 && entry.cumulativeQuantity === 0)).toHaveLength(178);
   const storedTotal = prepared.rows
     .filter((row) => row.parentCode !== null)
     .reduce(
@@ -338,6 +339,7 @@ test("weekly progress rejects malformed, invalid, and decreasing detail values",
   preparation.getCell("Q22").value = 0.04;
   preparation.getCell("R22").value = 0.04;
   preparation.getCell("R23").value = { error: "#VALUE!" };
+  workbook.getWorksheet("I. Mek. Infrastruktur")!.getCell("I16").value = 0.1;
   const bytes = new Uint8Array(await workbook.xlsx.writeBuffer());
   const analysis = await analyzeProjectWorkbook(bytes, undefined, "KURVA-S");
   const messages = analysis.summary.validationErrors.map((error) => error.message);
@@ -345,6 +347,7 @@ test("weekly progress rejects malformed, invalid, and decreasing detail values",
   expect(messages.some((message) => message.includes("priced row needs"))).toBe(true);
   expect(messages.some((message) => message.includes("decreases"))).toBe(true);
   expect(messages.some((message) => message.includes("must be numeric"))).toBe(true);
+  expect(messages.some((message) => message.includes("must both be present"))).toBe(true);
 });
 
 test("missing project dates do not count as worksheet matches", () => {
@@ -421,7 +424,10 @@ test("the daily workbook matching S-curve can update the reference project calen
     periodCount: reference.plan.periodCount,
   });
   expect(daily.summary.validationErrors).toEqual([]);
-  expect(daily.actualSnapshots).toHaveLength(14);
+  expect(daily.actualSnapshots).toHaveLength(16);
+  expect(daily.actualSnapshots.slice(0, 2)).toMatchObject([
+    { periodIndex: 1, cumulativePercent: 0 }, { periodIndex: 2, cumulativePercent: 0 },
+  ]);
   expect(daily.actualSnapshots.at(-1)?.periodIndex).toBe(16);
   expect(daily.actualSnapshots.at(-1)?.cumulativePercent).toBeCloseTo(56.9230209578, 8);
 });
@@ -509,13 +515,13 @@ test("the reference workbook produces a high-confidence guided import proposal",
     sectionCount: 3,
     lineCount: 19,
     scheduledCount: 19,
-    actualSnapshotCount: 10,
+    actualSnapshotCount: 12,
     latestActualPeriodIndex: 12,
     validationErrors: [],
   });
   expect(analysis.plan.parentAssignments).toHaveLength(19);
   expect(analysis.summary.latestActualPercent).toBeCloseTo(16.4995, 4);
-  expect(analysis.actualSnapshots).toHaveLength(10);
+  expect(analysis.actualSnapshots).toHaveLength(12);
   expect(analysis.summary.totalAmount).toBeCloseTo(2_542_143_270.0877023, 2);
   expect(analysis.summary.totalWeight).toBeCloseTo(100, 4);
 });
@@ -611,7 +617,7 @@ test("confirmation regenerates and validates the complete weekly schedule", asyn
   expect(prepared.rows).toHaveLength(22);
   expect(prepared.periods[0]).toMatchObject({ periodIndex: 1, startDate: "2026-05-03" });
   expect(prepared.periods[16]).toMatchObject({ periodIndex: 17, endDate: "2026-08-29" });
-  expect(prepared.actualSnapshots).toHaveLength(10);
+  expect(prepared.actualSnapshots).toHaveLength(12);
   expect(prepared.actualSnapshots.at(-1)?.periodIndex).toBe(12);
   expect(prepared.actualSnapshots.at(-1)?.cumulativePercent).toBeCloseTo(16.4995, 4);
 });

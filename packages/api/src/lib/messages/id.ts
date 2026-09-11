@@ -124,6 +124,10 @@ export const id = {
     activeScheduleBlocksRebuild:
       "Jadwal aktif memakai periode ini, sehingga tidak dapat disusun ulang.",
     becameInUse: "Periode pelaporan mulai dipakai, sehingga tidak dapat disusun ulang lagi.",
+    calendarChanged: "Kalender pelaporan berubah saat Anda bekerja. Muat ulang dan coba lagi.",
+    periodInUse:
+      "Periode terakhir masih memiliki pembacaan, titik kurva, sel rencana, riwayat harian, atau tindakan — hapus dulu sebelum menghapus periodenya.",
+    lastPeriodStays: "Periode pelaporan terakhir tidak dapat dihapus.",
     windowNeedsBothEnds: "Rentang rencana memerlukan periode mulai dan periode selesai.",
     finishBeforeStart: "Periode selesai tidak boleh mendahului periode mulai.",
     periodsRunFrom: "Periode berjalan dari {first} sampai {last}.",

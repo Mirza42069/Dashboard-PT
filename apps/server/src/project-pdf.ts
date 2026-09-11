@@ -478,7 +478,7 @@ export async function extractProjectPdf(
           disallowPromptTraining: true,
           ...(gatewayZeroDataRetention ? { zeroDataRetention: true } : {}),
         },
-        openai: { store: false },
+        openai: { store: false, reasoningEffort: "high" },
       },
       include: {
         requestBody: false,

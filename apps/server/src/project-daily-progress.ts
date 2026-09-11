@@ -113,12 +113,12 @@ function normalized(value: string) {
 }
 
 function textAt(sheet: Worksheet, row: number, column: number) {
-  const value = readCell(sheet.getRow(row).getCell(column).value);
+  const value = readCell(sheet.getRow(row).getCell(column));
   return value.kind === "empty" ? "" : String(value.value).trim();
 }
 
 function numberAt(sheet: Worksheet, row: number, column: number) {
-  return parseNumber(readCell(sheet.getRow(row).getCell(column).value));
+  return parseNumber(readCell(sheet.getRow(row).getCell(column)));
 }
 
 function requiredNumber(
@@ -331,7 +331,7 @@ export function detectDailyProgressPlan(workbook: Workbook): DailyProgressPlan |
 function sourceValues(sheet: Worksheet, row: number) {
   const values: Record<string, string | number | null> = {};
   for (let column = 1; column <= Math.min(sheet.columnCount, 40); column++) {
-    const cell = readCell(sheet.getRow(row).getCell(column).value);
+    const cell = readCell(sheet.getRow(row).getCell(column));
     values[columnLetter(column)] =
       cell.kind === "empty" ? null : cell.kind === "number" ? cell.value : String(cell.value);
   }
@@ -379,7 +379,9 @@ export function parseDailyProgressWorkbook(
     let sectionDescription: string | null = null;
     let parentCode: string | null = null;
     let parentDescription: string | null = null;
-    for (let row = plan.dataStartRow; row <= plan.dataEndRow; row++) {
+    // Read preceding headings too: AI may start its range at the first priced
+    // line, but baseline matching still needs that line's section and parent.
+    for (let row = plan.headerRow + 1; row <= plan.dataEndRow; row++) {
       const quantity = numberAt(sheet, row, plan.mapping.quantity);
       const amount = numberAt(sheet, row, plan.mapping.amount);
       const weight = numberAt(sheet, row, plan.mapping.weight);
@@ -417,6 +419,10 @@ export function parseDailyProgressWorkbook(
           parentCode = code || null;
           parentDescription = label;
         }
+        continue;
+      }
+      if (row < plan.dataStartRow) {
+        errors.push({ row, column: null, message: `${source.sheetName}: the mapped range omits a priced detail row.` });
         continue;
       }
       const unitRate = requiredNumber(sheet, row, plan.mapping.unitRate, "Unit rate", errors);

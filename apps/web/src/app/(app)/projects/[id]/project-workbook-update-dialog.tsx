@@ -215,6 +215,8 @@ export type WorkbookUpdateResult = {
   rowsImported: number;
   periodCount: number;
   actualSnapshotCount: number;
+  itemProgressCount: number;
+  itemProgressPeriods: number[];
   draftVersionId: string | null;
   versionNo: number | null;
   warnings: string[];
@@ -486,7 +488,19 @@ export default function ProjectWorkbookUpdateDialog({
         queryClient.invalidateQueries(trpc.progress.pathFilter()),
         queryClient.invalidateQueries(trpc.dailyProgress.pathFilter()),
       ]);
-      toast.success(t.projectUpdate.updateSucceeded);
+      toast.success(t.projectUpdate.updateSucceeded, {
+        description: sections.progress
+          ? interpolate(t.projectImport.itemProgressImported, {
+              count: result.itemProgressCount,
+              periods: result.itemProgressPeriods.join(", ") || "—",
+            })
+          : undefined,
+      });
+      if (result.warnings.length) {
+        toast.info(t.projectImport.importNeedsAttention, {
+          description: result.warnings.join("\n"), duration: Infinity, closeButton: true,
+        });
+      }
       onOpenChange(false);
       onUpdated(result);
     } catch (caught) {

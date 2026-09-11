@@ -578,7 +578,7 @@ function isoDateAt(
   row: number,
   column: number,
 ) {
-  const cell = readCell(sheet.getRow(row).getCell(column).value);
+  const cell = readCell(sheet.getRow(row).getCell(column));
   return cell.kind === "date" ? cell.value : null;
 }
 
@@ -604,14 +604,14 @@ function indonesianCurveSummaryBounds(
   sheet: Awaited<ReturnType<typeof loadWorkbook>>["worksheets"][number],
 ) {
   if (!/^kurva[ -]?s$/i.test(sheet.name.trim())) return null;
-  if (!cellValue(sheet.getCell("A1").value).toUpperCase().includes("SCHEDULE S CURVE")) {
+  if (!cellValue(sheet.getCell("A1")).toUpperCase().includes("SCHEDULE S CURVE")) {
     return null;
   }
 
   let actualRow = 0;
   let plannedRow = 0;
   for (let row = 1; row <= sheet.rowCount; row++) {
-    const label = cellValue(sheet.getRow(row).getCell(4).value).trim().toUpperCase();
+    const label = cellValue(sheet.getRow(row).getCell(4)).trim().toUpperCase();
     if (label === "PROGRES RENCANA (%)") plannedRow = row;
     if (label === "AKUMULASI PROGRES ACTUAL (%)") actualRow = row;
   }
@@ -620,7 +620,7 @@ function indonesianCurveSummaryBounds(
   const headerRow = 9;
   const periodColumns: { periodIndex: number; column: number }[] = [];
   for (let column = 6; column <= sheet.columnCount; column++) {
-    const periodIndex = parseNumber(readCell(sheet.getRow(headerRow).getCell(column).value));
+    const periodIndex = parseNumber(readCell(sheet.getRow(headerRow).getCell(column)));
     const expected = periodColumns.length + 1;
     if (periodIndex === expected) {
       periodColumns.push({ periodIndex, column });
@@ -642,8 +642,8 @@ function indonesianCurveSummaryBounds(
     scheduleStartDate: null,
     endDate: null,
     mapping: { fields: { description: 3, weight: 5 } },
-    suggestedName: cellValue(sheet.getCell("A4").value).trim() || null,
-    suggestedLocation: cellValue(sheet.getCell("A5").value).trim() || null,
+    suggestedName: cellValue(sheet.getCell("A4")).trim() || null,
+    suggestedLocation: cellValue(sheet.getCell("A5")).trim() || null,
   };
 }
 
@@ -654,10 +654,10 @@ function referenceBounds(
   let headerRow = 0;
   let periodColumns: { periodIndex: number; column: number }[] = [];
   for (let row = 1; row <= Math.min(sheet.rowCount, 25); row++) {
-    const description = cellValue(sheet.getRow(row).getCell(3).value).toUpperCase();
-    const amount = cellValue(sheet.getRow(row).getCell(4).value).toUpperCase();
-    const weight = cellValue(sheet.getRow(row).getCell(5).value).toUpperCase();
-    const start = cellValue(sheet.getRow(row).getCell(6).value).toUpperCase();
+    const description = cellValue(sheet.getRow(row).getCell(3)).toUpperCase();
+    const amount = cellValue(sheet.getRow(row).getCell(4)).toUpperCase();
+    const weight = cellValue(sheet.getRow(row).getCell(5)).toUpperCase();
+    const start = cellValue(sheet.getRow(row).getCell(6)).toUpperCase();
     if (
       !description.includes("URAIAN") ||
       !amount.includes("JUMLAH") ||
@@ -668,7 +668,7 @@ function referenceBounds(
     }
     const periods: { periodIndex: number; column: number }[] = [];
     for (let column = 8; column <= sheet.columnCount; column++) {
-      const periodIndex = parseNumber(readCell(sheet.getRow(row).getCell(column).value));
+      const periodIndex = parseNumber(readCell(sheet.getRow(row).getCell(column)));
       const expected = periods.length + 1;
       if (periodIndex === expected) {
         periods.push({ periodIndex, column });
@@ -686,7 +686,7 @@ function referenceBounds(
 
   let totalRow = 0;
   for (let row = headerRow + 1; row <= sheet.rowCount; row++) {
-    if (cellValue(sheet.getRow(row).getCell(3).value).trim().toUpperCase() === "TOTAL") {
+    if (cellValue(sheet.getRow(row).getCell(3)).trim().toUpperCase() === "TOTAL") {
       totalRow = row;
       break;
     }
@@ -694,11 +694,11 @@ function referenceBounds(
   if (totalRow === 0) return null;
   let titleRow = 0;
   for (let row = headerRow + 1; row < totalRow; row++) {
-    const text = cellValue(sheet.getRow(row).getCell(3).value).trim();
-    const rowStart = parseNumber(readCell(sheet.getRow(row).getCell(6).value));
-    const nextDescription = cellValue(sheet.getRow(row + 1).getCell(3).value).trim();
-    const nextAmount = parseNumber(readCell(sheet.getRow(row + 1).getCell(4).value));
-    const nextStart = parseNumber(readCell(sheet.getRow(row + 1).getCell(6).value));
+    const text = cellValue(sheet.getRow(row).getCell(3)).trim();
+    const rowStart = parseNumber(readCell(sheet.getRow(row).getCell(6)));
+    const nextDescription = cellValue(sheet.getRow(row + 1).getCell(3)).trim();
+    const nextAmount = parseNumber(readCell(sheet.getRow(row + 1).getCell(4)));
+    const nextStart = parseNumber(readCell(sheet.getRow(row + 1).getCell(6)));
     if (
       text &&
       rowStart === null &&
@@ -719,7 +719,7 @@ function referenceBounds(
   let actualRow: number | null = null;
   for (let row = totalRow + 1; row <= sheet.rowCount; row++) {
     if (
-      cellValue(sheet.getRow(row).getCell(3).value).trim().toUpperCase() ===
+      cellValue(sheet.getRow(row).getCell(3)).trim().toUpperCase() ===
       "BOBOT AKTUAL KUMULATIF"
     ) {
       actualRow = row;
@@ -738,7 +738,7 @@ function referenceBounds(
     scheduleStartDate,
     endDate,
     mapping: { fields: { description: 3, amount: 4, weight: 5, start: 6, finish: 7 } },
-    suggestedName: cellValue(sheet.getRow(titleRow).getCell(3).value).trim() || null,
+    suggestedName: cellValue(sheet.getRow(titleRow).getCell(3)).trim() || null,
     suggestedLocation: null,
   };
 }
@@ -763,7 +763,7 @@ function defaultParentAssignments(
       currentParent = row;
       continue;
     }
-    const description = cellValue(sheet.getRow(row).getCell(input.descriptionColumn).value).trim();
+    const description = cellValue(sheet.getRow(row).getCell(input.descriptionColumn)).trim();
     if (description) assignments.push({ row, parentRow: currentParent });
   }
   return assignments;
@@ -808,17 +808,17 @@ function referencePlan(
     let periodCount = bounds.periodColumns.at(-1)?.periodIndex ?? 0;
     for (let row = dataStartRow; row <= dataEndRow; row++) {
       const descriptionColumn = bounds.mapping.fields.description;
-      const text = cellValue(sheet.getRow(row).getCell(descriptionColumn).value).trim();
+      const text = cellValue(sheet.getRow(row).getCell(descriptionColumn)).trim();
       const amountColumn =
         "amount" in bounds.mapping.fields ? bounds.mapping.fields.amount : undefined;
       const rowAmount = amountColumn
-        ? parseNumber(readCell(sheet.getRow(row).getCell(amountColumn).value))
+        ? parseNumber(readCell(sheet.getRow(row).getCell(amountColumn)))
         : null;
       if (text && rowAmount === null) sectionRows.push(row);
       const finishColumn =
         "finish" in bounds.mapping.fields ? bounds.mapping.fields.finish : undefined;
       const finish = finishColumn
-        ? parseNumber(readCell(sheet.getRow(row).getCell(finishColumn).value))
+        ? parseNumber(readCell(sheet.getRow(row).getCell(finishColumn)))
         : null;
       if (typeof finish === "number" && Number.isInteger(finish)) periodCount = Math.max(periodCount, finish);
     }
@@ -929,7 +929,7 @@ export function workbookSummary(
           column <= Math.min(sheet.columnCount, 20) && remainingCharacters > 0;
           column++
         ) {
-          const value = cellValue(sheet.getRow(row).getCell(column).value).trim().slice(0, 80);
+          const value = cellValue(sheet.getRow(row).getCell(column)).trim().slice(0, 80);
           if (value) {
             cells.push({ column, value });
             remainingCharacters -= value.length;
@@ -970,7 +970,7 @@ function mandatorySummaryRows(
 ) {
   const rows: number[] = [];
   for (let row = first; row <= last; row++) {
-    const description = cellValue(sheet.getRow(row).getCell(descriptionColumn).value).trim();
+    const description = cellValue(sheet.getRow(row).getCell(descriptionColumn)).trim();
     if (SUMMARY_ROW.test(description)) rows.push(row);
   }
   return rows;
@@ -983,7 +983,7 @@ function rowCarriesLineData(
 ) {
   return ["amount", "quantity", "unitRate", "weight", "start", "finish"].some((field) => {
     const column = fields[field];
-    return column !== undefined && readCell(sheet.getRow(row).getCell(column).value).kind !== "empty";
+    return column !== undefined && readCell(sheet.getRow(row).getCell(column)).kind !== "empty";
   });
 }
 
@@ -996,7 +996,7 @@ function lastMappedRow(
   for (let row = headerRow + 1; row <= sheet.rowCount; row++) {
     const hasValue = Object.values(fields).some(
       (column) =>
-        column !== undefined && readCell(sheet.getRow(row).getCell(column).value).kind !== "empty",
+        column !== undefined && readCell(sheet.getRow(row).getCell(column)).kind !== "empty",
     );
     if (hasValue) last = row;
   }
@@ -1072,7 +1072,7 @@ function parseActualSnapshotCells(
   let previous = -1;
   for (const mapping of periodColumns) {
     if (mapping.periodIndex > periodCount) continue;
-    const cell = readCell(sheet.getRow(sourceRow).getCell(mapping.column).value);
+    const cell = readCell(sheet.getRow(sourceRow).getCell(mapping.column));
     const parsed = parseNumber(cell);
     if (parsed === null) continue;
     if (parsed === "invalid" || parsed < 0 || parsed > 100) {
@@ -1463,20 +1463,20 @@ export async function analyzeProjectWorkbook(
       dataStartRow,
       dataEndRow,
     ).filter((row) => {
-      const descriptionText = cellValue(selected.getRow(row).getCell(description).value).trim();
+      const descriptionText = cellValue(selected.getRow(row).getCell(description)).trim();
       return !descriptionText || !rowCarriesLineData(selected, row, mapping.fields);
     });
     const sectionSet = new Set(proposedSections);
     const deterministicExclusions: number[] = [];
     for (let row = dataStartRow; row <= dataEndRow; row++) {
-      const text = cellValue(selected.getRow(row).getCell(description).value).trim();
+      const text = cellValue(selected.getRow(row).getCell(description)).trim();
       if (SUMMARY_ROW.test(text)) deterministicExclusions.push(row);
     }
 
     let periodCount = 0;
     if (mapping.fields.finish) {
       for (let row = dataStartRow; row <= dataEndRow; row++) {
-        const finish = parseNumber(readCell(selected.getRow(row).getCell(mapping.fields.finish).value));
+        const finish = parseNumber(readCell(selected.getRow(row).getCell(mapping.fields.finish)));
         if (typeof finish === "number" && Number.isInteger(finish)) periodCount = Math.max(periodCount, finish);
       }
     }
@@ -1578,7 +1578,7 @@ function assertSafeRowScope(
   }
   for (const row of plan.excludedRows) {
     const description = cellValue(
-      sheet.getRow(row).getCell(plan.mapping.fields.description).value,
+      sheet.getRow(row).getCell(plan.mapping.fields.description),
     ).trim();
     if (
       rowCarriesLineData(sheet, row, plan.mapping.fields) &&
@@ -1945,7 +1945,7 @@ export async function reviewProjectWorkbook(
   if (finishColumn) {
     for (let row = scopedPlan.dataStartRow; row <= scopedPlan.dataEndRow; row++) {
       if (scopedPlan.excludedRows.includes(row)) continue;
-      const finish = parseNumber(readCell(sheet.getRow(row).getCell(finishColumn).value));
+      const finish = parseNumber(readCell(sheet.getRow(row).getCell(finishColumn)));
       if (typeof finish === "number" && Number.isInteger(finish)) {
         periodCount = Math.max(periodCount, finish);
       }
@@ -1994,7 +1994,7 @@ export async function reviewProjectWorkbook(
   const parsedByRow = new Map(parsed.rows.map((row) => [row.row, row]));
   const rowPreview: WorkbookAnalysis["rowPreview"] = [];
   for (let row = plan.dataStartRow; row <= plan.dataEndRow; row++) {
-    const description = cellValue(sheet.getRow(row).getCell(plan.mapping.fields.description).value)
+    const description = cellValue(sheet.getRow(row).getCell(plan.mapping.fields.description))
       .trim()
       .slice(0, 500);
     if (!description) continue;
@@ -2051,6 +2051,7 @@ export async function reviewProjectWorkbook(
       daily.snapshots,
       generatePeriods(bounds.scheduleStartDate, bounds.endDate, "weekly", null),
       actual.snapshots,
+      plan.dailyProgress?.mapping,
     );
     plan.warnings = [...new Set([...plan.warnings.filter((warning) => !warning.startsWith("Daily item progress:")), ...aggregation.warnings])]
       .slice(0, 20).map((warning) => warning.slice(0, 300));
@@ -2337,6 +2338,7 @@ export async function prepareConfirmedWorkbook(bytes: Uint8Array, input: Project
     daily?.snapshots ?? [],
     generated,
     [...mergedActuals.values()],
+    plan.dailyProgress?.mapping,
   );
   return {
     plan: { ...plan, warnings: [...new Set([...plan.warnings, ...aggregated.warnings])].slice(0, 20).map((warning) => warning.slice(0, 300)) },

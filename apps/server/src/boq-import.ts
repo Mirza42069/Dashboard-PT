@@ -1,5 +1,6 @@
 import { planCells } from "@DashboardV2/api/lib/schedule-plan";
 import { runBatch } from "@DashboardV2/api/lib/batch";
+import { recalcWeightsStatement } from "@DashboardV2/api/lib/boq";
 import { db } from "@DashboardV2/db";
 import {
   boqImport,
@@ -212,6 +213,7 @@ export function prepareBoqRevision(input: {
       totalValue: totalValue.toFixed(2),
     }),
     db.insert(boqItem).values(itemValues),
+    db.execute(recalcWeightsStatement(versionId)),
     ...chunks(distributionValues, DISTRIBUTION_INSERT_SIZE).map((values) =>
       db.insert(boqItemDistribution).values(values),
     ),

@@ -467,8 +467,8 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
       dailyProgress = prepared.dailyProgress;
     }
     workbookPeriods = prepared.periods;
-  } else if (input.sections.progress) {
-    if (dailyProgress.length === 0 && analysis.plan.dailyProgress) {
+  } else if (input.sections.progress && dailyProgress.length === 0) {
+    if (analysis.plan.dailyProgress) {
       const parsedDaily = parseDailyProgressWorkbook(
         await loadWorkbook(input.bytes),
         analysis.plan.dailyProgress,
@@ -481,14 +481,13 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
         );
       }
       dailyProgress = parsedDaily.snapshots;
-    } else if (dailyProgress.length === 0) {
-      const projectCalendar = parseOrInvalid(
-        projectWorkbookCommitSchema.shape.project.safeParse(confirmedProject),
-      );
-      workbookPeriods = (
-        await validateWorkbookCalendar(input.bytes, analysis.plan, projectCalendar)
-      ).generated;
     }
+    const projectCalendar = parseOrInvalid(
+      projectWorkbookCommitSchema.shape.project.safeParse(confirmedProject),
+    );
+    workbookPeriods = (
+      await validateWorkbookCalendar(input.bytes, analysis.plan, projectCalendar)
+    ).generated;
   }
 
   if (workbookPeriods) {
@@ -591,6 +590,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     const aggregation = aggregateDailyProgress(
       prepared.rows.filter((row) => !parentCodes.has(row.code) && !prepared.plan.sectionRows.includes(row.row)),
       dailyProgress, periods, snapshots,
+      analysis.plan.dailyProgress?.mapping,
     );
     itemProgress = aggregation.entries;
     aggregationWarnings.push(...aggregation.warnings);
@@ -712,7 +712,7 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
             quantity: leaf.quantity === null ? null : Number(leaf.quantity),
             unitRate: leaf.unitRate === null ? null : Number(leaf.unitRate),
           };
-        }), dailyProgress, periods, snapshots);
+        }), dailyProgress, periods, snapshots, analysis.plan.dailyProgress?.mapping);
         itemProgress = aggregation.entries;
         aggregationWarnings.push(...aggregation.warnings);
         const leavesById = new Map(leaves.map((leaf) => [leaf.id, leaf]));
@@ -1133,8 +1133,8 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
 
   if (revision) statements.push(...revision.statements);
 
+  const writtenPeriodIds = [...new Set(itemReadings.map((entry) => entry.periodId))];
   if (itemReadings.length > 0) {
-    const writtenPeriodIds = [...new Set(itemReadings.map((entry) => entry.periodId))];
     if (periods.some((period) => writtenPeriodIds.includes(period.id) &&
       !["open", "draft", "returned"].includes(period.status))) {
       invalid("Item progress can only be imported into open, draft, or returned reporting periods.", "period_not_editable");
@@ -1302,6 +1302,8 @@ export async function commitProjectWorkbookUpdate(input: CommitProjectWorkbookUp
     rowsImported: revision?.result.rowsImported ?? 0,
     periodCount: periods.length,
     actualSnapshotCount: snapshots.length,
+    itemProgressCount: itemReadings.length,
+    itemProgressPeriods: periods.filter((period) => writtenPeriodIds.includes(period.id)).map((period) => period.periodIndex),
     draftVersionId: revision?.result.versionId ?? null,
     versionNo: revision?.result.versionNo ?? null,
     warnings: [...new Set(warnings)],

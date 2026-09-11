@@ -7,6 +7,7 @@ import {
   generatePeriods,
   groupPeriodsByMonth,
   monthKeyOf,
+  nextPeriod,
 } from "./periods";
 
 /**
@@ -226,4 +227,33 @@ test("a whole quarter is banded under the month holding most of its days", () =>
   // them. Deliberately not special-cased: the band is one column wide either
   // way, so the label is all that is at stake.
   expect(monthKeyOf({ startDate: "2026-04-01", endDate: "2026-06-30" })).toBe("2026-05");
+});
+
+/**
+ * Appending one period must leave the whole axis reproducible from the
+ * project's dates: regenerate with the end date moved to the appended
+ * period's end and the buckets — indexes, labels, dates — must come out
+ * identical. schedule.appendPeriod depends on this to keep workbook
+ * calendar validation in lockstep.
+ */
+test("an appended period regenerates as part of the whole axis", () => {
+  for (const [type, start, finish, lengthDays] of [
+    ["weekly", "2026-05-03", "2026-08-29", null],
+    // Ends mid-bucket: 2026-06-27 + 10 days runs to 2026-07-06, clamped to 06-30.
+    ["custom", "2026-01-08", "2026-06-30", 10],
+  ] as const) {
+    const periods = generatePeriods(start, finish, type, lengthDays);
+    const { appended, widenedEndDate } = nextPeriod(periods.at(-1)!, type, lengthDays);
+    if (widenedEndDate) periods[periods.length - 1]!.endDate = widenedEndDate;
+    expect(generatePeriods(start, appended.endDate, type, lengthDays)).toEqual([
+      ...periods,
+      appended,
+    ]);
+  }
+});
+
+test("appending past the ceiling is refused", () => {
+  expect(() =>
+    nextPeriod({ periodIndex: 600, startDate: "2026-05-03", endDate: "2026-08-29" }, "weekly"),
+  ).toThrow(PeriodRangeError);
 });

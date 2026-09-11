@@ -196,12 +196,12 @@ type ParsedLeaf = {
 };
 
 function textAt(sheet: ExcelJS.Worksheet, row: number, column: number) {
-  const cell = readCell(sheet.getRow(row).getCell(column).value);
+  const cell = readCell(sheet.getRow(row).getCell(column));
   return cell.kind === "empty" ? "" : String(cell.value).trim();
 }
 
 function numberAt(sheet: ExcelJS.Worksheet, row: number, column: number) {
-  return parseNumber(readCell(sheet.getRow(row).getCell(column).value));
+  return parseNumber(readCell(sheet.getRow(row).getCell(column)));
 }
 
 function normalized(value: string) {
@@ -321,6 +321,7 @@ function parseDetailSheet(sheet: ExcelJS.Worksheet, config: DetailLayout, errors
           .join(" "),
       );
       const intentionallyUnpriced =
+        (!unit && quantity === 0 && unitRate === 0 && amount === 0) ||
         /\b(TAKEOUT|BY MEP|BY CIVIL|BY OWNER|EXISTING)\b/.test(pricingText) ||
         /^(SUB TOTAL|TOTAL|JUMLAH)\b/.test(normalized(description));
       if (resemblesLine && !intentionallyUnpriced) {
@@ -429,6 +430,11 @@ function progressValue(
   errors: ImportError[],
 ): Omit<WeeklyItemProgress, "row"> | null {
   if (cumulativeQuantity === null && sourcePercent === null) return null;
+  // One explicit zero establishes both readings for a positive contracted quantity.
+  if (leaf.quantity > 0) {
+    if (cumulativeQuantity === 0 && sourcePercent === null) sourcePercent = 0;
+    if (sourcePercent === 0 && cumulativeQuantity === null) cumulativeQuantity = 0;
+  }
   if (cumulativeQuantity === null || sourcePercent === null) {
     errors.push({
       row: leaf.sourceRow,

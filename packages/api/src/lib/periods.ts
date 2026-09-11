@@ -180,6 +180,44 @@ export function generatePeriods(
   return periods;
 }
 
+/**
+ * The period immediately after `previous`, at the same cadence — plus the
+ * widened end date when `previous` was a clamped bucket.
+ *
+ * `schedule.appendPeriod` uses this to extend a calendar one bucket at a time
+ * when a project runs past its planned finish. The last generated bucket is
+ * clamped to the project's end date (a half-week final column), and extending
+ * the calendar unclamps it: the bucket regains its full cadence span and the
+ * appended period starts the day after that. `widenedEndDate` is the value the
+ * previous period's `endDate` must be updated to; null when it was never cut
+ * short. Skipping the widening would leave the stored axis different from what
+ * a full regeneration produces, and workbook calendar validation would then
+ * reject every later import.
+ */
+export function nextPeriod(
+  previous: { periodIndex: number; startDate: string; endDate: string },
+  type: PeriodType,
+  lengthDays: number | null = null,
+): { appended: GeneratedPeriod; widenedEndDate: string | null } {
+  if (previous.periodIndex >= MAX_PERIODS) {
+    throw new PeriodRangeError(`A schedule cannot exceed ${MAX_PERIODS} periods.`);
+  }
+  const widenedEndDate = (() => {
+    const fullEnd = iso(periodEnd(parse(previous.startDate), type, lengthDays));
+    return fullEnd > previous.endDate ? fullEnd : null;
+  })();
+  const start = addDays(parse(widenedEndDate ?? previous.endDate), 1);
+  return {
+    widenedEndDate,
+    appended: {
+      periodIndex: previous.periodIndex + 1,
+      label: `${LABEL_PREFIX[type]}${previous.periodIndex + 1}`,
+      startDate: iso(start),
+      endDate: iso(periodEnd(start, type, lengthDays)),
+    },
+  };
+}
+
 /** A run of consecutive periods that belong to the same calendar month. */
 export type MonthGroup = {
   /** "2026-05". Stable and sortable; the display name is formatted per locale. */

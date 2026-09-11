@@ -121,6 +121,10 @@ export const en = {
     activeScheduleBlocksRebuild:
       "The active schedule uses these periods, so they can no longer be rebuilt.",
     becameInUse: "The reporting periods became in use and can no longer be rebuilt.",
+    calendarChanged: "The reporting calendar changed while you were working. Refresh and try again.",
+    periodInUse:
+      "The latest period still has readings, curve points, planned cells, daily history, or actions — clear them before removing it.",
+    lastPeriodStays: "The last remaining reporting period cannot be removed.",
     windowNeedsBothEnds: "A planning window needs both a start and a finish period.",
     finishBeforeStart: "The finish period cannot come before the start period.",
     periodsRunFrom: "Periods run from {first} to {last}.",

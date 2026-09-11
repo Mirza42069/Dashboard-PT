@@ -41,6 +41,7 @@ import { interpolate, plural } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { uploadPrivateBlob } from "@/lib/client-blob-upload";
 import { getServerUrl } from "@/lib/server-url";
+import { toast } from "@/lib/toast";
 import {
   getWorkbookScheduleIssue,
   type ScheduleIssue,
@@ -973,6 +974,9 @@ export default function ProjectWorkbookImportDialog({
       );
       const body = await readJson<{
         projectId?: string;
+        itemProgressCount?: number;
+        itemProgressPeriods?: number[];
+        warnings?: string[];
         error?: string;
         code?: string | null;
         details?: Record<string, unknown> | null;
@@ -1034,6 +1038,19 @@ export default function ProjectWorkbookImportDialog({
           return;
         }
         throw new Error(body?.error ?? t.projectImport.createFailed);
+      }
+      toast.success(t.projects.created, {
+        description: body.itemProgressPeriods?.length
+          ? interpolate(t.projectImport.itemProgressImported, {
+              count: body.itemProgressCount ?? 0,
+              periods: body.itemProgressPeriods.join(", "),
+            })
+          : undefined,
+      });
+      if (body.warnings?.length) {
+        toast.info(t.projectImport.importNeedsAttention, {
+          description: body.warnings.join("\n"), duration: Infinity, closeButton: true,
+        });
       }
       onOpenChange(false);
       reset();

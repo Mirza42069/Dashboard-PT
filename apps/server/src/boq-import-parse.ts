@@ -92,6 +92,12 @@ export function readCell(raw: unknown): Cell {
 
   if (typeof raw === "object") {
     const cell = raw as Record<string, unknown>;
+    // Pass worksheet cells intact: ExcelJS's formula value getter drops cached
+    // zero/false results, but the result accessor preserves them.
+    if ("address" in cell && "value" in cell) {
+      if (cell.isMerged && cell.master !== raw) return readCell(cell.master);
+      return readCell(cell.result !== undefined ? cell.result : cell.value);
+    }
     // A formula cell that Excel never evaluated has no result. Treated as empty
     // rather than as zero — an unevaluated cell is unknown, and guessing zero
     // is how an import silently prices a line at nothing.
@@ -349,7 +355,7 @@ function detectHeaderRow(sheet: ExcelJS.Worksheet): number {
     const row = sheet.getRow(rowNumber);
     let score = 0;
     for (let column = 1; column <= sheet.columnCount; column++) {
-      const cell = readCell(row.getCell(column).value);
+      const cell = readCell(row.getCell(column));
       // Text only: a row of dates or figures is data, however full it is.
       if (cell.kind === "string" && cell.value.trim() !== "") score++;
     }
@@ -374,11 +380,11 @@ export function describeSheet(sheet: ExcelJS.Worksheet, headerRow?: number): She
       rowNumber <= sheet.rowCount && samples.length < SAMPLE_ROWS;
       rowNumber++
     ) {
-      const text = cellText(readCell(sheet.getRow(rowNumber).getCell(index).value));
+      const text = cellText(readCell(sheet.getRow(rowNumber).getCell(index)));
       if (text.trim() !== "") samples.push(text.slice(0, 60));
     }
 
-    const headerText = cellText(readCell(header.getCell(index).value)).trim();
+    const headerText = cellText(readCell(header.getCell(index))).trim();
     // An unnamed column with data under it still gets offered — schedules
     // routinely leave the code column's heading blank.
     if (headerText === "" && samples.length === 0) continue;
@@ -447,7 +453,7 @@ export function parseRows(
   const { fields } = mapping;
 
   const at = (rowNumber: number, column: number | undefined) =>
-    column === undefined ? ({ kind: "empty" } as Cell) : readCell(sheet.getRow(rowNumber).getCell(column).value);
+    column === undefined ? ({ kind: "empty" } as Cell) : readCell(sheet.getRow(rowNumber).getCell(column));
 
   const periodIndexes = periods.map((period) => period.periodIndex);
   const fail = (row: number, field: ImportField | null, message: string) =>

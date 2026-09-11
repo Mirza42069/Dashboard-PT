@@ -14,7 +14,7 @@ import { Input } from "@DashboardV2/ui/components/input";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, Save, Trash2, Upload } from "@DashboardV2/ui/components/icons";
+import { CircleCheck, Plus, Save, Trash2, Upload } from "@DashboardV2/ui/components/icons";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 
@@ -207,6 +207,8 @@ export default function ProgressTab({
   }
   const bulkSave = useMutation(trpc.progress.bulkSave.mutationOptions());
   const markNoProgress = useMutation(trpc.progress.markNoProgress.mutationOptions());
+  const appendPeriod = useMutation(trpc.schedule.appendPeriod.mutationOptions());
+  const removePeriod = useMutation(trpc.schedule.removePeriod.mutationOptions());
 
   if (reportQuery.isPending) return <Skeleton className="h-64 w-full" />;
   if (reportQuery.isError) {
@@ -445,6 +447,42 @@ export default function ProgressTab({
       selection.clear();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t.progress.saveFailed);
+    }
+  }
+
+  /**
+   * Extends or trims the reporting calendar by one period at the end.
+   *
+   * The matrix header is where the latest week is on screen, so it is where
+   * the affordance lives; the server refuses anything the buttons could get
+   * wrong, and errors surface here as toasts.
+   */
+  async function appendLatestPeriod() {
+    try {
+      const result = await appendPeriod.mutateAsync({ projectId });
+      await queryClient.invalidateQueries(trpc.progress.pathFilter());
+      await queryClient.invalidateQueries(trpc.schedule.pathFilter());
+      await queryClient.invalidateQueries(trpc.project.pathFilter());
+      toast.success(
+        interpolate(t.periodSummary.periodAdded, { period: result.periods.at(-1)!.periodIndex }),
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.common.somethingWentWrong);
+    }
+  }
+
+  async function removeLatestPeriod() {
+    try {
+      const result = await removePeriod.mutateAsync({ projectId });
+      await queryClient.invalidateQueries(trpc.progress.pathFilter());
+      await queryClient.invalidateQueries(trpc.schedule.pathFilter());
+      await queryClient.invalidateQueries(trpc.project.pathFilter());
+      // Indexes run contiguously from 1, so the removed one is what now follows the last.
+      toast.success(
+        interpolate(t.periodSummary.periodRemoved, { period: result.periods.length + 1 }),
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t.common.somethingWentWrong);
     }
   }
 
@@ -733,6 +771,9 @@ export default function ProgressTab({
                         // `.period` below to be known to exist.
                         const periodColumn =
                           view.column.kind === "period" ? view.column.period : null;
+                        const latestPeriod = periods.at(-1);
+                        const isLatestColumn = latestPeriod !== undefined &&
+                          lastPeriodOf(view.column).id === latestPeriod.id;
                         return (
                           <TableHead
                             key={view.column.key}
@@ -803,6 +844,15 @@ export default function ProgressTab({
                               <span className="block text-xs font-normal text-muted-foreground">
                                 {statusLabel(t, "period", periodColumn.status)}
                               </span>
+                            )}
+                            {canEdit && isLatestColumn && (
+                              <PeriodControls
+                                periodIndex={lastPeriodOf(view.column).periodIndex}
+                                appending={appendPeriod.isPending}
+                                removing={removePeriod.isPending}
+                                onAppend={() => void appendLatestPeriod()}
+                                onRemove={() => void removeLatestPeriod()}
+                              />
                             )}
                           </TableHead>
                         );
@@ -985,7 +1035,56 @@ export default function ProgressTab({
       />
 
       {entryFirst ? entry : reading}
-      {entryFirst ? reading : entry}
     </div>
+  );
+}
+
+/**
+ * The +/− pair that extends or trims the calendar at its latest period, shown
+ * in the matrix header above that week's column. Labelled by aria-label and
+ * title — the column it sits on is the context. The server refuses what the
+ * buttons allow, so these are shortcuts to the decision, not the guard.
+ */
+function PeriodControls({
+  periodIndex,
+  appending,
+  removing,
+  onAppend,
+  onRemove,
+}: {
+  periodIndex: number;
+  appending: boolean;
+  removing: boolean;
+  onAppend: () => void;
+  onRemove: () => void;
+}) {
+  const t = useT();
+  return (
+    <span className="mt-1 flex items-center justify-end gap-0.5">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-6"
+        disabled={appending}
+        aria-label={interpolate(t.periodSummary.addPeriod, { period: periodIndex })}
+        title={interpolate(t.periodSummary.addPeriod, { period: periodIndex })}
+        onClick={onAppend}
+      >
+        <Plus className="size-3.5" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-6"
+        disabled={removing}
+        aria-label={interpolate(t.periodSummary.removePeriod, { period: periodIndex })}
+        title={interpolate(t.periodSummary.removePeriod, { period: periodIndex })}
+        onClick={onRemove}
+      >
+        <Trash2 className="size-3.5" />
+      </Button>
+    </span>
   );
 }

@@ -477,6 +477,7 @@ export const en = {
     validationTitle: "Source validation",
     validationRequired: "Fix the source errors first.",
     importNeedsAttention: "Import needs attention",
+    itemProgressImported: "Cumulative table entries added: {count}. Reporting periods: {periods}.",
     requiredMappings: "Map description, start period, and finish period first.",
     createAction: "Create project and draft baseline",
     rowError: "Row {row}: {message}",
@@ -560,7 +561,7 @@ export const en = {
       "This multi-sheet weekly report can build its BoQ and schedule only while creating a project. Existing projects can import its aggregate progress points.",
     sectionProgress: "Actual progress",
     sectionProgressHint:
-      "Import the cumulative actual curve and preserve supported detailed reports in progress history. Baseline item readings are never inferred.",
+      "Import the actual curve, detailed reports, and matched item readings for every reporting period supported by the source values.",
     progressUnavailableHint: "No valid actual progress was found, so progress cannot be updated.",
     pdfProgressDescription:
       "Found {items} detailed progress lines and a reported cumulative total. Choose the date represented by this report.",
@@ -849,6 +850,10 @@ export const en = {
     exportedToast: { one: "1 period exported", other: "{count} periods exported" },
     dataDateIs: "Measured to",
     missingNote: "A dash means nothing was reported. Figures behind plan are shown in brackets.",
+    addPeriod: "Add period after period {period}",
+    removePeriod: "Remove period {period}",
+    periodAdded: "Period {period} added.",
+    periodRemoved: "Period {period} removed.",
   },
   reporting: {
     title: "Reporting workflow",

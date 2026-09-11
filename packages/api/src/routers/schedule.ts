@@ -29,6 +29,7 @@ import {
   CUSTOM_PERIOD_MIN_DAYS,
   PeriodRangeError,
   generatePeriods,
+  nextPeriod,
 } from "../lib/periods";
 import { toAmount } from "../lib/money";
 import { planCells, validatePlanWindow } from "../lib/schedule-plan";
@@ -423,6 +424,169 @@ export const scheduleRouter = router({
               entityId: input.projectId,
               entityLabel: `${target.code} - ${target.name}`,
               detail: `${periods.length} ${target.periodType} periods`,
+            }),
+          );
+
+          return { periods: yield* attempt(() => listPeriodsFor(input.projectId)) };
+        }),
+      ),
+    ),
+
+  /**
+   * Appends one period after the latest — for a project that runs past its
+   * planned calendar and needs a week the contract never scheduled.
+   *
+   * Unlike generatePeriods this is purely additive, so it is safe at any time:
+   * existing readings keep their periods and an active schedule's cells are
+   * untouched. The project's end date moves to the new period's end, and a
+   * clamped final bucket regains its full span, so the stored axis stays
+   * identical to what a later regeneration produces — which is what keeps
+   * workbook calendar validation passing.
+   */
+  appendPeriod: companyPermissionProcedure("project:write")
+    .input(z.object({ projectId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectWritable(ctx, input.projectId));
+          const [[target], periods] = yield* Effect.all([
+            attempt(() => db.select().from(project).where(eq(project.id, input.projectId))),
+            attempt(() => listPeriodsFor(input.projectId)),
+          ], { concurrency: "unbounded" });
+          if (!target) {
+            return yield* fail("NOT_FOUND", ctx.t.project.notFound);
+          }
+          const last = periods.at(-1);
+          if (!last) {
+            return yield* fail("BAD_REQUEST", ctx.t.schedule.generatePeriodsFirst);
+          }
+          const { appended, widenedEndDate } = yield* attemptSync(() => {
+            try {
+              return nextPeriod(last, target.periodType, target.periodLengthDays);
+            } catch (error) {
+              if (error instanceof PeriodRangeError) {
+                throw new TRPCError({ code: "BAD_REQUEST", message: error.message });
+              }
+              throw error;
+            }
+          });
+
+          yield* catchConflict(
+            attempt(() =>
+              runBatch([
+                db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.projectId}, 0))`),
+                // Recheck under the lock: a concurrent append would make this
+                // insert a duplicate period index.
+                db.execute(sql`
+                  select 1 / case when
+                    (select max(period_index) from reporting_period
+                      where project_id = ${input.projectId}) = ${last.periodIndex}
+                  then 1 else 0 end
+                `),
+                db.insert(reportingPeriod).values({
+                  projectId: input.projectId,
+                  periodIndex: appended.periodIndex,
+                  label: appended.label,
+                  startDate: appended.startDate,
+                  endDate: appended.endDate,
+                }),
+                db
+                  .update(project)
+                  .set({ endDate: appended.endDate })
+                  .where(eq(project.id, input.projectId)),
+                ...(widenedEndDate
+                  ? [
+                      db
+                        .update(reportingPeriod)
+                        .set({ endDate: widenedEndDate })
+                        .where(eq(reportingPeriod.id, last.id)),
+                    ]
+                  : []),
+              ]),
+            ),
+            ctx.t.schedule.calendarChanged,
+          );
+
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: "created",
+              entityType: "period",
+              entityId: input.projectId,
+              entityLabel: `${target.code} - ${target.name}`,
+              detail: `${appended.label} ${appended.startDate} – ${appended.endDate}`,
+            }),
+          );
+
+          return { periods: yield* attempt(() => listPeriodsFor(input.projectId)) };
+        }),
+      ),
+    ),
+
+  /**
+   * Removes the latest period — the undo of appendPeriod.
+   *
+   * Only the newest period is a candidate: earlier ones sit in the middle of
+   * recorded history and of the schedule grid. Even the newest is refused
+   * while anything still references it — readings, curve points, planned
+   * cells, daily history, or actions — so removal can never ride a cascade
+   * and take data with it. The project's end date walks back with it.
+   */
+  removePeriod: companyPermissionProcedure("project:write")
+    .input(z.object({ projectId: z.string().min(1) }))
+    .mutation(({ ctx, input }) =>
+      runProcedure(
+        Effect.gen(function* () {
+          yield* attempt(() => assertProjectWritable(ctx, input.projectId));
+          const [[target], periods] = yield* Effect.all([
+            attempt(() => db.select().from(project).where(eq(project.id, input.projectId))),
+            attempt(() => listPeriodsFor(input.projectId)),
+          ], { concurrency: "unbounded" });
+          if (!target) {
+            return yield* fail("NOT_FOUND", ctx.t.project.notFound);
+          }
+          const last = periods.at(-1);
+          if (!last) {
+            return yield* fail("BAD_REQUEST", ctx.t.schedule.generatePeriodsFirst);
+          }
+          if (periods.length === 1) {
+            return yield* fail("BAD_REQUEST", ctx.t.schedule.lastPeriodStays);
+          }
+
+          yield* catchConflict(
+            attempt(() =>
+              runBatch([
+                db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.projectId}, 0))`),
+                // Recheck under the lock: referenced is the common case with a
+                // specific message, still-latest closes the concurrent-append gap.
+                db.execute(sql`
+                  select 1 / case when
+                    not exists (select 1 from progress_entry where period_id = ${last.id})
+                    and not exists (select 1 from project_actual_curve where period_id = ${last.id})
+                    and not exists (select 1 from daily_progress_snapshot where period_id = ${last.id})
+                    and not exists (select 1 from boq_item_distribution where period_id = ${last.id})
+                    and not exists (select 1 from daily_report where period_id = ${last.id})
+                    and not exists (select 1 from ticket where period_id = ${last.id})
+                    and (select max(period_index) from reporting_period
+                      where project_id = ${input.projectId}) = ${last.periodIndex}
+                  then 1 else 0 end
+                `),
+                db.delete(reportingPeriod).where(eq(reportingPeriod.id, last.id)),
+                db
+                  .update(project)
+                  .set({ endDate: periods[periods.length - 2]!.endDate })
+                  .where(eq(project.id, input.projectId)),
+              ]),
+            ),
+            ctx.t.schedule.periodInUse,
+          );
+
+          yield* attempt(() =>
+            recordActivity(ctx, {
+              action: "deleted",
+              entityType: "period",
+              entityId: input.projectId,
+              entityLabel: `${target.code} - ${target.name}`,
+              detail: `${last.label} ${last.startDate} – ${last.endDate}`,
             }),
           );
 

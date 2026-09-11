@@ -274,5 +274,10 @@ export async function commitProjectWorkbook(input: {
     ...chunks(dailyItemValues, 250).map((values) => db.insert(dailyProgressItem).values(values)),
   ]);
 
-  return { projectId, ...revision.result, periodCount: periods.length, warnings: prepared.plan.warnings };
+  return {
+    projectId, ...revision.result, periodCount: periods.length,
+    itemProgressCount: itemProgressValues.length,
+    itemProgressPeriods: [...progressPeriodIndexes].sort((a, b) => a - b),
+    warnings: prepared.plan.warnings,
+  };
 }
