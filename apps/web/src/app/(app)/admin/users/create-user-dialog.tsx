@@ -141,7 +141,7 @@ export default function CreateUserDialog({
         });
         setOpen(false);
         formApi.reset();
-        onTemporaryPassword({ name: data.user.name, email: data.user.email, temporaryPassword: data.temporaryPassword });
+        onTemporaryPassword({ name: data.user.name, email: data.user.email, temporaryPassword: data.temporaryPassword, inviteSent: data.inviteSent });
         void queryClient.invalidateQueries(trpc.admin.pathFilter());
       } catch (error) {
         toast.error(error instanceof Error ? error.message : t.users.createFailed);

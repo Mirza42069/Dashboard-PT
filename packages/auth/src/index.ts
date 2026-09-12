@@ -316,8 +316,7 @@ export async function resetTemporaryPassword(userId: string, target: {
   return temporaryPassword;
 }
 
-export async function changeOwnPassword(userId: string, sessionId: string, currentPassword: string, newPassword: string): Promise<boolean> {
-  if (!currentPassword || currentPassword.length > 128 || newPassword.length < 12 || newPassword.length > 128) return false;
+export async function changeOwnPassword(userId: string, sessionId: string, currentPassword: string, newPassword: string): Promise<boolean> {  if (!currentPassword || currentPassword.length > 128 || newPassword.length < 12 || newPassword.length > 128) return false;
   // Reject equivalent Unicode spellings, not just identical input strings.
   if (currentPassword.normalize("NFKC") === newPassword.normalize("NFKC")) return false;
   try {
@@ -344,6 +343,92 @@ export async function changeOwnPassword(userId: string, sessionId: string, curre
     return changed.length === 1;
   } catch {
     throw new Error("Could not change the password. Try again.");
+  }
+}
+
+/**
+ * Self-service password reset for accounts the owner cannot sign into.
+ *
+ * Tokens live in the `verification` table under `reset-password:{userId}` —
+ * the same namespace changeOwnPassword and resetTemporaryPassword already
+ * clear, so any credential change elsewhere invalidates outstanding links for
+ * free. Only the SHA-256 hash is stored; the plaintext token exists solely in
+ * the email link. One outstanding token per account: a new request replaces
+ * the old row, orphaning earlier links.
+ */
+const PASSWORD_RESET_TTL_MINUTES = 60;const RESET_TOKEN_PREFIX = "reset-password:";
+
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Buffer.from(digest).toString("hex");
+}
+
+export async function createPasswordResetToken(email: string): Promise<string | null> {
+  const db = createDb();
+  const [target] = await db.select({ id: schema.user.id }).from(schema.user).where(eq(schema.user.email, email.toLowerCase()));
+  if (!target) return null;
+  const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+  await db.batch([
+    db.delete(schema.verification).where(eq(schema.verification.identifier, RESET_TOKEN_PREFIX + target.id)),
+    db.insert(schema.verification).values({
+      id: crypto.randomUUID(),
+      identifier: RESET_TOKEN_PREFIX + target.id,
+      value: await sha256Hex(token),
+      expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MINUTES * 60_000),
+    }),
+  ]);
+  return token;
+}
+
+export async function consumePasswordResetToken(token: string, newPassword: string): Promise<boolean> {
+  if (!token || token.length > 200 || newPassword.length < 12 || newPassword.length > 128) return false;
+  try {
+    const db = createDb();
+    const [match] = await db.select({ id: schema.verification.id, identifier: schema.verification.identifier })
+      .from(schema.verification)
+      .where(and(
+        eq(schema.verification.value, await sha256Hex(token)),
+        like(schema.verification.identifier, `${RESET_TOKEN_PREFIX}%`),
+        sql`${schema.verification.expiresAt} > now()`,
+      ));
+    if (!match) return false;
+    const userId = match.identifier.slice(RESET_TOKEN_PREFIX.length);
+    const [credential] = await db.select({ revision: schema.user.passwordSetupTokenHash })
+      .from(schema.user).innerJoin(schema.account, eq(schema.account.userId, schema.user.id))
+      .where(and(eq(schema.user.id, userId), eq(schema.account.providerId, "credential")));
+    if (!credential) return false;
+    const revision = crypto.randomUUID();
+    // Statements after the user update re-evaluate this subquery against the
+    // NEW revision they can now see — matching on the old one (the optimistic
+    // guard below) would make the password and session writes match 0 rows.
+    // This is the same two-cursor shape changeOwnPassword uses.
+    const armedUser = db.select({ id: schema.user.id }).from(schema.user).where(and(
+      eq(schema.user.id, userId),
+      eq(schema.user.passwordSetupTokenHash, revision),
+    ));
+    // The single-use guarantee lives in the first write: the delete only
+    // matches for the first consumer, and the whole batch commits or not at
+    // all. `changed` is the user update — the second statement. Its WHERE
+    // carries the optimistic guard: a revision rotated elsewhere (admin reset,
+    // another consumer of this token) between our read and this write
+    // invalidates the link.
+    const [, changed] = await db.batch([
+      db.delete(schema.verification).where(eq(schema.verification.id, match.id)),
+      db.update(schema.user).set({ mustChangePassword: false, passwordSetupTokenHash: revision, updatedAt: new Date() })
+        .where(and(
+          eq(schema.user.id, userId),
+          credential.revision === null ? isNull(schema.user.passwordSetupTokenHash) : eq(schema.user.passwordSetupTokenHash, credential.revision),
+        )).returning({ id: schema.user.id }),
+      db.update(schema.account).set({ password: await hashPassword(newPassword), updatedAt: new Date() })
+        .where(and(inArray(schema.account.userId, armedUser), eq(schema.account.providerId, "credential"))),
+      // The owner just proved they lost the old credential — every existing
+      // session dies with it. There is no current session to spare.
+      db.delete(schema.session).where(inArray(schema.session.userId, armedUser)),
+    ]);
+    return changed.length === 1;
+  } catch {
+    // Never expose driver errors or hashes through logs or error causes.
+    throw new Error("Could not reset the password. Try again.");
   }
 }
 

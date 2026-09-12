@@ -5,7 +5,7 @@ import type { NextRequest } from "next/server";
 import { isLocale, LOCALE_COOKIE } from "./i18n";
 
 /** Routes reachable without a session. Everything else is gated. */
-const PUBLIC_PATHS = ["/login", "/set-password"];
+const PUBLIC_PATHS = ["/login", "/set-password", "/reset-password"];
 
 export default function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;

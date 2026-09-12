@@ -12,6 +12,7 @@ import { useRef } from "react";
 import z from "zod";
 
 import { FieldError, fieldError, focusFirstInvalid } from "@/components/field-error";
+import ForgotPasswordDialog from "@/components/forgot-password-dialog";
 import { PasswordInput } from "@/components/password-input";
 import { useT } from "@/i18n/provider";
 import { authClient } from "@/lib/auth-client";
@@ -173,6 +174,10 @@ export default function SignInForm() {
           </Button>
         )}
       </form.Subscribe>
+
+      <div className="text-center">
+        <ForgotPasswordDialog />
+      </div>
     </form>
   );
 }

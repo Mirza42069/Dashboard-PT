@@ -68,6 +68,13 @@ export const env = createEnv({
     // Reads and deletes use Vercel OIDC when it is available.
     BLOB_READ_WRITE_TOKEN: z.string().min(1).optional(),
     CRON_SECRET: z.string().min(16).optional(),
+    // Transactional email (password reset, invites) via Resend. Optional so
+    // local dev and previews boot without it; the senders degrade to logged
+    // failures and the sign-in flow itself never depends on email.
+    RESEND_API_KEY: z.string().min(1).optional(),
+    // Base URL for links inside emails. Unset means production; point it at
+    // http://localhost:3001 to test the reset and invite flows locally.
+    APP_URL: z.url().optional(),
   },
   runtimeEnv: runtimeEnv,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

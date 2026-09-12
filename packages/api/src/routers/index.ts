@@ -6,6 +6,7 @@ import { boqRouter } from "./boq";
 import { companyRouter } from "./company";
 import { dailyProgressRouter } from "./daily-progress";
 import { noteRouter } from "./note";
+import { passwordResetRouter } from "./password-reset";
 import { progressRouter } from "./progress";
 import { projectRouter } from "./project";
 import { scheduleRouter } from "./schedule";
@@ -27,6 +28,7 @@ export const appRouter = router({
   schedule: scheduleRouter,
   progress: progressRouter,
   dailyProgress: dailyProgressRouter,
+  passwordReset: passwordResetRouter,
   support: supportRouter,
 });
 export type AppRouter = typeof appRouter;

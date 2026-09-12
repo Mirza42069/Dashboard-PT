@@ -104,7 +104,15 @@ export const id = {
     password: "Kata sandi",
     useIssuedCredentials: "Masuk dengan email atau nama akun Anda.",
     contactAdminFootnote:
-      "Akun dibuat oleh administrator. Hubungi administrator Anda untuk akses atau reset kata sandi.",
+      "Akun dibuat oleh administrator. Lupa kata sandi? Gunakan tautan di bawah formulir masuk.",
+    forgotPassword: "Lupa kata sandi?",
+    forgotTitle: "Atur ulang kata sandi",
+    forgotDescription: "Masukkan email akun Anda dan kami akan mengirimkan tautan atur ulang.",
+    emailRequired: "Email wajib diisi",
+    forgotSubmit: "Kirim tautan atur ulang",
+    forgotSubmitting: "Mengirim…",
+    resetLinkSent:
+      "Jika email tersebut terdaftar pada sebuah akun, tautan atur ulang sedang dikirim. Tautan berlaku 1 jam dan hanya bisa dipakai sekali.",
     accountPaused:
       "Akun Anda dijeda. Silakan hubungi administrator untuk memperpanjang langganan Anda.",
     trialEnded:
@@ -134,6 +142,12 @@ export const id = {
     confirmRequired: "Konfirmasi kata sandi baru Anda",
     mismatch: "Kata sandi tidak cocok",
     mustDiffer: "Pilih kata sandi yang berbeda dari yang sekarang",
+    resetTitle: "Pilih kata sandi baru",
+    resetDescription: "Pilih kata sandi baru untuk akun Anda. Anda akan langsung masuk dengannya setelah ini.",
+    resetLinkInvalid: "Tautan atur ulang ini tidak valid atau sudah kedaluwarsa. Minta tautan baru dari halaman masuk.",
+    reset: "Atur ulang kata sandi",
+    resetting: "Menyimpan…",
+    resetDone: "Kata sandi diperbarui. Masuk dengan kata sandi baru Anda.",
   },
   trial: {
     endedTitle: "Uji coba berakhir",
@@ -1283,11 +1297,12 @@ export const id = {
     accountPausedToast: "Akun dijeda",
     accountResumedToast: "Akun diaktifkan kembali",
     tempPasswordTitle: "Kata sandi sementara untuk {name}",
-    tempPasswordHint: "Hanya ditampilkan sekali. Salin kata sandi ini dan bagikan secara pribadi kepada pemilik akun. Mereka harus masuk dan menggantinya sebelum mengakses dasbor. Tidak ada email yang dikirim. Jika hilang, pilih Atur ulang kata sandi untuk membuat yang baru.",
+    tempPasswordHint: "Email undangan berisi kata sandi ini sedang dikirim ke pemilik akun. Salin sebagai cadangan — jika email tidak sampai, bagikan secara pribadi sendiri. Kata sandi harus diganti saat masuk pertama kali.",
     tempPasswordLabel: "Kata sandi sementara",
     copyTempPassword: "Salin kata sandi",
     tempPasswordCopied: "Kata sandi disalin",
     tempPasswordCopyFailed: "Tidak dapat menyalin kata sandi. Pilih kata sandi di atas dan salin secara manual.",
+    inviteEmailFailed: "Email undangan gagal dikirim. Salin kata sandi dan bagikan secara pribadi kepada pemilik akun.",
     promotedToast: "Dijadikan admin",
     demotedToast: "Diturunkan menjadi pengguna",
     deletedToast: "Akun dihapus",

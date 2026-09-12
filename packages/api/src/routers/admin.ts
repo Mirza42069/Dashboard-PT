@@ -4,6 +4,7 @@ import {
   resetTemporaryPassword,
   hashInaccessiblePassword,
 } from "@DashboardV2/auth";
+import { trySendInviteEmail } from "@DashboardV2/auth/mail";
 import {
   isValidAccountName,
   normalizeAccountName,
@@ -488,7 +489,12 @@ export const adminRouter = router({
             }),
           );
 
-          return { user: created.user, temporaryPassword };
+          // Best-effort invite: account creation must survive a mail outage,
+          // and the dialog still shows the temporary password for manual
+          // delivery when the email fails.
+          const inviteSent = yield* attempt(() => trySendInviteEmail({ to: email, name, temporaryPassword }));
+
+          return { user: created.user, temporaryPassword, inviteSent };
         }),
       ),
     ),

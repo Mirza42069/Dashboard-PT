@@ -24,6 +24,7 @@ export const en = {
     insufficientRole: "Insufficient role",
     trialEnded: "This trial has ended",
     passwordChangeRequired: "Set a new password before continuing.",
+    passwordResetLinkInvalid: "This reset link is invalid or has expired. Request a new one.",
     noCompanyAssigned: "No company assigned to this account. Ask an admin to set one.",
     noCompaniesYet: "No companies exist yet. Create one under Admin → Companies.",
     companyAccountRequired: "A company account is required",

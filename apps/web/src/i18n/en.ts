@@ -102,7 +102,15 @@ export const en = {
     password: "Password",
     useIssuedCredentials: "Use your email or account name and password.",
     contactAdminFootnote:
-      "Accounts are created by an administrator. Contact yours if you need access or a password reset.",
+      "Accounts are created by an administrator. Forgot your password? Use the link under the sign-in form.",
+    forgotPassword: "Forgot password?",
+    forgotTitle: "Reset your password",
+    forgotDescription: "Enter your account email and we will send you a reset link.",
+    emailRequired: "Email is required",
+    forgotSubmit: "Send reset link",
+    forgotSubmitting: "Sending…",
+    resetLinkSent:
+      "If that email belongs to an account, a reset link is on its way. The link expires in 1 hour and can be used once.",
     accountPaused:
       "Your account is paused. Please contact your administrator to renew your subscription.",
     trialEnded:
@@ -132,6 +140,12 @@ export const en = {
     confirmRequired: "Confirm your new password",
     mismatch: "Passwords do not match",
     mustDiffer: "Choose a password different from your current one",
+    resetTitle: "Choose a new password",
+    resetDescription: "Pick a new password for your account. You will sign in with it right after.",
+    resetLinkInvalid: "This reset link is invalid or has expired. Request a new one from the sign-in page.",
+    reset: "Reset password",
+    resetting: "Resetting…",
+    resetDone: "Password updated. Sign in with your new password.",
   },
   trial: {
     endedTitle: "Trial ended",
@@ -1303,11 +1317,12 @@ export const en = {
     accountPausedToast: "Account paused",
     accountResumedToast: "Account resumed",
     tempPasswordTitle: "Temporary password for {name}",
-    tempPasswordHint: "Shown only once. Copy this password and share it privately with the account owner. They must sign in and change it before accessing the dashboard. No email is sent. If you lose it, choose Reset password to generate another.",
+    tempPasswordHint: "An invite email with this password is on its way to the account owner. Copy it as a backup — if the email does not arrive, share it privately yourself. It must be changed at first sign-in.",
     tempPasswordLabel: "Temporary password",
     copyTempPassword: "Copy password",
     tempPasswordCopied: "Password copied",
     tempPasswordCopyFailed: "Could not copy the password. Select it above and copy it manually.",
+    inviteEmailFailed: "The invite email could not be sent. Copy the password and share it privately with the account owner.",
     promotedToast: "Promoted to admin",
     demotedToast: "Demoted to user",
     deletedToast: "Account deleted",

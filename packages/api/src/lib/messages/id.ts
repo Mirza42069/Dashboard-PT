@@ -20,6 +20,8 @@ export const id = {
     insufficientRole: "Peran Anda tidak mencukupi",
     trialEnded: "Masa uji coba ini telah berakhir",
     passwordChangeRequired: "Atur kata sandi baru sebelum melanjutkan.",
+    passwordResetLinkInvalid:
+      "Tautan atur ulang ini tidak valid atau sudah kedaluwarsa. Minta tautan yang baru.",
     noCompanyAssigned:
       "Akun ini belum terhubung ke perusahaan mana pun. Minta administrator untuk mengaturnya.",
     noCompaniesYet: "Belum ada perusahaan. Buat satu di Admin → Perusahaan.",

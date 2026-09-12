@@ -12,6 +12,9 @@ export type TemporaryPasswordResult = {
   name: string;
   email: string;
   temporaryPassword: string;
+  /** False when the invite email could not be delivered — the password needs
+      manual delivery. Absent for admin resets, which never email. */
+  inviteSent?: boolean;
 };
 
 export default function TempPasswordDialog({ result, onDismiss }: {
@@ -55,6 +58,9 @@ export default function TempPasswordDialog({ result, onDismiss }: {
           }}>{t.users.copyTempPassword}</Button>
           <Button type="button" variant="outline" onClick={onDismiss}>{t.common.close}</Button>
         </div>
+        {result.inviteSent === false && (
+          <p role="alert" className="text-sm text-destructive">{t.users.inviteEmailFailed}</p>
+        )}
         <p role="status" className="text-sm text-muted-foreground">{status}</p>
       </DialogContent>
     </Dialog>
