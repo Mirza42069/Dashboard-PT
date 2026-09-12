@@ -3,8 +3,8 @@
 ## Tooling and commands
 
 - Use Bun 1.3.6 from the repository root; dependencies and workspace versions are controlled by `bun.lock` and the root catalog. Install with `bun install --frozen-lockfile`.
-- `bun run dev` kills listeners on API `:3000`, dashboard `:3001`, and marketing `:3002` before starting them. `bun run dev:server`, `bun run dev:web`, and `bun run dev:marketing` start individually without that cleanup; `bun run dev:stop` frees all three ports.
-- Checks: `bun run check-types`, `bun test`, `bun run build`. Focus an app/UI typecheck with `bun run --filter web check-types` (also `server`, `marketing`, `@DashboardV2/ui`). There is no lint or formatter script.
+- `bun run dev` kills listeners on API `:3000` and dashboard `:3001` before starting them. `bun run dev:server` and `bun run dev:web` start individually without that cleanup; `bun run dev:stop` frees both ports.
+- Checks: `bun run check-types`, `bun test`, `bun run build`. Focus an app/UI typecheck with `bun run --filter web check-types` (also `server`, `@DashboardV2/ui`). There is no lint or formatter script.
 - Tests are colocated: `bun test path/to/file.test.ts` or `bun test -t "name"`. Several API/auth/server suites skip without `DATABASE_URL`; load the server environment with `bun --env-file=apps/server/.env test [path/to/file.test.ts]`.
 - `packages/auth/src/temporary-password.integration.test.ts` additionally requires `PASSWORD_SETUP_TEST_DATABASE_URL` pointing to a disposable localhost database named `auth_setup_test`; it creates and drops tables.
 - `bun run release:check` orders typecheck, tests, `db:check`, build, then `deploy:check` (Vercel dry-run).
@@ -26,7 +26,7 @@
 
 ## Framework and deployment traps
 
-- Before changing either Next app, consult `apps/web/node_modules/next/dist/docs/` or `apps/marketing/node_modules/next/dist/docs/`; Next is not installed at root `node_modules/next`. `next dev` may create/update app-level `AGENTS.md`/`CLAUDE.md` managed blocks; keep custom guidance outside those blocks.
-- Both Next apps enable typed routes and React Compiler. Do not add memoization solely as a default optimization, and keep route values compatible with typed routes.
-- Root `vercel.json` deploys dashboard + server; marketing deploys separately via `apps/marketing/vercel.json`. `/api/*` routes to Hono with `/api` stripped, except `/api/auth/*`, which must retain its prefix. Hono also normalizes the original URL for tRPC.
+- Before changing the Next app, consult `apps/web/node_modules/next/dist/docs/`; Next is not installed at root `node_modules/next`. `next dev` may create/update app-level `AGENTS.md`/`CLAUDE.md` managed blocks; keep custom guidance outside those blocks.
+- The Next app enables typed routes and React Compiler. Do not add memoization solely as a default optimization, and keep route values compatible with typed routes.
+- Root `vercel.json` deploys dashboard + server in one project (`https://fushin.app`; the login page doubles as the public landing at `/`). `/api/*` routes to Hono with `/api` stripped, except `/api/auth/*`, which must retain its prefix. Hono also normalizes the original URL for tRPC.
 - `apps/server/tsdown.config.ts` bundles every dependency with code splitting disabled. Keep the deploy self-contained: Vercel runs `db:migrate`, builds `dist/index.mjs`, then copies it to the service-root `server.mjs` entrypoint.

@@ -9,4 +9,4 @@ SaaS dashboard for construction progress reporting: BoQ baselines, schedules, S-
 - **Database** — PostgreSQL (Neon) with [Drizzle ORM](https://orm.drizzle.team); SQL migrations in `packages/db/src/migrations`
 - **Frontend** — [Next.js](https://nextjs.org) 16 (App Router, typed routes, React Compiler) + React 19, [Tailwind CSS v4](https://tailwindcss.com) + shadcn/ui primitives (`packages/ui`)
 - **Documents & AI** — [ExcelJS](https://exceljs.github.io) (workbook import/export), [pdf-lib](https://pdf-lib.js.org), Vercel AI Gateway (`ai` SDK) for workbook/PDF layout interpretation
-- **Infrastructure** — Vercel (dashboard + API in one deployment, marketing site separate), [Vercel Blob](https://vercel.com/docs/storage/vercel-blob) for uploads
+- **Infrastructure** — Vercel (dashboard + API in one deployment at [fushin.app](https://fushin.app); the login page doubles as the public landing), [Vercel Blob](https://vercel.com/docs/storage/vercel-blob) for uploads
