@@ -29,7 +29,7 @@ import {
 } from "@DashboardV2/ui/components/select";
 import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Textarea } from "@DashboardV2/ui/components/textarea";
-import { CircleAlert, Lock, Send } from "@DashboardV2/ui/components/icons";
+import { CircleAlert, Send } from "@DashboardV2/ui/components/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -40,7 +40,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { interpolate } from "@/i18n";
 import { useT } from "@/i18n/provider";
 import { toast } from "@/lib/toast";
-import { selectedReportingPeriod } from "@/lib/reporting-period";
+import { ALL_PERIODS, selectedReportingPeriod } from "@/lib/reporting-period";
 import { useFormat } from "@/lib/use-format";
 import { trpc } from "@/utils/trpc";
 
@@ -57,9 +57,9 @@ import { trpc } from "@/utils/trpc";
  * here and why submission is refused until the difference has been resolved.
  *
  * Every consequential move goes through a confirmation, and the two that change
- * an agreed record — returning a report, reopening a locked period — cannot be
- * confirmed without a written reason. The reason is not decoration: it is what
- * the next person to open this period reads.
+ * an agreed record — returning a report, reopening an approved or locked period
+ * — cannot be confirmed without a written reason. The reason is not decoration:
+ * it is what the next person to open this period reads.
  */
 
 /** Mirrors isEditable in packages/api/src/lib/progress-workflow.ts. */
@@ -72,7 +72,6 @@ type PeriodStatus =
   | "submitted"
   | "reviewed"
   | "approved"
-  | "locked"
   | "returned";
 
 /** Transitions offered to the user, and what each needs before it can run. */
@@ -97,7 +96,7 @@ export default function ReportingWorkflow({
   canLock,
   selectedPeriodId,
   onSelectPeriod,
-  onBeforeSubmit,
+  onBeforeTransition,
 }: {
   projectId: string;
   canEdit: boolean;
@@ -105,7 +104,9 @@ export default function ReportingWorkflow({
   canLock: boolean;
   selectedPeriodId: string | null;
   onSelectPeriod: (periodId: string) => void;
-  onBeforeSubmit?: () => Promise<boolean>;
+  /** Persists unsaved matrix edits before any transition, so the record the
+   * status changes on is the one on screen. Returning false aborts the move. */
+  onBeforeTransition?: () => Promise<boolean>;
 }) {
   const t = useT();
   const { formatDateRange, formatDateTime } = useFormat();
@@ -127,10 +128,12 @@ export default function ReportingWorkflow({
   const periods = statusQuery.data ?? [];
   if (periods.length === 0) return null;
 
-  // Default to the period the project is actually working on: the earliest one
-  // that is not finished. Landing on period 1 of a job in its ninth month would
-  // be technically correct and useless.
-  const current = selectedReportingPeriod(periods, selectedPeriodId)!;
+  // "all" is the picker's overview entry, not a period: the card then lists
+  // every period and nothing below needs one pinned. The fallback is otherwise
+  // the default — the earliest one that is not finished. Landing on period 1 of
+  // a job in its ninth month would be technically correct and useless.
+  const isAll = selectedPeriodId === ALL_PERIODS;
+  const current = selectedReportingPeriod(periods, isAll ? null : selectedPeriodId)!;
 
   const { completeness } = current;
   const addressed = completeness.reported + completeness.noProgress;
@@ -178,16 +181,10 @@ export default function ReportingWorkflow({
       toast: t.reporting.returned,
     });
   }
+  // Approve is the end of the line — there is no lock step. An agreed period
+  // only leaves that state through reopen, which carries the same weight the
+  // old unlock did and is gated by the same permission.
   if (canLock && status === "approved") {
-    moves.push({
-      to: "locked",
-      label: t.reporting.lock,
-      confirmTitle: t.reporting.confirmLockTitle,
-      confirmBody: t.reporting.confirmLockBody,
-      toast: t.reporting.locked,
-    });
-  }
-  if (canLock && (status === "approved" || status === "locked")) {
     moves.push({
       to: "draft",
       label: t.reporting.reopen,
@@ -206,7 +203,9 @@ export default function ReportingWorkflow({
   async function run(move: Move) {
     setPreparing(true);
     try {
-      if (move.to === "submitted" && onBeforeSubmit && !(await onBeforeSubmit())) return;
+      // Every move rides on the figures as they are on screen — an unsaved
+      // clear must reach the record before the period is frozen, not after.
+      if (onBeforeTransition && !(await onBeforeTransition())) return;
       await transition.mutateAsync({
         periodId: current.id,
         to: move.to,
@@ -232,7 +231,7 @@ export default function ReportingWorkflow({
             <CardTitle className="flex flex-wrap items-center gap-2">
               {t.reporting.title}
               <Hint text={t.reporting.description} />
-              <StatusBadge kind="period" value={status} />
+              {!isAll && <StatusBadge kind="period" value={status} />}
             </CardTitle>
           </div>
 
@@ -241,17 +240,21 @@ export default function ReportingWorkflow({
               {t.reporting.periodPicker}
             </Label>
             <Select
-              items={periods.map((period) => ({
-                value: period.id,
-                label: `${period.periodIndex} · ${formatDateRange(period.startDate, period.endDate)}`,
-              }))}
-              value={current.id}
+              items={[
+                { value: ALL_PERIODS, label: t.reporting.allPeriods },
+                ...periods.map((period) => ({
+                  value: period.id,
+                  label: `${period.periodIndex} · ${formatDateRange(period.startDate, period.endDate)}`,
+                })),
+              ]}
+              value={isAll ? ALL_PERIODS : current.id}
               onValueChange={(value) => value && onSelectPeriod(value)}
             >
               <SelectTrigger id="reporting-period" className="w-64">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value={ALL_PERIODS}>{t.reporting.allPeriods}</SelectItem>
                 {periods.map((period) => (
                   <SelectItem key={period.id} value={period.id}>
                     {`${period.periodIndex} · ${formatDateRange(period.startDate, period.endDate)}`}
@@ -264,6 +267,44 @@ export default function ReportingWorkflow({
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {isAll ? (
+          /*
+           * The overview: every period with where its report stands. Picking a
+           * row is how a single period's workflow — submit, approve, lock — is
+           * reached; none of those moves mean anything for "all" at once.
+           */
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">{t.reporting.allPeriodsHint}</p>
+            <ul className="divide-y rounded-md border">
+              {periods.map((period) => {
+                const addressed = period.completeness.reported + period.completeness.noProgress;
+                return (
+                  <li key={period.id}>
+                    <button
+                      type="button"
+                      className="flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                      onClick={() => onSelectPeriod(period.id)}
+                    >
+                      <span className="font-medium tabular-nums">
+                        {period.periodIndex} · {formatDateRange(period.startDate, period.endDate)}
+                      </span>
+                      <span className="flex items-center gap-3">
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {interpolate(t.reporting.completenessOf, {
+                            done: addressed,
+                            total: period.completeness.total,
+                          })}
+                        </span>
+                        <StatusBadge kind="period" value={period.status} />
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : (
+        <>
         {/*
          * The returned comment sits at the top of the panel, above the figures
          * it refers to, rather than in a history drawer. A correction request
@@ -390,12 +431,13 @@ export default function ReportingWorkflow({
                 }}
               >
                 {move.to === "submitted" && <Send />}
-                {move.to === "locked" && <Lock />}
                 {move.destructive && <CircleAlert />}
                 {move.label}
               </Button>
             ))}
           </div>
+        )}
+        </>
         )}
       </CardContent>
 

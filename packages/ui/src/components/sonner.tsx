@@ -9,7 +9,6 @@ import {
 } from "@DashboardV2/ui/components/icons";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
-/** Theme is passed in by the app, which reads it from a cookie server-side. */
 const Toaster = ({ theme = "light", ...props }: ToasterProps) => {
   return (
     <Sonner

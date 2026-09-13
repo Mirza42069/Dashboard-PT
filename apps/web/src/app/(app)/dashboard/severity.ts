@@ -1,4 +1,3 @@
-import { isBehindDeviation } from "@DashboardV2/api/lib/deviation";
 import {
   CalendarRange,
   CircleAlert,
@@ -125,25 +124,4 @@ export function levelFor(row: SeverityInput): SeverityLevel {
   if (signals.some((signal) => signal.level === "late")) return "late";
   if (signals.some((signal) => signal.level === "waiting")) return "waiting";
   return "settled";
-}
-
-/**
- * Whether the count of behind projects moved since the previous reported period.
- *
- * The only genuine trend on this page. Every other figure would need a
- * historical portfolio snapshot, which nothing stores — but each row already
- * carries its own previous-period deviation, so counting both sides of the same
- * list is a real comparison rather than an invented one.
- *
- * Rows whose previous deviation is unknown are excluded from *both* counts, so
- * a project reporting for the first time cannot read as an improvement.
- */
-export function behindDelta(rows: SeverityInput[]): number | null {
-  const comparable = rows.filter(
-    (row) => row.deviation !== null && row.previousDeviation !== null,
-  );
-  if (comparable.length === 0) return null;
-  const now = comparable.filter((row) => isBehindDeviation(row.deviation)).length;
-  const before = comparable.filter((row) => isBehindDeviation(row.previousDeviation)).length;
-  return now - before;
 }

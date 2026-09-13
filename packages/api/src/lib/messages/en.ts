@@ -217,7 +217,6 @@ export const en = {
       submitted: "submitted",
       reviewed: "reviewed",
       approved: "approved",
-      locked: "locked",
       returned: "returned",
     },
     supportStatus: {

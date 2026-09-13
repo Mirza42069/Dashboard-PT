@@ -18,10 +18,8 @@ import type { RowSelection } from "@/lib/use-row-selection";
  * The checkbox column and its toolbar, in one place.
  *
  * Every table that offers selection was otherwise going to restate the same
- * three things — a header checkbox that knows about the indeterminate state, a
- * row checkbox with a name in its label, and the `data-state` attribute that
- * actually tints the selected row. The third is the one people forget, which is
- * why it is a function here rather than a convention.
+ * header checkbox that knows about the indeterminate state and a row checkbox
+ * with a name in its label.
  *
  * The actions stay with the table. What a selection of tickets can do has
  * nothing in common with what a selection of BoQ lines can do; only the
@@ -77,17 +75,6 @@ export function SelectRowCell({
       />
     </TableCell>
   );
-}
-
-/**
- * Spread onto the row's `TableRow`.
- *
- * `data-[state=selected]:bg-muted` already lives in the Table primitive; this
- * is what turns it on. Easy to leave out, and the omission is invisible until
- * someone scrolls a long selection and cannot tell what they ticked.
- */
-export function selectionRowProps(selection: RowSelection, id: string) {
-  return { "data-state": selection.isSelected(id) ? "selected" : undefined } as const;
 }
 
 /**

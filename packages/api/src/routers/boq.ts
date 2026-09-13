@@ -763,68 +763,9 @@ export const boqRouter = router({
     ),
 
   /**
-   * Soft delete, cascading down the tree in one statement — removing a section
-   * has to take its lines with it, or they survive as parentless leaves that
-   * still draw weight.
-   */
-  deleteItem: companyPermissionProcedure("project:write")
-    .input(z.object({ id: z.string().min(1) }))
-    .mutation(({ ctx, input }) =>
-      runProcedure(
-        Effect.gen(function* () {
-          const item = yield* attempt(() => requireDraftForItem(ctx, input.id));
-          const version = yield* attempt(() => getWritableVersion(ctx, item.boqVersionId));
-
-          yield* catchConflict(
-            attempt(() =>
-              db.batch([
-                db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${version.projectId}, 0))`),
-                db.execute(sql`
-                  select 1 / case when exists (
-                    select 1 from boq_version
-                    where id = ${item.boqVersionId}
-                      and project_id = ${version.projectId}
-                      and status = 'draft'
-                  ) then 1 else 0 end
-                `),
-                db.execute(sql`
-                  update boq_item
-                  set deleted_at = now(), updated_at = now()
-                  where deleted_at is null
-                    and boq_version_id = ${item.boqVersionId}
-                    and id in (
-                      with recursive tree as (
-                        select id from boq_item
-                        where id = ${input.id} and boq_version_id = ${item.boqVersionId}
-                        union all
-                        select child.id from boq_item child join tree on child.parent_id = tree.id
-                      )
-                      select id from tree
-                    )
-                `),
-              ]),
-            ),
-            ctx.t.boq.baselinedWhileEditing,
-          );
-
-          return { success: true };
-        }),
-      ),
-    ),
-
-  /**
-   * Bulk counterpart of deleteItem: the same recursive cascade, seeded from an
-   * array instead of one id.
-   *
-   * Deliberately not a client-side loop over deleteItem. Two reasons beyond the
-   * round trips: a selection can hold both a section and a line underneath it,
-   * and deleting the section first makes the second call race its own cascade;
-   * and a partial failure would leave a half-deleted tree, which is exactly the
-   * parentless-leaves-still-drawing-weight state the cascade exists to prevent.
-   *
-   * The version is taken as input so the draft gate is one query rather than
-   * one per id, and the statement is scoped to it so an id from another version
-   * — or another company's project — matches nothing.
+   * Soft-delete selected items and their descendants atomically. Scoping the
+   * recursive cascade to the draft version prevents cross-version deletions;
+   * one batch also handles overlapping section/child selections safely.
    */
   deleteItems: companyPermissionProcedure("project:write")
     .input(

@@ -37,6 +37,15 @@ const entry = (
   cumulativeQuantity: null,
 });
 
+const noProgress = (boqItemId: string, periodId: string): EntryLike => ({
+  boqItemId,
+  periodId,
+  pctComplete: 0,
+  cumulativePercent: null,
+  cumulativeQuantity: null,
+  noProgress: true,
+});
+
 const rows = [leaf("a", 100)];
 const periods = [
   period("p1", "2026-01-07"),
@@ -124,7 +133,9 @@ test("item readings take precedence over an imported snapshot in the same period
   expect(actual.sources).toEqual(["imported", "itemized", "imported"]);
 });
 
-test("a cleared item cell does not mask an imported snapshot", () => {
+test("a cleared item cell retires the period's imported snapshot", () => {
+  // The period was worked by hand — the cleared cell is a statement that the
+  // import no longer speaks for it, so the snapshot must not draw it.
   const actual = computeActualCurve(
     rows,
     periods,
@@ -133,8 +144,49 @@ test("a cleared item cell does not mask an imported snapshot", () => {
     [snapshot("p2", 25)],
   );
 
-  expect(actual.cumulative).toEqual([0, 25, null]);
-  expect(actual.sources).toEqual([null, "imported", null]);
+  expect(actual.cumulative).toEqual([null, null, null]);
+  expect(actual.sources).toEqual([null, null, null]);
+});
+
+test("clearing the last period trails unknown even with an imported snapshot", () => {
+  const actual = computeActualCurve(
+    rows,
+    periods,
+    [entry("a", "p1", 50, 50), entry("a", "p2", 50, 50), entry("a", "p3", 0, null)],
+    "2026-01-21",
+    [snapshot("p3", 80)],
+  );
+
+  expect(actual.cumulative).toEqual([50, 50, null]);
+  expect(actual.sources).toEqual(["itemized", "itemized", null]);
+});
+
+test("a no-progress mark carries forward instead of drawing the snapshot", () => {
+  const actual = computeActualCurve(
+    rows,
+    periods,
+    [entry("a", "p1", 50, 50), noProgress("a", "p2")],
+    "2026-01-21",
+    [snapshot("p2", 40), snapshot("p3", 60)],
+  );
+
+  expect(actual.cumulative).toEqual([50, 50, 60]);
+  expect(actual.sources).toEqual(["itemized", "itemized", "imported"]);
+});
+
+test("a no-progress week holds the curve flat instead of trailing unknown", () => {
+  // The week was checked and nothing moved: it is reported, so the curve
+  // extends at the carried position (the increment reads 0.0) rather than
+  // leaving a gap that reads as "nobody looked".
+  const actual = computeActualCurve(
+    rows,
+    periods,
+    [entry("a", "p1", 50, 50), noProgress("a", "p2")],
+    "2026-01-21",
+  );
+
+  expect(actual.cumulative).toEqual([50, 50, null]);
+  expect(actual.sources).toEqual(["itemized", "itemized", null]);
 });
 
 test("imported snapshots preserve trailing nulls and respect the data date", () => {

@@ -9,7 +9,6 @@ import { SITE_URL } from "@/lib/site";
 import Providers from "@/components/providers";
 import { getDictionary, getLocale } from "@/i18n";
 import { getTextScale, TEXT_SCALE_CLASS } from "@/lib/text-scale";
-import { getTheme } from "@/lib/theme";
 
 export async function generateMetadata(): Promise<Metadata> {
   const dict = getDictionary(await getLocale());
@@ -27,14 +26,13 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const [locale, theme, textScale] = await Promise.all([
+  const [locale, textScale] = await Promise.all([
     getLocale(),
-    getTheme(),
     getTextScale(),
   ]);
 
   return (
-    // Theme, language and text scale all come from cookies read on the server,
+    // Language and text scale come from cookies read on the server,
     // so the first byte of HTML is already correct — no flash, and no
     // client-side script rewriting the class after paint.
     //
@@ -43,13 +41,13 @@ export default async function RootLayout({
     // applies.
     <html
       lang={locale}
-      className={cn(theme, TEXT_SCALE_CLASS[textScale])}
-      style={{ colorScheme: theme }}
+      className={cn("light", TEXT_SCALE_CLASS[textScale])}
+      style={{ colorScheme: "light" }}
     >
       <body className="antialiased">
         {/* Chrome lives in app/(app)/layout.tsx — /login and /change-password
             render bare so they cannot show navigation to pages you can't open. */}
-        <Providers locale={locale} theme={theme}>
+        <Providers locale={locale}>
           {children}
         </Providers>
         <Analytics />

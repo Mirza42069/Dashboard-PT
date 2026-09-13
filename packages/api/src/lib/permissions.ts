@@ -55,9 +55,9 @@ export const PERMISSIONS = [
    */
   "progress:review",
   /**
-   * Lock an approved period, and reopen a locked one for correction. The
-   * narrower of the two reporting grants: locking is what makes a period the
-   * agreed record, and reopening is what un-agrees it.
+   * Reopen an agreed period for correction. The narrower of the two reporting
+   * grants: approving is what makes a period the agreed record, and reopening
+   * is what un-agrees it.
    */
   "progress:lock",
 ] as const;

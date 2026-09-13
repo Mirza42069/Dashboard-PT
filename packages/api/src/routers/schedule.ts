@@ -20,10 +20,10 @@ import { companyPermissionProcedure, router } from "../index";
 import { recordActivity } from "../lib/activity";
 import { runBatch } from "../lib/batch";
 import { databaseErrorIncludes } from "../lib/database-error";
-import { getVersion, getWritableVersion, leafPredicate } from "../lib/boq";
+import { getWritableVersion, leafPredicate } from "../lib/boq";
 import { attempt, attemptSync, catchConflict, fail, runProcedure } from "../lib/effect";
 import { interpolate, type MessageDictionary, plural } from "../lib/messages/index";
-import { assertProjectAccess, assertProjectWritable, type ProjectScopeCtx } from "../lib/scope";
+import { assertProjectWritable, type ProjectScopeCtx } from "../lib/scope";
 import {
   CUSTOM_PERIOD_MAX_DAYS,
   CUSTOM_PERIOD_MIN_DAYS,
@@ -31,7 +31,6 @@ import {
   generatePeriods,
   nextPeriod,
 } from "../lib/periods";
-import { toAmount } from "../lib/money";
 import { planCells, validatePlanWindow } from "../lib/schedule-plan";
 
 /** Percentages are stored to six decimals, matching the column. */
@@ -169,17 +168,6 @@ async function assertPeriodsOfProject(
 }
 
 export const scheduleRouter = router({
-  listPeriods: companyPermissionProcedure("project:read")
-    .input(z.object({ projectId: z.string().min(1) }))
-    .query(({ ctx, input }) =>
-      runProcedure(
-        Effect.gen(function* () {
-          yield* attempt(() => assertProjectAccess(ctx, input.projectId));
-          return yield* attempt(() => listPeriodsFor(input.projectId));
-        }),
-      ),
-    ),
-
   updateSettings: companyPermissionProcedure("project:write")
     .input(
       z.object({
@@ -591,34 +579,6 @@ export const scheduleRouter = router({
           );
 
           return { periods: yield* attempt(() => listPeriodsFor(input.projectId)) };
-        }),
-      ),
-    ),
-
-  getDistribution: companyPermissionProcedure("project:read")
-    .input(z.object({ versionId: z.string().min(1) }))
-    .query(({ ctx, input }) =>
-      runProcedure(
-        Effect.gen(function* () {
-          yield* attempt(() => getVersion(ctx, input.versionId));
-
-          const rows = yield* attempt(() =>
-            db
-              .select({
-                boqItemId: boqItemDistribution.boqItemId,
-                periodId: boqItemDistribution.periodId,
-                plannedPct: boqItemDistribution.plannedPct,
-              })
-              .from(boqItemDistribution)
-              .innerJoin(boqItem, eq(boqItem.id, boqItemDistribution.boqItemId))
-              .where(eq(boqItem.boqVersionId, input.versionId)),
-          );
-
-          return rows.map((row) => ({
-            boqItemId: row.boqItemId,
-            periodId: row.periodId,
-            plannedPct: toAmount(row.plannedPct),
-          }));
         }),
       ),
     ),

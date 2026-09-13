@@ -28,14 +28,13 @@ const ALL: PeriodStatus[] = [
   "reviewed",
   "approved",
   "returned",
-  "locked",
 ];
 
 const ACTOR = "user-1";
 const NOW = new Date("2026-08-01T09:00:00Z");
 
-test("the happy path runs open to locked", () => {
-  const path: PeriodStatus[] = ["open", "draft", "submitted", "reviewed", "approved", "locked"];
+test("the happy path runs open to approved", () => {
+  const path: PeriodStatus[] = ["open", "draft", "submitted", "reviewed", "approved"];
   for (let index = 0; index < path.length - 1; index++) {
     expect(canTransition(path[index]!, path[index + 1]!)).toBe(true);
   }
@@ -49,7 +48,6 @@ test("figures cannot skip the workflow", () => {
   // No jumping from being written straight to agreed.
   expect(canTransition("draft", "approved")).toBe(false);
   expect(canTransition("open", "submitted")).toBe(false);
-  expect(canTransition("draft", "locked")).toBe(false);
   // And nothing goes back to untouched.
   for (const from of ALL) expect(canTransition(from, "open")).toBe(false);
 });
@@ -71,8 +69,9 @@ test("submitted and reviewed reports are frozen while somebody reads them", () =
   expect(isEditable("reviewed")).toBe(false);
 });
 
-test("approved and locked both count as agreed", () => {
-  expect(ALL.filter(isApproved)).toEqual(["approved", "locked"]);
+test("approval is the end of the line: nothing is agreed past it, and only reopen leaves it", () => {
+  expect(ALL.filter(isApproved)).toEqual(["approved"]);
+  expect(PERIOD_TRANSITIONS.approved).toEqual(["draft"]);
 });
 
 /* ----------------------------------------------------------- permissions */
@@ -89,10 +88,8 @@ test("judging a report needs progress:review", () => {
   expect(permissionFor("returned", "submitted")).toBe("progress:review");
 });
 
-test("locking and reopening an agreed period need progress:lock", () => {
-  expect(permissionFor("locked", "approved")).toBe("progress:lock");
+test("reopening an agreed period needs progress:lock", () => {
   expect(permissionFor("draft", "approved")).toBe("progress:lock");
-  expect(permissionFor("draft", "locked")).toBe("progress:lock");
 });
 
 test("a site user can record and submit but cannot sign off their own report", () => {
@@ -114,7 +111,6 @@ test("sending a report back demands a reason", () => {
 
 test("reopening an agreed period demands a reason, but ordinary editing does not", () => {
   expect(requiresComment("draft", "approved")).toBe(true);
-  expect(requiresComment("draft", "locked")).toBe(true);
   expect(requiresComment("draft", "returned")).toBe(false);
   expect(requiresComment("submitted", "draft")).toBe(false);
 });
@@ -135,7 +131,6 @@ test("returning a report clears the approval but keeps the submission on record"
   expect(stamp.returnReason).toBe("Piling quantities look transposed");
   expect(stamp.approvedById).toBeNull();
   expect(stamp.approvedAt).toBeNull();
-  expect(stamp.lockedById).toBeNull();
   // Who submitted it is not touched — the reviewer is rejecting that person's
   // report, and the record of who filed it is exactly what is being acted on.
   expect(stamp.submittedById).toBeUndefined();

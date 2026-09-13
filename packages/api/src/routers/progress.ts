@@ -8,7 +8,6 @@ import {
   project,
   projectActualCurve,
   reportingPeriod,
-  reportingPeriodEvent,
   user,
 } from "@DashboardV2/db/schema";
 import type { ActivityAction, PeriodStatus } from "@DashboardV2/db/schema";
@@ -51,7 +50,6 @@ const TRANSITION_ACTIONS: Record<PeriodStatus, ActivityAction> = {
   reviewed: "reviewed",
   approved: "approved",
   returned: "returned",
-  locked: "locked",
 };
 
 /** Scoped lookup of one period. Out-of-company ids read as absent, per lib/scope.ts. */
@@ -621,7 +619,11 @@ export const progressRouter = router({
                         exists (
                           select 1 from progress_entry entry
                           where entry.period_id = period.id
-                            and (entry.cumulative_percent is not null or entry.cumulative_quantity is not null)
+                            and (
+                              entry.cumulative_percent is not null
+                              or entry.cumulative_quantity is not null
+                              or entry.no_progress
+                            )
                             and not exists (
                               select 1 from input_rows input
                               where input."periodId" = entry.period_id
@@ -755,6 +757,42 @@ export const progressRouter = router({
               from editable left join upserted on true
               group by editable.id
               `),
+              // A no-progress mark is a survey of the period, so the data date
+              // moves with it — otherwise the week would count as reported for
+              // the curve but still sit past the date figures are measured to.
+              // Gated on the period still being editable: the batch rolls back
+              // if the count below finds nothing, so this only ever persists
+              // behind an upsert that actually happened.
+              db.execute(sql`
+                update project set data_date = (
+                  select max(reported.end_date)
+                  from (
+                    select period.end_date
+                    from reporting_period period
+                    where period.project_id = ${period.projectId}
+                      and exists (
+                        select 1 from progress_entry entry
+                        where entry.period_id = period.id
+                          and (
+                            entry.cumulative_percent is not null
+                            or entry.cumulative_quantity is not null
+                            or entry.no_progress
+                          )
+                      )
+                    union all
+                    select period.end_date
+                    from project_actual_curve snapshot
+                    join reporting_period period on period.id = snapshot.period_id
+                    where snapshot.project_id = ${period.projectId}
+                  ) reported
+                )
+                where id = ${period.projectId}
+                  and exists (
+                    select 1 from reporting_period editable
+                    where editable.id = ${input.periodId}
+                      and editable.status in ('open', 'draft', 'returned')
+                  )
+              `),
             ]),
           );
           if (changed.rows.length === 0) {
@@ -805,7 +843,6 @@ export const progressRouter = router({
                   submittedAt: reportingPeriod.submittedAt,
                   reviewedAt: reportingPeriod.reviewedAt,
                   approvedAt: reportingPeriod.approvedAt,
-                  lockedAt: reportingPeriod.lockedAt,
                   returnReason: reportingPeriod.returnReason,
                   reviewComment: reportingPeriod.reviewComment,
                   submittedByName: submitter.name,
@@ -869,33 +906,6 @@ export const progressRouter = router({
             completeness: completeness(leaves.length, byPeriod.get(period.id) ?? []),
             editable: isEditable(period.status),
           }));
-        }),
-      ),
-    ),
-
-  /** The full transition history for one period — who moved it, when, and why. */
-  periodHistory: companyPermissionProcedure("project:read")
-    .input(z.object({ periodId: z.string().min(1) }))
-    .query(({ ctx, input }) =>
-      runProcedure(
-        Effect.gen(function* () {
-          const period = yield* attempt(() => findPeriod(ctx, input.periodId));
-          yield* attempt(() => assertProjectAccess(ctx, period.projectId));
-
-          return yield* attempt(() =>
-            db
-              .select({
-                id: reportingPeriodEvent.id,
-                fromStatus: reportingPeriodEvent.fromStatus,
-                toStatus: reportingPeriodEvent.toStatus,
-                actorName: reportingPeriodEvent.actorName,
-                comment: reportingPeriodEvent.comment,
-                createdAt: reportingPeriodEvent.createdAt,
-              })
-              .from(reportingPeriodEvent)
-              .where(eq(reportingPeriodEvent.periodId, input.periodId))
-              .orderBy(desc(reportingPeriodEvent.createdAt)),
-          );
         }),
       ),
     ),
@@ -969,8 +979,6 @@ export const progressRouter = router({
           if ("reviewedAt" in stamp) assignments.push(sql`reviewed_at = ${stamp.reviewedAt}`);
           if ("approvedById" in stamp) assignments.push(sql`approved_by_id = ${stamp.approvedById}`);
           if ("approvedAt" in stamp) assignments.push(sql`approved_at = ${stamp.approvedAt}`);
-          if ("lockedById" in stamp) assignments.push(sql`locked_by_id = ${stamp.lockedById}`);
-          if ("lockedAt" in stamp) assignments.push(sql`locked_at = ${stamp.lockedAt}`);
           if ("returnReason" in stamp) assignments.push(sql`return_reason = ${stamp.returnReason}`);
           if ("reviewComment" in stamp) assignments.push(sql`review_comment = ${stamp.reviewComment}`);
 

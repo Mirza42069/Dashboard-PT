@@ -215,7 +215,6 @@ export const id = {
       submitted: "Diajukan",
       reviewed: "Ditinjau",
       approved: "Disetujui",
-      locked: "Terkunci",
       returned: "Dikembalikan",
     },
     // Likewise from `support.status`.

@@ -12,10 +12,9 @@ import type { Permission } from "./permissions";
  * server-side" a property of the code rather than a promise.
  *
  *      open ──save──> draft ──submit──> submitted ──┬─review─> reviewed ──┐
- *                       ↑                            │                     ├─approve─> approved ──lock──> locked
- *                    returned <────return────────────┴─────────────────────┘              │                  │
- *                       ↑                                                                  └──── reopen ─────┘
- *                       └────────────────── reopen (with reason) ────────────────────────────────┘
+ *                       ↑                            │                     ├─approve─> approved
+ *                    returned <────return────────────┴─────────────────────┘              │
+ *                       ↑                                                                  └── reopen (with reason) ──> draft
  *
  * Two decisions worth keeping:
  *
@@ -24,25 +23,25 @@ import type { Permission } from "./permissions";
  *    would mean everyone clicks through it, which teaches people that the
  *    workflow is ceremony.
  *
- * 2. **Approved and locked are both reversible, but only through `reopen`.**
- *    A late correction to an agreed period is a normal thing to need on a site;
- *    pretending otherwise gets it done in a spreadsheet instead. What the
- *    workflow insists on is that reopening is a named, permissioned, reasoned
- *    act that lands in the history — not an edit that quietly happens.
+ * 2. **Approved is reversible, but only through `reopen`.** A late correction
+ *    to an agreed period is a normal thing to need on a site; pretending
+ *    otherwise gets it done in a spreadsheet instead. What the workflow
+ *    insists on is that reopening is a named, permissioned, reasoned act that
+ *    lands in the history — not an edit that quietly happens.
  */
-
 export const PERIOD_TRANSITIONS: Record<PeriodStatus, readonly PeriodStatus[]> = {
   open: ["draft"],
   draft: ["submitted"],
   returned: ["draft", "submitted"],
   submitted: ["reviewed", "approved", "returned"],
   reviewed: ["approved", "returned"],
-  approved: ["locked", "draft"],
-  locked: ["draft"],
+  approved: ["draft"],
 };
 
 export function canTransition(from: PeriodStatus, to: PeriodStatus): boolean {
-  return PERIOD_TRANSITIONS[from].includes(to);
+  // `?? []`: a row carrying a status this build has never heard of (a restore
+  // from an older backup) reads as "no legal moves", not as a crash.
+  return PERIOD_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
 /**
@@ -59,7 +58,7 @@ export function isEditable(status: PeriodStatus): boolean {
 
 /** Statuses where the figures are settled and count as agreed. */
 export function isApproved(status: PeriodStatus): boolean {
-  return status === "approved" || status === "locked";
+  return status === "approved";
 }
 
 /**
@@ -67,8 +66,8 @@ export function isApproved(status: PeriodStatus): boolean {
  *
  * Submitting is part of doing the work, so it sits under the same permission as
  * entering the figures. Judging the work is separate: reviewing, approving and
- * returning need `progress:review`, and locking or reopening an agreed period
- * needs `progress:lock`, which is the narrower grant of the two.
+ * returning need `progress:review`, and reopening an agreed period needs
+ * `progress:lock`, which is the narrower grant of the two.
  */
 export function permissionFor(to: PeriodStatus, from: PeriodStatus): Permission {
   if (to === "draft") {
@@ -76,7 +75,6 @@ export function permissionFor(to: PeriodStatus, from: PeriodStatus): Permission 
     return isApproved(from) ? "progress:lock" : "project:write";
   }
   if (to === "submitted") return "project:write";
-  if (to === "locked") return "progress:lock";
   return "progress:review";
 }
 
@@ -96,8 +94,6 @@ export type WorkflowStamp = {
   reviewedAt?: Date | null;
   approvedById?: string | null;
   approvedAt?: Date | null;
-  lockedById?: string | null;
-  lockedAt?: Date | null;
   returnReason?: string | null;
   reviewComment?: string | null;
 };
@@ -115,8 +111,6 @@ export function stampFor(
     reviewedAt: null,
     approvedById: null,
     approvedAt: null,
-    lockedById: null,
-    lockedAt: null,
     returnReason: null,
     reviewComment: null,
   };
@@ -143,12 +137,8 @@ export function stampFor(
         reviewedAt: null,
         approvedById: null,
         approvedAt: null,
-        lockedById: null,
-        lockedAt: null,
         returnReason: comment ?? null,
       };
-    case "locked":
-      return { lockedById: actorId, lockedAt: now };
     default:
       return {};
   }

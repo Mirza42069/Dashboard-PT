@@ -93,7 +93,7 @@ describe.skipIf(!process.env.DATABASE_URL)("progress period writes", () => {
       expect(await progressRouter.createCaller(ctx).markNoProgress({
         periodId: "period-1", boqItemIds: ["item-1"], noProgress,
       })).toEqual({ marked: 1 });
-      expect(batches).toEqual([2]);
+      expect(batches).toEqual([3]);
       const lockIndex = queries.findIndex((q) => q.sql.includes("pg_advisory_xact_lock"));
       expect(queries[lockIndex]!.params).toEqual(["project-1"]);
       const mutation = queries[lockIndex + 1]!;
@@ -103,6 +103,12 @@ describe.skipIf(!process.env.DATABASE_URL)("progress period writes", () => {
       expect(mutation.sql).toContain("where excluded.no_progress = false");
       expect(mutation.sql).toContain("progress_entry.cumulative_percent is null");
       expect(mutation.sql).toContain("progress_entry.cumulative_quantity is null");
+      // The mark advances the data date — a surveyed week is reported, so the
+      // curve may draw it — but only while the period is still editable.
+      const refresh = queries[lockIndex + 2]!;
+      expect(refresh.sql).toContain("update project set data_date");
+      expect(refresh.sql).toContain("or entry.no_progress");
+      expect(refresh.sql).toMatch(/editable\.status in \('open', 'draft', 'returned'\)/);
     });
   }
 

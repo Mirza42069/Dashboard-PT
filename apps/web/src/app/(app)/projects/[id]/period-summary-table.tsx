@@ -290,7 +290,6 @@ export default function PeriodSummaryTable({
             <TableBody>
               {summary.map((row, index) => {
                 const group = monthStart.get(index);
-                const isLocked = row.period.status === "locked";
 
                 return (
                   <TableRow
@@ -323,9 +322,9 @@ export default function PeriodSummaryTable({
                         )}
                         <span className="font-medium tabular-nums">{row.period.periodIndex}</span>
                       </span>
-                      {(row.isCurrent || isLocked) && (
+                      {row.isCurrent && (
                         <span className="mt-0.5 block text-xs text-muted-foreground">
-                          {row.isCurrent ? t.periodSummary.current : t.progress.locked}
+                          {t.periodSummary.current}
                         </span>
                       )}
                     </th>

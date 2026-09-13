@@ -259,6 +259,36 @@ export function useMatrixWindow(options: UseMatrixWindowOptions) {
     );
   }
 
+  /**
+   * A plain vertical wheel over a horizontal-only scroller gets turned into
+   * sideways scrolling by the browser, so wherever the grid is hovered — the
+   * week numbers included — the page stops scrolling. This hands vertical
+   * scrolling back to the page scroller (AppShell's `#main`). Horizontal
+   * gestures stay native: trackpad pans (`deltaX`), shift+wheel, and any
+   * container that scrolls vertically keeps its own behaviour.
+   */
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaX !== 0 || event.deltaY === 0) return;
+      if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+      if (element.scrollHeight > element.clientHeight) return;
+
+      const scroller = document.getElementById("main");
+      if (!scroller) return;
+      // Firefox reports lines, not pixels.
+      const delta = event.deltaMode === 1 ? event.deltaY * 40 : event.deltaY;
+      event.preventDefault();
+      scroller.scrollBy(0, delta);
+    };
+
+    // React's onWheel is passive, so preventDefault needs a native listener.
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  }, []);
+
   useEffect(() => {
     const element = scrollRef.current;
     if (!element) return;

@@ -28,6 +28,8 @@ export type EntryLike = {
   pctComplete: number;
   cumulativeQuantity: number | null;
   cumulativePercent: number | null;
+  /** "Checked and unchanged" — a statement about the period, not a reading. */
+  noProgress?: boolean;
 };
 
 export type ActualSnapshotLike = {
@@ -148,12 +150,22 @@ export function computePlannedCurve(
  *
  * 3. **Item readings win over an imported project snapshot in the same
  *    period.** A snapshot can draw the project curve, but cannot honestly be
- *    attributed back to individual BoQ lines.
+ *    attributed back to individual BoQ lines. Stronger still: a period somebody
+ *    has *worked* directly — a reading, a cleared cell, or a no-progress mark —
+ *    is theirs, and its snapshot is retired even where it holds no readings.
+ *    Clearing a period therefore lets the curve carry forward or trail unknown
+ *    instead of pinning itself to the import.
  *
  * 4. **The line stops at the last real reading or snapshot**, rather than
  *    running flat to the data date. Trailing nulls leave a gap the chart does
  *    not draw, so an unreported period reads as unknown instead of as "no
  *    progress made".
+ *
+ * 5. **A no-progress week is reported, and holds the curve flat.** The mark
+ *    says "we checked and nothing moved", so the period draws the carried
+ *    position — the week's actual increment reads 0.0 — instead of trailing
+ *    unknown like a period nobody looked at. A cleared cell stays unknown: it
+ *    is an erasure, not an assertion.
  */
 export function computeActualCurve(
   rows: { leaf: LeafLike }[],
@@ -163,24 +175,31 @@ export function computeActualCurve(
   snapshots: ActualSnapshotLike[] = [],
 ): { cumulative: (number | null)[]; sources: ActualCurveSource[] } {
   const readings = new Map<string, number>();
-  const periodsWithItemReadings = new Set<string>();
+  const reportedPeriods = new Set<string>();
+  /**
+   * Periods somebody worked by hand: a reading, a cleared cell, or a
+   * no-progress mark — all of them statements about the period that outrank
+   * whatever the import once said.
+   */
+  const periodsWorkedByHand = new Set<string>();
 
   for (const entry of entries) {
+    periodsWorkedByHand.add(entry.periodId);
+    if (entry.noProgress) reportedPeriods.add(entry.periodId);
     if (entry.cumulativePercent === null && entry.cumulativeQuantity === null) continue;
     readings.set(cellKey(entry.boqItemId, entry.periodId), entry.pctComplete);
-    periodsWithItemReadings.add(entry.periodId);
+    reportedPeriods.add(entry.periodId);
   }
 
   const snapshotsByPeriod = new Map(
     snapshots.map((snapshot) => [snapshot.periodId, snapshot.cumulativePercent]),
   );
 
-  const lastRead = periods
-    .filter(
-      (period) =>
-        periodsWithItemReadings.has(period.id) || snapshotsByPeriod.has(period.id),
-    )
-    .reduce((latest, period) => (period.endDate > latest ? period.endDate : latest), "");
+  const lastRead = periods.findLast(
+    (period) =>
+      reportedPeriods.has(period.id) ||
+      (snapshotsByPeriod.has(period.id) && !periodsWorkedByHand.has(period.id)),
+  )?.endDate ?? "";
 
   // Running completion per leaf — this is what "carries forward".
   const running = new Map<string, number>();
@@ -195,7 +214,9 @@ export function computeActualCurve(
       if (reading !== undefined) running.set(row.leaf.id, reading);
     }
 
-    if (periodsWithItemReadings.has(period.id)) {
+    // A no-progress period contributes too: `running` already holds each
+    // line's last reading, so the sum here is the position held flat.
+    if (reportedPeriods.has(period.id)) {
       carriedActual = rows.reduce(
         (total, row) => total + (row.leaf.weight * (running.get(row.leaf.id) ?? 0)) / 100,
         0,
@@ -203,7 +224,9 @@ export function computeActualCurve(
       carriedSource = "itemized";
     } else {
       const snapshot = snapshotsByPeriod.get(period.id);
-      if (snapshot !== undefined) {
+      // A worked period's snapshot is retired — the report was taken back from
+      // the import, so the curve carries forward or trails unknown instead.
+      if (snapshot !== undefined && !periodsWorkedByHand.has(period.id)) {
         carriedActual = snapshot;
         carriedSource = "imported";
       }

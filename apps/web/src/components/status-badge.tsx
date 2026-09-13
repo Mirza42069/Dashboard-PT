@@ -8,7 +8,6 @@ import {
   CircleDot,
   CircleSlash,
   Hammer,
-  Lock,
   OctagonX,
   PauseCircle,
   Pencil,
@@ -46,7 +45,7 @@ const STYLES: Record<string, Record<string, Descriptor>> = {
     closed: { variant: "ghost", icon: CircleSlash },
   },
   /**
-   * Where a progress report stands. Seven states, each with its own glyph — the
+   * Where a progress report stands. Six states, each with its own glyph — the
    * distinctions this workflow turns on (untouched vs being written, returned
    * vs merely unfinished) are exactly the ones a shared icon would erase.
    *
@@ -59,7 +58,6 @@ const STYLES: Record<string, Record<string, Descriptor>> = {
     submitted: { variant: "default", icon: Send },
     reviewed: { variant: "default", icon: CircleDot },
     approved: { variant: "secondary", icon: CircleCheck },
-    locked: { variant: "ghost", icon: Lock },
     returned: { variant: "destructive", icon: CircleAlert },
   },
 };

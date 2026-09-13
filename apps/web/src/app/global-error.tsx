@@ -24,9 +24,9 @@ import { DEFAULT_LOCALE, getDictionary, interpolate } from "@/i18n";
  *
  *   - The stylesheet is imported here directly. It normally arrives via
  *     layout.tsx, which is not rendering.
- *   - Locale and theme both come from cookies read server-side in the layout, so
- *     neither is available. This falls back to the default locale and light
- *     mode rather than growing an effect that reads document.cookie — a file
+ *   - Locale comes from a cookie read server-side in the layout, so it is
+ *     unavailable. This falls back to the default locale rather than growing
+ *     an effect that reads document.cookie — a file
  *     that only runs when everything else is broken should have nothing in it
  *     that can itself break.
  */

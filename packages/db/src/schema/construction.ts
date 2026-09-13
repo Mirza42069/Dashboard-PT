@@ -126,7 +126,6 @@ export const PERIOD_STATUSES = [
   "submitted",
   "reviewed",
   "approved",
-  "locked",
   "returned",
 ] as const;
 /**
@@ -205,9 +204,9 @@ export const project = pgTable(
     /** Optional override when reporting starts later than the contract does. */
     scheduleStart: date("schedule_start"),
     /**
-     * The as-of date every progress figure is measured against: the end of the
-     * latest period that actually holds a reading. Derived — rewritten by the
-     * same batch that saves progress, never edited by hand.
+     * The as-of date every progress figure is measured against: the end of
+     * the latest period that holds a reading or a no-progress mark. Derived —
+     * rewritten by the same batch that saves progress, never edited by hand.
      */
     dataDate: date("data_date"),
     managerId: text("manager_id").references(() => user.id, { onDelete: "set null" }),
@@ -469,8 +468,6 @@ export const reportingPeriod = pgTable(
     reviewedAt: timestamp("reviewed_at"),
     approvedById: text("approved_by_id").references(() => user.id, { onDelete: "set null" }),
     approvedAt: timestamp("approved_at"),
-    lockedById: text("locked_by_id").references(() => user.id, { onDelete: "set null" }),
-    lockedAt: timestamp("locked_at"),
     /** Why a reviewer sent it back. Shown beside the figures it refers to. */
     returnReason: text("return_reason"),
     /** A reviewer's note that is not a rejection. */
@@ -580,10 +577,12 @@ export const progressEntry = pgTable(
      * at. This flag is somebody stating that the line was checked and did not
      * move.
      *
-     * It carries no reading, so it changes no curve — it is a completeness
-     * marker, not a measurement. Recording it as a cumulative equal to last
-     * period's would have been the tempting shortcut and would have quietly
-     * turned an assertion about this week into a fabricated reading.
+     * It carries no reading, so it holds the curve flat rather than moving it:
+     * the line's last reading carries through the period, making the week's
+     * actual increment 0.0 — a survey, not a silence. Recording it as a
+     * cumulative equal to last period's would have been the tempting shortcut
+     * and would have quietly turned an assertion about this week into a
+     * fabricated reading.
      */
     noProgress: boolean("no_progress").default(false).notNull(),
     note: text("note"),

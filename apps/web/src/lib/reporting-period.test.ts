@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { selectedReportingPeriod } from "./reporting-period";
 
 const periods = [
-  { id: "p1", status: "locked" },
+  { id: "p1", status: "approved" },
   { id: "p2", status: "submitted" },
   { id: "p3", status: "open" },
 ];

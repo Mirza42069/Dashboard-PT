@@ -122,8 +122,6 @@ const LABELS = {
     leaf: "Item",
     lineValue: "Value",
     location: "Location",
-    lockedAt: "Locked at",
-    lockedBy: "Locked by",
     manager: "Project manager",
     name: "Name",
     no: "No",
@@ -248,8 +246,6 @@ const LABELS = {
     leaf: "Item",
     lineValue: "Jumlah",
     location: "Lokasi",
-    lockedAt: "Waktu dikunci",
-    lockedBy: "Dikunci oleh",
     manager: "Manajer proyek",
     name: "Nama",
     no: "Tidak",
@@ -359,7 +355,6 @@ const VALUE_LABELS: Record<Locale, Record<string, string>> = {
     itemized: "Item progress",
     light_rain: "Light rain",
     linear: "Linear",
-    locked: "Locked",
     low: "Low",
     manual: "Manual",
     medium: "Medium",
@@ -407,7 +402,6 @@ const VALUE_LABELS: Record<Locale, Record<string, string>> = {
     itemized: "Progres item",
     light_rain: "Hujan ringan",
     linear: "Linier",
-    locked: "Dikunci",
     low: "Rendah",
     manual: "Manual",
     medium: "Sedang",
@@ -640,7 +634,6 @@ export async function buildProjectDetailWorkbook({
       period.submittedById,
       period.reviewedById,
       period.approvedById,
-      period.lockedById,
     ]) {
       if (id) actorIds.add(id);
     }
@@ -1237,14 +1230,12 @@ export async function buildProjectDetailWorkbook({
         label.reviewedAt,
         label.approvedBy,
         label.approvedAt,
-        label.lockedBy,
-        label.lockedAt,
         label.returnReason,
         label.reviewComment,
         label.created,
         label.updated,
       ],
-      [12, 14, 13, 13, 15, 22, 18, 22, 18, 22, 18, 22, 18, 42, 42, 18, 18],
+      [12, 14, 13, 13, 15, 22, 18, 22, 18, 22, 18, 42, 42, 18, 18],
     );
     for (const period of periods) {
       periodSheet.addRow([
@@ -1259,8 +1250,6 @@ export async function buildProjectDetailWorkbook({
         period.reviewedAt,
         period.approvedById ? (actorName.get(period.approvedById) ?? "") : "",
         period.approvedAt,
-        period.lockedById ? (actorName.get(period.lockedById) ?? "") : "",
-        period.lockedAt,
         period.returnReason ?? "",
         period.reviewComment ?? "",
         period.createdAt,
@@ -1268,7 +1257,7 @@ export async function buildProjectDetailWorkbook({
       ]);
     }
     for (const index of [3, 4]) periodSheet.getColumn(index).numFmt = DATE_FORMAT;
-    for (const index of [7, 9, 11, 13, 16, 17])
+    for (const index of [7, 9, 11, 14, 15])
       periodSheet.getColumn(index).numFmt = DATETIME_FORMAT;
     finishTable(periodSheet);
   }

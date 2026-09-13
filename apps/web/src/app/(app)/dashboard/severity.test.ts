@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { behindDelta, levelFor, signalsFor, type SeverityInput } from "./severity";
+import { levelFor, signalsFor, type SeverityInput } from "./severity";
 
 function row(overrides: Partial<SeverityInput> = {}): SeverityInput {
   return {
@@ -89,51 +89,5 @@ describe("levelFor", () => {
     expect(levelFor(row({ openTickets: 9, reasons: reasons({ openActions: true }) }))).toBe(
       "settled",
     );
-  });
-});
-
-describe("behindDelta", () => {
-  test("null when nothing can be compared", () => {
-    expect(behindDelta([])).toBeNull();
-    expect(behindDelta([row({ deviation: -5, previousDeviation: null })])).toBeNull();
-  });
-
-  test("counts both sides of the same list", () => {
-    // Two behind now; one of them was behind before.
-    expect(
-      behindDelta([
-        row({ deviation: -5, previousDeviation: -4 }),
-        row({ deviation: -2, previousDeviation: 1 }),
-        row({ deviation: 3, previousDeviation: 2 }),
-      ]),
-    ).toBe(1);
-  });
-
-  test("negative when projects recovered", () => {
-    expect(
-      behindDelta([
-        row({ deviation: 1, previousDeviation: -4 }),
-        row({ deviation: 2, previousDeviation: -3 }),
-      ]),
-    ).toBe(-2);
-  });
-
-  test("zero when the count held, even if the projects changed", () => {
-    expect(
-      behindDelta([
-        row({ deviation: -1, previousDeviation: 2 }),
-        row({ deviation: 2, previousDeviation: -1 }),
-      ]),
-    ).toBe(0);
-  });
-
-  test("a first-ever reading cannot read as an improvement", () => {
-    // Previously unknown, now behind: excluded from both sides, so no movement.
-    expect(behindDelta([row({ deviation: -9, previousDeviation: null })])).toBeNull();
-  });
-
-  test("the display threshold applies — a hair behind is not behind", () => {
-    expect(behindDelta([row({ deviation: -0.01, previousDeviation: 0 })])).toBe(0);
-    expect(behindDelta([row({ deviation: -0.05, previousDeviation: 0 })])).toBe(1);
   });
 });

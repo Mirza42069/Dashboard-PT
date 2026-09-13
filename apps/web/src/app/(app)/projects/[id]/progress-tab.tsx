@@ -15,7 +15,7 @@ import { Skeleton } from "@DashboardV2/ui/components/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@DashboardV2/ui/components/tabs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, Plus, Save, Trash2, Upload } from "@DashboardV2/ui/components/icons";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "@/lib/toast";
 
 import { DeviationBadge, formatDeviation } from "@/components/deviation-badge";
@@ -61,7 +61,7 @@ import {
   lastPeriodOf,
   monthKeyOf,
 } from "@/lib/period-header";
-import { selectedReportingPeriod } from "@/lib/reporting-period";
+import { ALL_PERIODS, selectedReportingPeriod } from "@/lib/reporting-period";
 import { useFormat } from "@/lib/use-format";
 import { useMatrixKeyboard } from "@/lib/use-matrix-keyboard";
 import { useRowSelection } from "@/lib/use-row-selection";
@@ -120,8 +120,18 @@ export default function ProgressTab({
    */
   const [drafts, setDrafts] = useState<Map<string, string>>(new Map());
   const [saving, setSaving] = useState(false);
-  /** Which period the workflow panel is showing. Null follows its own default. */
+  /**
+   * Which period the workflow panel is showing. ALL_PERIODS shows an overview
+   * of every period instead; null follows its own default.
+   */
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
+  /**
+   * The open view. Null follows the default — the grid while a period is open
+   * for entry, the S-curve otherwise. Controlled rather than defaulted because
+   * that default itself moves with the selection, and Base UI refuses a
+   * defaultValue that changes after mount.
+   */
+  const [view, setView] = useState<"matrix" | "curve" | "daily" | null>(null);
   /**
    * The months the reader has folded — see lib/month-fold.ts.
    *
@@ -133,7 +143,12 @@ export default function ProgressTab({
 
   const reportQuery = useQuery(trpc.progress.report.queryOptions({ projectId }));
   const matrixPeriods = reportQuery.data?.periods ?? [];
-  const selectedPeriod = selectedReportingPeriod(matrixPeriods, selectedPeriodId);
+  // "all" is not a period — the workflow card renders its overview for it and
+  // nothing here needs one period pinned.
+  const selectedPeriod =
+    selectedPeriodId === ALL_PERIODS
+      ? undefined
+      : selectedReportingPeriod(matrixPeriods, selectedPeriodId);
   const effectiveSelectedPeriodId = selectedPeriod?.id ?? "";
   const selectedMonthKey = selectedPeriod ? monthKeyOf(selectedPeriod) : null;
   // Built above the early returns because the selection hook needs it, and a
@@ -282,13 +297,9 @@ export default function ProgressTab({
     entries.map((entry) => [cellKey(entry.boqItemId, entry.periodId), entry]),
   );
 
-  /** What a cell shows: the pending edit if there is one, else the stored reading. */
-  function cellValue(itemId: string, periodId: string): string {
-    const key = cellKey(itemId, periodId);
-    const draft = drafts.get(key);
-    if (draft !== undefined) return draft;
-
-    const entry = entryByKey.get(key);
+  /** The stored reading — what the record says, never what an unsaved draft claims. */
+  function storedValue(itemId: string, periodId: string): string {
+    const entry = entryByKey.get(cellKey(itemId, periodId));
     if (!entry) return "";
 
     const stored =
@@ -301,6 +312,11 @@ export default function ProgressTab({
     return stored === null ? "" : String(stored);
   }
 
+  /** What an editable cell shows: the pending edit if there is one, else the stored reading. */
+  function cellValue(itemId: string, periodId: string): string {
+    return drafts.get(cellKey(itemId, periodId)) ?? storedValue(itemId, periodId);
+  }
+
   /**
    * What a folded month shows: the last reading inside it.
    *
@@ -311,7 +327,7 @@ export default function ProgressTab({
    */
   function foldedCellValue(itemId: string, monthPeriods: { id: string }[]): string {
     for (let index = monthPeriods.length - 1; index >= 0; index--) {
-      const value = cellValue(itemId, monthPeriods[index]!.id);
+      const value = storedValue(itemId, monthPeriods[index]!.id);
       if (value !== "") return value;
     }
     return "";
@@ -364,15 +380,12 @@ export default function ProgressTab({
 
   const hasReadings = position.index >= 0;
 
-
   /*
-   * What the user can do right now decides what they see first.
+   * What the user can do right now decides which view opens first.
    *
-   * The entry grid is the whole job while a period is open, and it used to sit
-   * below four cards of figures it had not produced yet — the save action with
-   * it. Once the period is submitted the opposite is true: the figures are the
-   * point and the grid is read-only. Same components either way, ordered by
-   * which of the two this is.
+   * While a period is open for entry, the grid is the whole job. Once the
+   * report is submitted the figures are the point and the grid is read-only —
+   * still one tab away, but no longer the landing view.
    */
   const entryFirst = canEdit && Boolean(selectedPeriod && isEditable(selectedPeriod.status));
   /**
@@ -486,14 +499,9 @@ export default function ProgressTab({
     }
   }
 
-  const reading = (
-    <Tabs key="reading" defaultValue="curve" className="gap-3">
-      <TabsList aria-label={t.progress.title}>
-        <TabsTrigger value="curve">{t.progress.viewCurve}</TabsTrigger>
-        <TabsTrigger value="daily">{t.progress.viewDaily}</TabsTrigger>
-      </TabsList>
-      <TabsContent value="curve" className="space-y-3">
-        <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
+  const curveContent = (
+    <>
+      <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
           <Card>
             <CardHeader className="flex-row items-start justify-between gap-3">
               <div>
@@ -561,37 +569,27 @@ export default function ProgressTab({
           </div>
         </div>
 
-        {periods.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-1.5">
-                {t.periodSummary.title}
-                {/* "A blank is not a zero" is the rule this table lives or dies
-                    by; it stays, as an icon rather than a paragraph. */}
-                <Hint text={t.periodSummary.description} />
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="px-0">
-
-              <PeriodSummaryTable id={SUMMARY_TABLE_ID} summary={summary} dataDate={dataDate} />
-            </CardContent>
-          </Card>
-        )}
-
-      </TabsContent>
-      <TabsContent value="daily">
-        <DailyProgressHistory
-          projectId={projectId}
-          canImport={canImport}
-          onImportProgress={onImportProgress}
-        />
-      </TabsContent>
-    </Tabs>
+      {periods.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-1.5">
+              {t.periodSummary.title}
+              {/* "A blank is not a zero" is the rule this table lives or dies
+                  by; it stays, as an icon rather than a paragraph. */}
+              <Hint text={t.periodSummary.description} />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-0">
+            <PeriodSummaryTable id={SUMMARY_TABLE_ID} summary={summary} dataDate={dataDate} />
+          </CardContent>
+        </Card>
+      )}
+    </>
   );
 
   const entry = (
-    <Fragment key="entry">
-        {periods.length > 0 && (
+    <>
+      {periods.length > 0 && (
           <Card>
             <CardHeader>
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -813,8 +811,21 @@ export default function ProgressTab({
                           >
                             {/* A folded column names the periods it swallowed —
                                 "5–8" — rather than repeating the month, which the
-                                band directly above it already says. */}
-                            <span className="block tabular-nums">{view.number}</span>
+                                band directly above it already says. The latest
+                                column's add/remove controls sit beside the number
+                                they act on rather than under the range. */}
+                            <span className="flex items-center justify-end gap-0.5 tabular-nums">
+                              {view.number}
+                              {canEdit && isLatestColumn && (
+                                <PeriodControls
+                                  periodIndex={lastPeriodOf(view.column).periodIndex}
+                                  appending={appendPeriod.isPending}
+                                  removing={removePeriod.isPending}
+                                  onAppend={() => void appendLatestPeriod()}
+                                  onRemove={() => void removeLatestPeriod()}
+                                />
+                              )}
+                            </span>
                             {/* truncate + title: a folded month's range ("3-30 Mei") is the
                                 longest label this row can hold, and at this column
                                 width an untruncated one runs into its neighbour.
@@ -844,15 +855,6 @@ export default function ProgressTab({
                               <span className="block text-xs font-normal text-muted-foreground">
                                 {statusLabel(t, "period", periodColumn.status)}
                               </span>
-                            )}
-                            {canEdit && isLatestColumn && (
-                              <PeriodControls
-                                periodIndex={lastPeriodOf(view.column).periodIndex}
-                                appending={appendPeriod.isPending}
-                                removing={removePeriod.isPending}
-                                onAppend={() => void appendLatestPeriod()}
-                                onRemove={() => void removeLatestPeriod()}
-                              />
                             )}
                           </TableHead>
                         );
@@ -979,7 +981,7 @@ export default function ProgressTab({
                                 >
                                   {(column.kind === "month"
                                     ? foldedCellValue(row.leaf.id, column.periods)
-                                    : cellValue(row.leaf.id, period.id)) || "—"}
+                                    : storedValue(row.leaf.id, period.id)) || "—"}
                                 </span>
                               )}
                               {/*
@@ -1019,7 +1021,7 @@ export default function ProgressTab({
             </CardContent>
           </Card>
         )}
-    </Fragment>
+    </>
   );
 
   return (
@@ -1029,12 +1031,38 @@ export default function ProgressTab({
         canEdit={canEdit}
         canReview={canReview}
         canLock={canLock}
-        selectedPeriodId={effectiveSelectedPeriodId || null}
+        selectedPeriodId={selectedPeriodId === ALL_PERIODS ? ALL_PERIODS : effectiveSelectedPeriodId || null}
         onSelectPeriod={setSelectedPeriodId}
-        onBeforeSubmit={() => save(false)}
+        onBeforeTransition={() => save(false)}
       />
 
-      {entryFirst ? entry : reading}
+      <Tabs
+        value={view ?? (entryFirst ? "matrix" : "curve")}
+        onValueChange={(value) => setView(value as "matrix" | "curve" | "daily")}
+        className="gap-3"
+      >
+        <TabsList aria-label={t.progress.title}>
+          <TabsTrigger value="matrix">{t.progress.viewMatrix}</TabsTrigger>
+          <TabsTrigger value="curve">{t.progress.viewCurve}</TabsTrigger>
+          <TabsTrigger value="daily">{t.progress.viewDaily}</TabsTrigger>
+        </TabsList>
+        {/* keepMounted: the virtualiser's ResizeObserver binds to the grid on
+            mount, so this element has to survive its tab being hidden to be
+            measured again the moment it is shown. */}
+        <TabsContent value="matrix" keepMounted>
+          {entry}
+        </TabsContent>
+        <TabsContent value="curve" className="space-y-3">
+          {curveContent}
+        </TabsContent>
+        <TabsContent value="daily">
+          <DailyProgressHistory
+            projectId={projectId}
+            canImport={canImport}
+            onImportProgress={onImportProgress}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
@@ -1060,7 +1088,7 @@ function PeriodControls({
 }) {
   const t = useT();
   return (
-    <span className="mt-1 flex items-center justify-end gap-0.5">
+    <span className="flex items-center gap-0.5">
       <Button
         type="button"
         variant="ghost"
