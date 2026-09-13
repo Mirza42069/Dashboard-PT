@@ -1,0 +1,60 @@
+# Daily database snapshot for the production Neon database.
+#
+# Each run creates a `backup-YYYY-MM-DD` branch — a full copy-on-write copy of
+# production — and deletes snapshots older than 7 days. Restoring is a
+# connection-string swap, not a procedure:
+#
+#   1. List snapshots:      npx neonctl branches list --project-id old-meadow-85513639
+#   2. Get its conn string: npx neonctl connection-string backup-2026-09-13 --project-id old-meadow-85513639 --pooled
+#   3. Point DATABASE_URL at it (Vercel env for prod, apps/server/.env for local).
+#
+# Requires the NEON_API_KEY repository secret.
+name: database-backup
+
+on:
+  schedule:
+    # 18:00 UTC = 01:00 WIB, before the working day starts.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create daily snapshot and prune backups older than 7 days
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+        run: |
+          set -euo pipefail
+          PROJECT=old-meadow-85513639
+          PARENT=br-restless-bonus-azep3588
+          TODAY=$(date -u +%F)
+          CUTOFF=$(date -u -d "7 days ago" +%F)
+
+          neonctl() { npx -y neonctl@latest "$@"; }
+          neonctl branches list --project-id "$PROJECT" -o json > branches.json
+
+          # Skip if today's snapshot already exists (manual re-run).
+          if jq -e --arg n "backup-$TODAY" 'any(.[]; .name == $n)' branches.json > /dev/null; then
+            echo "backup-$TODAY already exists; nothing to create."
+          else
+            if ! neonctl branches create --name "backup-$TODAY" --project-id "$PROJECT" --parent "$PARENT"; then
+              # Branch limit reached: drop the oldest snapshot and retry once.
+              echo "Create failed; deleting the oldest snapshot and retrying."
+              OLDEST=$(jq -r '[.[] | select(.name | startswith("backup-"))] | sort_by(.name) | .[0].id' branches.json)
+              if [ -n "$OLDEST" ]; then
+                neonctl branches delete "$OLDEST" --project-id "$PROJECT"
+              fi
+              neonctl branches create --name "backup-$TODAY" --project-id "$PROJECT" --parent "$PARENT"
+            fi
+          fi
+
+          # Prune snapshots older than the 7-day retention window.
+          jq -r --arg cutoff "$CUTOFF" \
+            '.[] | select(.name | startswith("backup-")) | select(.name[8:] < $cutoff) | .id' \
+            branches.json | while read -r id; do
+            echo "Pruning expired snapshot $id"
+            neonctl branches delete "$id" --project-id "$PROJECT"
+          done
