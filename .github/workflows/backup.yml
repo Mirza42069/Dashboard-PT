@@ -28,13 +28,19 @@ jobs:
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
         run: |
           set -euo pipefail
+          : "${NEON_API_KEY:?
+            NEON_API_KEY is not set. Add it under Settings → Secrets and variables → Actions,
+            then re-run. It must be a Neon API key (console → Developer Settings → API Keys).}"
           PROJECT=old-meadow-85513639
           PARENT=br-restless-bonus-azep3588
           TODAY=$(date -u +%F)
           CUTOFF=$(date -u -d "7 days ago" +%F)
 
           neonctl() { npx -y neonctl@latest "$@"; }
+          echo "Authenticated as: $(neonctl whoami 2>&1 || echo 'UNKNOWN — check the API key')"
           neonctl branches list --project-id "$PROJECT" -o json > branches.json
+          echo "Branches before this run:"
+          jq -r '.[] | "  \(.name) (\(.id))"' branches.json
 
           # Skip if today's snapshot already exists (manual re-run).
           if jq -e --arg n "backup-$TODAY" 'any(.[]; .name == $n)' branches.json > /dev/null; then
